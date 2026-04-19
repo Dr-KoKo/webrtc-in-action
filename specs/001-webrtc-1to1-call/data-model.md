@@ -47,6 +47,7 @@ admission decisions.
 | `id` | `string` | room identifier |
 | `slots` | `[2]*Participant` | fixed-size capacity; nil slots are free |
 | `admissionCounter` | `uint64` | monotonic per-room; assigned on admission; establishes offerer ordering |
+| `rolesAssigned` | `bool` | set `true` when `ready_for_offer` has been sent for the current pairing; reset to `false` on any slot release |
 | `createdAt` | `time.Time` | diagnostic only |
 | `mu` | `sync.Mutex` | serializes all room-scoped mutations |
 
@@ -57,14 +58,28 @@ admission decisions.
   - `1 reserved` if exactly one slot non-nil
   - `2 reserved` if both slots non-nil ⇒ reject further joins with
     `join_rejected_room_full`
-- **Call-readiness** (for role assignment + UI broadcast):
+- **Call-readiness** (for role assignment + UI broadcast). Defined
+  against `mediaReadiness`, **not** `callPhase`:
   - `empty` — no reserved participants
   - `waiting_for_media` — at least one reserved participant where
-    `state != ready`
+    `mediaReadiness != ready` (i.e., still `pending-media`)
   - `waiting_for_peer` — exactly one reserved participant with
-    `state == ready` AND one nil slot
-  - `paired` — both slots non-nil AND both participants
-    `state == ready` ⇒ server MUST send `ready_for_offer`
+    `mediaReadiness == ready` AND one nil slot
+  - `paired` — both slots non-nil AND both participants have
+    `mediaReadiness == ready`, regardless of their `callPhase`. The
+    first time the room enters `paired`, the server sends
+    `ready_for_offer` to both peers **exactly once**; subsequent
+    idempotent re-evaluations do NOT re-send (`Room.rolesAssigned`
+    flag tracks this).
+
+**Why this matters**: after `ready_for_offer` is sent both
+participants' `callPhase` advances past `idle`, but their
+`mediaReadiness` remains `ready`. The room therefore remains `paired`,
+which is the correct reading: the pairing is still valid while the
+call is ongoing. If the remote peer later leaves, the local
+participant stays media-ready; the room drops to `waiting_for_peer`,
+and a new joiner can re-pair without the local participant
+re-acquiring media.
 
 **Invariants**:
 
@@ -85,76 +100,135 @@ admission decisions.
 | `peerID` | `string` | server-assigned, UUIDv4 |
 | `roomID` | `string` | back-reference |
 | `admissionOrder` | `uint64` | from `Room.admissionCounter` at join |
-| `state` | `ParticipantState` | see enum below |
+| `mediaReadiness` | `MediaReadiness` | see enum below |
+| `callPhase` | `CallPhase` | see enum below |
 | `conn` | `*websocket.Conn` | the active WS connection |
 | `connMu` | `sync.Mutex` | serializes writes to `conn` |
 | `joinedAt` | `time.Time` | diagnostic only |
 | `lastSeen` | `time.Time` | updated on each received frame / Pong |
 
-**`ParticipantState` enum**:
+> **State is split into two orthogonal enums** (`MediaReadiness` ×
+> `CallPhase`) rather than a single flat enum. This is deliberate: in
+> review pass 4 we found that collapsing `ready` and `in-call` into
+> one enum broke derived room call-readiness (a `paired` room
+> transitioned back out of `paired` the instant roles were assigned).
+> Splitting keeps "did this peer finish media?" independent of "what
+> phase of the call is this peer in?".
+
+**`MediaReadiness` enum**:
 
 ```
-joining       -- transient: join_room received, validation in progress
-pending-media -- join_accepted sent; awaiting media_ready or media_failed
-ready         -- media_ready received; eligible for pairing
-in-call       -- role assigned; ready_for_offer sent
-leaving       -- explicit leave_room received
-failed        -- released due to media failure / disconnect
+pending-media  -- join_accepted sent; awaiting media_ready or media_failed
+ready          -- media_ready received; eligible for pairing
+failed         -- media acquisition failed (slot released — terminal for this Participant instance)
 ```
 
-**State transitions** (legal only):
+**`CallPhase` enum**:
 
 ```
-            +-- join_rejected --> (participant not created)
-join_room --+
-            +-- join_accepted --> joining --> pending-media
-                                                    |
-                                                    |-- media_ready --> ready
-                                                    |
-                                                    |-- media_failed --> failed (released)
-                                                    |
-                                                    +-- disconnect --> failed (released)
-
-ready --+-- both-peers-ready (paired) --> in-call (ready_for_offer sent)
-        |
-        +-- disconnect --> failed (released)
-
-in-call --+-- leave_room --> leaving --> (released)
-          |
-          +-- disconnect --> failed (released)
-
-(any state) --+-- release --> (participant removed from slot)
+idle            -- not yet paired; media readiness may still be transitioning
+role-assigned   -- ready_for_offer delivered; RTCPeerConnection being set up
+negotiating     -- offer/answer/ICE in flight
+connected       -- peer connection reached "connected"; media flowing
+leaving         -- explicit leave_room received; cleanup in progress
 ```
 
-Rejected transitions (MUST produce an `error` response, not a state
-change):
+A participant is **"media-ready"** (for the purpose of room
+call-readiness) whenever `mediaReadiness == ready`, **regardless of
+`callPhase`**. This means:
 
-- `media_ready` while `state != pending-media`
-- `offer` / `answer` / `ice_candidate` while `state != in-call`
-- `leave_room` while `state == joining` (before `join_accepted`)
+- `{ready, idle}` — media-ready, not yet paired.
+- `{ready, role-assigned | negotiating | connected}` — media-ready,
+  in a call. Still counts toward room `paired`.
+- `{pending-media, idle}` — slot reserved, media not done.
+- `{failed, *}` — slot has been released (Participant is gone).
+
+**State transitions** — two orthogonal state machines.
+
+**MediaReadiness transitions**:
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending_media: join_accepted
+    pending_media --> ready: media_ready
+    pending_media --> failed: media_failed (or pending-media disconnect)
+    ready --> [*]: disconnect / leave_room (slot released)
+    failed --> [*]: slot released (Participant is gone)
+```
+
+**CallPhase transitions** (only applicable while
+`mediaReadiness == ready`):
+
+```mermaid
+stateDiagram-v2
+    [*] --> idle
+    idle --> role_assigned: both peers ready (room = paired)\nready_for_offer sent
+    role_assigned --> negotiating: offer / answer / ICE in flight
+    negotiating --> connected: RTCPeerConnection "connected"
+    connected --> idle: remote peer_left\n(local stays media-ready, room = waiting_for_peer)
+    connected --> leaving: local leave_room
+    negotiating --> leaving: local leave_room (mid-negotiation)
+    role_assigned --> leaving: local leave_room
+    leaving --> [*]: slot released
+```
+
+> Key consequence: when the remote peer leaves, the local
+> participant's `callPhase` drops `connected → idle` while
+> `mediaReadiness` stays `ready`. The room then recomputes to
+> `waiting_for_peer`, and the next joiner pairs with the same local
+> participant without going back through media acquisition.
+
+**Rejected transitions** (MUST produce an `error` response, not a
+state change):
+
+- `media_ready` while `mediaReadiness != pending-media`
+- `offer` / `answer` / `ice_candidate` while
+  `!(mediaReadiness == ready && callPhase in {role-assigned, negotiating, connected})`
+- `leave_room` before `join_accepted` (no Participant exists yet)
 
 ### A.4 `JoinResult` enum (server → client)
 
+Canonical outcomes of a `join_room` request or of a post-admission
+slot release. These values are carried as `payload.result` in the
+`join_rejected` and `participant_released` messages — see
+`contracts/signaling-protocol.md` §3.3 and §3.13.
+
 ```
 join_accepted                          -- admission succeeded
-join_rejected_room_full                -- 2 slots already reserved
-join_rejected_invalid_room             -- room ID failed validation
-participant_released_media_failed      -- post-admission media failure
+join_rejected_room_full                -- pre-admission: 2 slots already reserved
+join_rejected_invalid_room             -- pre-admission: room ID failed validation
+participant_released_media_failed      -- post-admission: client sent media_failed (or was observed to)
+participant_released_disconnect        -- post-admission: pending-media client WS closed before media_ready
 ```
+
+> Pre-admission rejections (`join_rejected_*`) are delivered via the
+> `join_rejected` message. Post-admission releases
+> (`participant_released_*`) are delivered via the
+> `participant_released` message. A single `join_room` attempt can
+> produce only one terminal outcome.
 
 Only one of these is ever sent per `join_room` request (plus follow-up
 messages on state changes).
 
 ### A.5 `PeerPresence` events (server → both clients)
 
-When any participant's `state` changes, the server broadcasts a
-`peer_joined` / `peer_left` / `peer_state_changed` event to both
-reserved slots (including the participant themselves). This powers
-FR-022b (bidirectional peer-presence updates).
+Whenever any participant's `mediaReadiness` OR `callPhase` changes,
+the server broadcasts a **single** `peer_presence_changed` message
+to **both** reserved slots (including the subject participant
+itself). For clarity and ease of client implementation, the server
+also emits the convenience `peer_left` message alongside the
+terminating `peer_presence_changed` (presence = `left` | `released`).
+This powers FR-022b (bidirectional peer-presence updates).
 
-**Not a model** — this is derived from `Participant.state`; listed
-here because it's the only cross-participant signal the server emits
-on top of 1:1 message relay.
+The earlier separate `peer_joined` / `peer_left` /
+`peer_state_changed` designs are superseded — see review-pass 4
+notes in `checklists/requirements.md` and
+`contracts/signaling-protocol.md §3.4`.
+
+**Not a standalone model** — this is derived from the subject
+Participant's `(mediaReadiness, callPhase)` pair; listed here
+because it's the only cross-participant signal the server emits on
+top of 1:1 message relay.
 
 ---
 
@@ -167,39 +241,104 @@ in refs (they are not serializable and must not live in React state).
 
 ### B.1 `SessionState` — top-level finite state machine
 
-```
-idle
-  │  user clicks Join
-  ▼
-joining           -- join_room sent; awaiting join_accepted
-  │  join_accepted received
-  ▼
-pending-media     -- acquiring getUserMedia()
-  │  media acquired
-  ▼
-waiting-for-peer  -- media_ready sent; awaiting peer
-  │  ready_for_offer received (role = offerer | answerer)
-  ▼
-connecting        -- offer/answer/ICE in progress
-  │  connectionState = "connected"
-  ▼
-connected         -- media flowing; DataChannel open
-  │  user clicks Leave              │  remote peer_left            │  ICE failure
-  ▼                                  ▼                              ▼
-leaving                           waiting-for-peer              failed
-  │  cleanup done                                                (manual Leave/Rejoin)
-  ▼
-idle
+```mermaid
+stateDiagram-v2
+    [*] --> idle
+    idle --> joining: user clicks Join
+
+    joining --> pending_media: join_accepted
+    joining --> idle: join_rejected\n(visible error)
+
+    pending_media --> waiting_for_peer: media acquired\n(media_ready sent)
+    pending_media --> media_error: getUserMedia() rejects\n(media_failed sent)\nOR participant_released received
+
+    media_error --> joining: user clicks Retry
+    media_error --> idle: user clicks Leave
+
+    waiting_for_peer --> connecting: ready_for_offer received\n(role = offerer or answerer)
+
+    connecting --> connected: connectionState = "connected"
+    connecting --> failed: ICE failure
+    connecting --> waiting_for_peer: remote peer_left\n(local stays media-ready)
+
+    connected --> leaving: user clicks Leave
+    connected --> waiting_for_peer: remote peer_left\n(local stays media-ready)
+    connected --> failed: ICE connectionState = "failed"
+
+    leaving --> idle: cleanup complete
+    failed --> idle: user clicks Leave\n(manual Leave/Rejoin)
 ```
 
-**Transitions on failure**:
+Key distinctions (review-pass-4 clarifications):
 
-- `join_rejected_*` → `idle` with visible error.
-- `getUserMedia()` rejects during `pending-media` → send
-  `media_failed` → `failed` (terminal-ish; user can click Leave to
-  return to `idle`).
-- WebSocket closes unexpectedly → `failed` (per spec FR-005 split).
-- ICE `connectionState === "failed"` → `failed`.
+- `media_error` is a **retry-able** state reached from
+  `pending_media` on local `getUserMedia()` rejection **or** on
+  server `participant_released`. It is NOT terminal; the user can
+  click Retry to re-enter `joining` without reconnecting the WS.
+  Reserved terminal `failed` is only for **local peer-connection
+  failure** (ICE failure), not for media-acquisition failure.
+- Remote `peer_left` from `connecting` or `connected` drops the local
+  peer back to `waiting_for_peer` (local `mediaReadiness` stays
+  `ready`, local tracks stay live — see §B.2 and §C.5).
+- ICE failure or a fatal PC event enters terminal `failed`. Recovery
+  is always manual (spec FR-005 split: no auto-reconnect). From
+  `failed`, "Leave" resets to `idle`.
+
+### B.1.1 `SignalingTransportState` — separate from `SessionState`
+
+The WebSocket transport health is modeled **orthogonally** to the
+session state. This separation makes it possible for a session to
+stay in `connected` (media flowing peer-to-peer) while the WS is
+temporarily down (signaling degraded) — which is one of the
+project's intended teachable moments about signaling-vs-media
+separation.
+
+```
+type SignalingTransportState =
+  | "disconnected"   // not yet connected, or after clean close
+  | "connecting"     // WS handshake in progress
+  | "connected"      // WS open, heartbeat healthy
+  | "error";         // WS closed unexpectedly
+```
+
+**Rules**:
+
+- `connecting → error` DOES NOT automatically promote `SessionState`
+  to `failed`. Media that is already flowing P2P continues until the
+  PC itself fails.
+- While `SignalingTransportState == error` AND
+  `SessionState == connected`, the UI MUST surface a
+  "signaling disconnected" warning, but the media stays visible /
+  audible. The following actions become unavailable until the
+  transport recovers or the user Leaves: `media_state` broadcasts,
+  screen-share renegotiation paths, graceful `leave_room`.
+- During `joining` / `pending_media` / `waiting_for_peer` /
+  `connecting`, a WS error DOES bubble into `SessionState = failed`
+  (there is no P2P state worth preserving).
+
+**Transitions on failure** (canonical after review-pass-5 — these
+supersede any earlier simpler statements elsewhere in this document):
+
+- `join_rejected` → `idle` with a visible error. The WS is closed by
+  the server; the client opens a fresh one on the next Join.
+- `getUserMedia()` rejects during `pending_media` → client sends
+  `media_failed`; when `participant_released` arrives, transition to
+  **`media_error`** (retry-able). `media_error` exposes **Retry**
+  (re-enters `joining`) and **Leave** (goes to `idle`). This is NOT
+  terminal `failed`.
+- WebSocket closes unexpectedly during `joining`, `pending_media`,
+  `waiting_for_peer`, or `connecting` → **`failed`** (no stable P2P
+  media path exists yet; there is nothing to preserve).
+- WebSocket closes unexpectedly during `connected` →
+  `SignalingTransportState = error`, `SessionState` stays
+  `connected` while `RTCPeerConnection.connectionState` is still
+  `connected`. The UI surfaces a signaling-disconnected warning;
+  media continues via P2P; `media_state` broadcasts, screen-share
+  renegotiation, and graceful `leave_room` are unavailable until the
+  transport recovers or the user Leaves.
+- ICE `connectionState === "failed"` → **`failed`** (terminal local
+  peer-connection failure; manual Leave / Rejoin only — see §C.5
+  Path C).
 
 **Never-legal transitions** (client asserts impossible):
 
@@ -347,23 +486,87 @@ message back to the server.
   change. Contract-version bumps are backward-incompatible changes
   per Constitution G-3.
 
-### C.5 Cleanup ordering (client)
+### C.5 Cleanup ordering (client) — three distinct paths
 
-On leave / failure / `peer_left`:
+> Cleanup is **not** one-size-fits-all. "User leaves" and "remote
+> peer left" do NOT run the same steps. Running the local-leave
+> cleanup in response to a remote `peer_left` causes the remote-gone
+> bug where the local user's own camera/mic shut off just because
+> the other peer hung up.
 
-1. Stop all local `MediaStreamTrack`s (camera, mic, screen).
+#### Path A — Local explicit leave (user clicks Leave)
+
+1. Stop **all** local `MediaStreamTrack`s (camera, mic, screen).
 2. Close `RTCDataChannel` (if open).
 3. Close `RTCPeerConnection`.
-4. Send `leave_room` if WS is still alive and state is in-call or
-   connecting.
+4. Send `leave_room` if the WS is still alive (skip if `SessionState
+   == failed` and WS already closed).
 5. Drop references (`localStream`, `screenStream`, `dc`, `pc`, ICE
    buffer, remote media state).
-6. Reset reducer to `idle`.
-7. Log `cleanup completed`.
+6. Close WS.
+7. Reset reducer to `idle`.
+8. Log `cleanup completed` with `path: "local_leave"`.
 
-This ordering matters — stopping tracks before closing the peer
-connection lets the remote side receive `ended` track events instead
-of ICE disconnect noise.
+Order matters: stopping tracks before closing the PC lets the remote
+side receive track `ended` events instead of ICE-disconnect noise.
+
+#### Path B — Remote `peer_left` (other peer departed, we stay)
+
+The local user has NOT left. Only remote-specific state is torn
+down; local media stays live so the user can pair with a new peer
+without re-acquiring camera/mic.
+
+1. Close `RTCDataChannel` (if open).
+2. Close `RTCPeerConnection`.
+3. Clear `RemoteMediaState` and remote track references.
+4. Clear the ICE buffer.
+5. **Do NOT stop local `MediaStreamTrack`s** (camera, mic, screen).
+   The device "in-use" indicator intentionally stays on — the local
+   user is still media-ready.
+6. Transition `SessionState` based on prior state: `connecting |
+   connected → waiting_for_peer`.
+7. Log `cleanup completed` with `path: "remote_peer_left"`.
+
+The WS remains open — the local peer is still in the room, just
+waiting for a new counterpart.
+
+#### Path C — Local terminal failure (ICE failure, fatal PC error)
+
+Same as Path A **except** the local tracks and the session state
+handling differ slightly:
+
+1. Close `RTCDataChannel` (if open).
+2. Close `RTCPeerConnection`.
+3. Clear `RemoteMediaState` and remote track references.
+4. Transition `SessionState → failed`. Surface a clear error +
+   **Leave / Rejoin** UI.
+5. **Do NOT stop local tracks yet** — the user may want the local
+   preview visible while they decide, and Rejoin is the preferred
+   recovery path (no re-prompt for permission).
+6. On user clicking **Leave**: execute Path A from step 1.
+7. On user clicking **Rejoin**: **Rejoin is a convenience alias for
+   "Leave followed by a fresh Join"** — not an in-place slot
+   restart. Concretely:
+   a. Execute Path A in full (stop local tracks, close WS, release
+      server slot via `leave_room` if possible).
+   b. Open a fresh WebSocket.
+   c. Re-run the normal Join flow from `idle`. The browser may not
+      re-prompt for camera/mic permission if it was previously
+      granted, but the app still calls `getUserMedia` again.
+   This keeps FR-024 ("Leaving MUST stop all local media tracks")
+   honored on every terminal transition and avoids introducing a
+   new `release_slot` / `restart_join` message in the MVP contract
+   (option B was considered and rejected in review-pass-5 as
+   excess machinery for a 1:1 toy).
+8. Log `cleanup completed` with `path: "local_failure"`.
+
+#### Quick reference
+
+| Trigger | Stop local tracks? | Close PC / DC? | WS | Resulting state |
+|---|---|---|---|---|
+| Local Leave click | **yes** | yes | close | `idle` |
+| Remote `peer_left` | **no** | yes | keep open | `waiting_for_peer` |
+| ICE / fatal PC failure | not immediately | yes | keep open | `failed` (user chooses Leave or Rejoin) |
 
 ### C.6 Cleanup (server)
 

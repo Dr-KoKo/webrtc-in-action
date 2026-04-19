@@ -56,8 +56,10 @@
 
 - Items marked incomplete require spec updates before `/speckit.clarify` or `/speckit.plan`.
 - `/speckit.clarify` session 2026-04-19 locked 8 decisions (see spec
-  `## Clarifications`). Key reversal: offerer is the **already-waiting** peer,
-  not the second-joining peer (previous assumption replaced).
+  `## Clarifications`). Canonical offerer rule (post review-pass 2):
+  offerer is the **first admitted participant in the current pairing
+  attempt**, assigned by the signaling server only when the room reaches
+  `paired` call-readiness. See FR-010a.
 - Chat transport preference is now locked: **RTCDataChannel** is the final-MVP
   target (FR-016a). Signaling-relayed chat is permitted only as an interim
   milestone.
@@ -100,3 +102,36 @@
   tagging the transport path (signaling vs DataChannel); (vii) FR-030
   now separates "STUN configured" from "srflx observed", making the
   STUN-but-unreachable case teachable.
+- **Review pass 4 — 2026-04-19** (post-plan cross-document reconciliation):
+  (A) Unified the pre-admission rejection contract — `room_full` message
+  type removed; `join_rejected` (with `result: join_rejected_room_full |
+  join_rejected_invalid_room`) is the single pre-admission rejection
+  channel; `participant_released` (with `result:
+  participant_released_media_failed | participant_released_disconnect`)
+  is the single post-admission release channel.
+  (B) Replaced `peer_joined` / `peer_left` / `peer_state_changed` with
+  one unified `peer_presence_changed` message so bidirectional pending-
+  media visibility is atomic (FR-022b).
+  (C) Split the server `Participant` state into orthogonal
+  `MediaReadiness` + `CallPhase`; room call-readiness is now computed
+  against `mediaReadiness == ready` alone, so the room stays `paired`
+  across the `idle → role-assigned → negotiating → connected`
+  progression.
+  (D) Client cleanup now has three distinct paths (local leave / remote
+  `peer_left` / local terminal failure); `peer_left` MUST NOT stop local
+  tracks.
+  (E) Heartbeat timing changed from 10s/10s (20s worst case) to 5s/5s
+  (≤10s worst case) to actually satisfy SC-009.
+  (F) Media-acquisition failure is retry-able via a `media-error`
+  SessionState, not terminal `failed`.
+  (G) `SignalingTransportState` is modelled separately from
+  `SessionState` — a WS drop while media is flowing does not promote
+  the session to `failed`.
+  (H) `media_ready` now requires BOTH audio and video true; anything
+  else triggers `media_failed`.
+  (I) `ice_candidate` end-of-candidates is `candidate: null` only (the
+  empty-string variant is rejected as malformed).
+  (J) Envelope `from` is omitted on server-originated system messages;
+  only relay messages carry `from = sender peerId`.
+  (K) Plan DoD bullets no longer use `[x]` (they looked pre-completed
+  to task-generators).

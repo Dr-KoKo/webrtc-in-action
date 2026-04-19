@@ -390,15 +390,20 @@ what's always running; makes TURN a deliberate opt-in (useful for the
 
 ## 12. Logging / observability on the server
 
-**Decision**: Go standard `log/slog` with a text handler in dev and
-JSON handler in prod-ish mode (selected by env var `LOG_FORMAT`). Every
-log line carries `room_id`, `peer_id`, and `event` fields. Never log
-SDP bodies, ICE candidates, or TURN credentials (Spec NFR-003).
+**Decision**: Go standard `log/slog` with a **JSON handler as the
+default in all environments** (dev and prod-ish). A text handler
+remains selectable via env `LOG_FORMAT=text` for humans reading logs
+without tooling, but the default is JSON because correlation by
+`room_id` / `peer_id` is one of the core learning aids and is much
+easier to filter with `jq` (which `quickstart.md §8` uses). Every log
+line carries `room_id`, `peer_id`, and `event` fields. Never log SDP
+bodies, ICE candidates, or TURN credentials (Spec NFR-003).
 
 **Rationale**: `slog` is stdlib as of Go 1.21+. Structured keys feed
 directly into per-room/per-peer correlation — matches Constitution
 Principle IV's "correlation IDs per session and per peer" bar without
-needing a logger framework.
+needing a logger framework. JSON-first means `docker compose logs
+signaling | jq 'select(.room_id == "demo")'` works out of the box.
 
 **Alternatives considered**:
 
@@ -415,15 +420,21 @@ needing a logger framework.
 ## 13. Heartbeat / disconnect detection
 
 **Decision**: Use WebSocket **Ping/Pong** frames. Server sends a Ping
-every **10 seconds**; considers the peer dead if no Pong within **10
-seconds** of the Ping (configurable, default bounds chosen to satisfy
-SC-009 ≤ 10 s). Client uses the browser's automatic Pong response — no
-app-level heartbeat protocol.
+every **5 seconds**; considers the peer dead if no Pong within **5
+seconds** of the Ping. Worst-case ungraceful-disconnect detection is
+therefore **~10 seconds** (peer goes silent right after a Ping is
+sent → wait for next ping interval → wait for pong timeout). A
+10s/10s layout gives a 20s worst case and would **miss SC-009** —
+that is why 5/5 is the chosen default, not 10/10. Both intervals are
+env-configurable (`PING_INTERVAL_MS`, `PONG_TIMEOUT_MS`). Client uses
+the browser's automatic Pong response — no app-level heartbeat
+protocol.
 
 **Rationale**:
 
 - Leverages the native WS mechanism — no custom app-level ping needed.
-- Meets SC-009's 10-second ungraceful-disconnect detection bound.
+- Meets SC-009's 10-second ungraceful-disconnect detection bound
+  **with margin** (the server measures against monotonic clock).
 - `coder/websocket` supports ping/pong primitives directly.
 
 **Alternatives considered**:

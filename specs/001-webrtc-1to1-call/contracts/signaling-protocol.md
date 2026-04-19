@@ -98,9 +98,19 @@ Clients MUST NOT invent their own `peerId`.
 3. If the source WebSocket is already in a room ⇒ `error` with code
    `already_joined`.
 
-**Server response**: exactly one of `join_accepted`, or `error` with
-code `room_full` (→ via `room_full` message) / `invalid_room_id` /
-`already_joined`.
+**Server response**: exactly one of:
+
+- `join_accepted` (admission succeeded), OR
+- `join_rejected` (pre-admission rejection — carries `result:
+  join_rejected_room_full | join_rejected_invalid_room` in the payload),
+  OR
+- `error` with code `already_joined` (WS violated its one-room-per-
+  connection contract).
+
+The historical separate `room_full` message type has been **removed**
+(review-pass 4 unified pre-admission rejection into a single
+`join_rejected` message). Post-admission slot release uses the
+separate `participant_released` message (§3.13).
 
 ---
 
@@ -111,8 +121,14 @@ assign its `peerId`.
 
 **Direction**: S→C (to the joiner only)
 
-**Required fields**: `v`, `type`, `roomId`, `from` = the assigned
-peerId, `requestId` = echoed from the `join_room`, `payload`
+**Required fields**: `v`, `type`, `roomId`, `requestId` = echoed from
+the `join_room`, `payload`
+
+**Envelope `from`** is **omitted** on system-originated S→C messages
+(join_accepted, join_rejected, participant_released,
+peer_presence_changed, ready_for_offer, peer_left). Only relay
+messages (offer / answer / ice_candidate / media_state) carry
+`from = sender peerId`. See §1 for the canonical rule.
 
 **Payload**:
 
@@ -125,6 +141,9 @@ peerId, `requestId` = echoed from the `join_room`, `payload`
 }
 ```
 
+- `peerId` — the server-assigned identity of this participant. Clients
+  MUST read their own peerId from `payload.peerId` (not from
+  envelope `from`).
 - `admissionOrder` — 1 or 2; strictly monotonic per room.
 - `roomReadiness` — room call-readiness at the moment of admission.
 - `remotePeer` — snapshot of the other reserved slot if any, else null:
@@ -132,7 +151,7 @@ peerId, `requestId` = echoed from the `join_room`, `payload`
   ```json
   {
     "peerId": "uuid-v4",
-    "state": "pending-media" | "ready"
+    "mediaReadiness": "pending-media" | "ready"
   }
   ```
 
@@ -143,14 +162,13 @@ peerId, `requestId` = echoed from the `join_room`, `payload`
   "v": 1,
   "type": "join_accepted",
   "roomId": "demo",
-  "from": "8e4c0...",
   "requestId": "5b3a1e23-...",
   "ts": 1713500000100,
   "payload": {
     "peerId": "8e4c0...",
     "admissionOrder": 2,
     "roomReadiness": "waiting_for_media",
-    "remotePeer": { "peerId": "a11ce-...", "state": "ready" }
+    "remotePeer": { "peerId": "a11ce-...", "mediaReadiness": "ready" }
   }
 }
 ```
@@ -163,10 +181,12 @@ with reason `bad_join_accepted` and closes the WS.
 
 ---
 
-### 3.3 `room_full` (S→C)
+### 3.3 `join_rejected` (S→C)
 
-**Purpose**: rejection because 2 slots are reserved (including
-`pending-media` slots).
+**Purpose**: pre-admission rejection of a `join_room` request. Used
+for both "room is full" and "room ID failed validation". Post-
+admission releases (media-failure, disconnect while pending-media) use
+the separate `participant_released` message (§3.13).
 
 **Direction**: S→C (to the rejected joiner only)
 
@@ -176,39 +196,68 @@ with reason `bad_join_accepted` and closes the WS.
 
 ```json
 {
-  "reason": "room_full",
-  "message": "Room 'demo' already has two reserved participants."
+  "result": "join_rejected_room_full" | "join_rejected_invalid_room",
+  "reason": "room_full" | "invalid_room_id",
+  "message": "human-readable short reason"
 }
 ```
 
-**Example**:
+- `result` — the canonical Join Result enum value (spec §Key Entities).
+- `reason` — short machine-readable tag (aligned with `result` suffix).
+- `message` — human-readable, safe for UI display.
+
+**Example — room full** (rejected because 2 slots already reserved,
+including any `pending-media`):
 
 ```json
 {
   "v": 1,
-  "type": "room_full",
+  "type": "join_rejected",
   "roomId": "demo",
   "requestId": "5b3a1e23-...",
   "payload": {
+    "result": "join_rejected_room_full",
     "reason": "room_full",
     "message": "Room 'demo' already has two reserved participants."
   }
 }
 ```
 
-**Validation (client)**: on receipt, show user-visible error, log
-`error occurred` with reason `room_full`, close WS.
+**Example — invalid room ID**:
+
+```json
+{
+  "v": 1,
+  "type": "join_rejected",
+  "roomId": "bad room!",
+  "requestId": "5b3a1e23-...",
+  "payload": {
+    "result": "join_rejected_invalid_room",
+    "reason": "invalid_room_id",
+    "message": "Room ID must match ^[A-Za-z0-9._-]{1,64}$."
+  }
+}
+```
+
+**Validation (client)**: on receipt, show a user-visible error keyed
+to `reason`, log `error occurred`, close WS. No state change other
+than returning to `idle`.
 
 **Error behavior**: none further; terminal for this join attempt.
 
 ---
 
-### 3.4 `peer_joined` (S→B)
+### 3.4 `peer_presence_changed` (S→B)
 
-**Purpose**: notify the already-reserved peer that a new participant
-has been admitted (possibly still `pending-media`).
+**Purpose**: notify both reserved participants whenever **any**
+participant's slot presence or media readiness changes (admission,
+media-readiness transition, call-phase transition, release, leave).
+This is the **single** message that powers FR-022b (bidirectional
+pending-media visibility) and replaces the earlier separate
+`peer_joined` / `peer_left` / `peer_state_changed` designs.
 
-**Direction**: S→B (to both peers after the second `join_accepted`).
+**Direction**: S→B (to both reserved participants in the room,
+including the subject participant itself).
 
 **Required fields**: `v`, `type`, `roomId`, `payload`
 
@@ -216,29 +265,94 @@ has been admitted (possibly still `pending-media`).
 
 ```json
 {
-  "peerId": "uuid-v4",
-  "state": "pending-media" | "ready",
-  "admissionOrder": 1 | 2
+  "subjectPeerId": "uuid-v4",
+  "admissionOrder": 1 | 2,
+  "presence": "pending-media" | "ready" | "in-call" | "left" | "released",
+  "reason": "admitted" | "media_ready" | "media_failed" | "role_assigned" | "graceful_leave" | "disconnect" | "pending_released"
 }
 ```
 
-**Example**:
+- `subjectPeerId` — the peer whose state changed. Receiver MAY
+  compare against its own `peerId` to know if the event is about
+  **self** or **remote**.
+- `admissionOrder` — echoed for convenience (derivable from
+  prior messages).
+- `presence` — canonical presence enum (unifies media-readiness +
+  call-phase + termination):
+  - `pending-media` — admitted, no `media_ready` yet.
+  - `ready` — `media_ready` received, not yet paired.
+  - `in-call` — role assigned; negotiating or connected.
+  - `left` — graceful or ungraceful departure; slot released.
+  - `released` — admitted then released without ever reaching
+    `in-call` (e.g., `media_failed`, `pending_released`).
+- `reason` — short tag explaining the transition trigger.
+
+**Example — remote admitted, still pending-media** (sent to the
+already-waiting peer):
 
 ```json
 {
   "v": 1,
-  "type": "peer_joined",
+  "type": "peer_presence_changed",
   "roomId": "demo",
   "payload": {
-    "peerId": "8e4c0...",
-    "state": "pending-media",
-    "admissionOrder": 2
+    "subjectPeerId": "8e4c0...",
+    "admissionOrder": 2,
+    "presence": "pending-media",
+    "reason": "admitted"
   }
 }
 ```
 
-**Validation (client)**: update `remoteParticipant.state` in reducer;
-append event-log entry `peer joined`.
+**Example — remote just became media-ready**:
+
+```json
+{
+  "v": 1,
+  "type": "peer_presence_changed",
+  "roomId": "demo",
+  "payload": {
+    "subjectPeerId": "8e4c0...",
+    "admissionOrder": 2,
+    "presence": "ready",
+    "reason": "media_ready"
+  }
+}
+```
+
+**Example — remote pending-media participant failed media
+acquisition** (sent to the already-waiting peer):
+
+```json
+{
+  "v": 1,
+  "type": "peer_presence_changed",
+  "roomId": "demo",
+  "payload": {
+    "subjectPeerId": "8e4c0...",
+    "admissionOrder": 2,
+    "presence": "released",
+    "reason": "media_failed"
+  }
+}
+```
+
+**Validation (client)**:
+
+- Update `remoteParticipant.presence` for events where
+  `subjectPeerId != selfPeerId`.
+- For self-events (`subjectPeerId == selfPeerId`), the message is
+  informational — the client already drove the transition.
+- Append one event-log entry per message, keyed to `reason`
+  (`peer joined`, `peer ready`, `peer left`, `pending peer released`,
+  etc.).
+
+**Relationship to `peer_left` (§3.12)**: `peer_left` is a convenience
+message sent at the same time as the terminating `peer_presence_changed`
+so the remaining peer has a single trigger point for cleanup. A
+compliant server MAY send **only** `peer_presence_changed(presence:
+"left" | "released")` if the client supports it; the spec-default
+behavior is to send both for clarity and ease of implementation.
 
 ---
 
@@ -262,9 +376,10 @@ Required before pairing can happen.
 }
 ```
 
-- At least one of `audio` / `video` SHOULD be `true`; the MVP expects
-  both, per spec Assumptions ("Users have a working camera and
-  microphone").
+- Both `audio` and `video` **MUST be `true`**. The MVP does not
+  support audio-only or video-only mode (spec Non-Goals + Assumptions:
+  "Users have a working camera and microphone"). A client that
+  cannot deliver both MUST send `media_failed` instead.
 
 **Example**:
 
@@ -277,12 +392,19 @@ Required before pairing can happen.
 }
 ```
 
-**Server behavior**: transitions the participant `pending-media → ready`.
-If both reserved participants are now `ready`, the room transitions to
-`paired` and the server sends `ready_for_offer` to both peers.
+**Server behavior**: transitions the participant's media readiness
+`pending-media → ready`. If both reserved participants are now `ready`,
+the room reaches `paired` call-readiness and the server sends
+`ready_for_offer` to both peers.
 
-**Validation (server)**: participant state MUST be `pending-media`;
-otherwise `error` with code `unexpected_media_ready`.
+**Validation (server)**:
+
+- Participant's media readiness MUST be `pending-media`; otherwise
+  `error` with code `unexpected_media_ready`.
+- Both `mediaCapabilities.audio` and `mediaCapabilities.video` MUST
+  be `true`; otherwise `error` with code `unsupported_media_capability`
+  and no state change (client is expected to send `media_failed`
+  instead).
 
 ---
 
@@ -318,11 +440,14 @@ slot release per FR-010d.
 **Server behavior**:
 
 1. Release the sender's slot.
-2. Send `participant_released_media_failed` (see §3.13) to the sender.
+2. Send `participant_released` (§3.13) to the sender with
+   `result: participant_released_media_failed`.
 3. If a remote peer was shown the pending participant (per FR-022b),
-   send them a `peer_left` with reason `media_failed`.
+   send them a `peer_presence_changed` with `presence: "released",
+   reason: "media_failed"`.
 
-**Validation (server)**: participant state MUST be `pending-media`.
+**Validation (server)**: sender's `mediaReadiness` MUST be
+`pending-media`.
 
 ---
 
@@ -420,18 +545,23 @@ received in state other than `waiting-for-peer`, log
 }
 ```
 
-**Validation (server)**:
+**Validation (server)** — uses the split server model
+(`MediaReadiness` × `CallPhase`):
 
-- Sender's participant state MUST be `in-call` AND sender was assigned
-  `offerer` role.
+- Sender's `mediaReadiness` MUST be `ready`.
+- Sender's `callPhase` MUST be `role-assigned` or `negotiating`.
+- Sender's assigned role for this pairing MUST be `offerer`.
 - `payload.sdp.type === "offer"`.
+- A **second** offer for the same pairing attempt (sender's
+  `callPhase` already moved past `role-assigned` for an earlier
+  offer) is rejected as `unexpected_offer` (spec EC-013).
 
-**Validation (client/answerer)**: `payload.sdp.type === "offer"`; state
-MUST be `in-call`.
+**Validation (client/answerer)**: `payload.sdp.type === "offer"`;
+local `SessionState` MUST be `connecting` (post `ready_for_offer`).
 
-**Error behavior**: unexpected offer ⇒ `error` with code
-`unexpected_offer`. Offerer MUST NOT send a second offer for the same
-pairing (would be glare; spec EC-013).
+**Error behavior**: any server validation failure ⇒ `error` with code
+`unexpected_offer`. The offerer MUST NOT send a second offer for the
+same pairing attempt (would be glare; spec EC-013).
 
 ---
 
@@ -454,10 +584,11 @@ pairing (would be glare; spec EC-013).
 }
 ```
 
-**Validation (server)**:
+**Validation (server)** — uses the split server model:
 
-- Sender's participant state MUST be `in-call` AND sender was assigned
-  `answerer` role.
+- Sender's `mediaReadiness` MUST be `ready`.
+- Sender's `callPhase` MUST be `role-assigned` or `negotiating`.
+- Sender's assigned role for this pairing MUST be `answerer`.
 - `payload.sdp.type === "answer"`.
 
 **Error behavior**: unexpected answer ⇒ `error` with code
@@ -486,11 +617,28 @@ pairing (would be glare; spec EC-013).
 }
 ```
 
-Passing `candidate === null` or `candidate === ""` signals
-**end-of-candidates** (trickle done). Clients MUST forward this.
+Passing `candidate: null` signals **end-of-candidates** (trickle
+done). Clients MUST forward this. The empty-string form is **not**
+valid — validators MUST reject `candidate: ""` with `malformed`.
 
-**Validation (server)**: sender MUST be `in-call`. Body is relayed
-as-is (server does not parse the candidate string).
+**End-of-candidates example**:
+
+```json
+{
+  "v": 1,
+  "type": "ice_candidate",
+  "roomId": "demo",
+  "payload": { "candidate": null }
+}
+```
+
+**Validation (server)** — uses the split server model:
+
+- Sender's `mediaReadiness` MUST be `ready`.
+- Sender's `callPhase` MUST be one of `role-assigned`, `negotiating`,
+  or `connected` (late-trickle candidates during an established call
+  are legal).
+- Body is relayed as-is (server does not parse the candidate string).
 
 **Validation (client)**: on receive, either call `addIceCandidate` if
 remote description is set, or buffer per `IceBuffer` rules
@@ -532,14 +680,33 @@ simplicity, Principle IX).
 }
 ```
 
-**Validation**: sender state MUST be `in-call`.
+**Validation (server)** — uses the split server model:
+
+- Sender's `mediaReadiness` MUST be `ready`.
+- Sender's `callPhase` SHOULD be `connected` for normal MVP operation.
+  The server MAY relay `media_state` during `negotiating` (e.g., to
+  announce an initial mute state right after `ready_for_offer`); the
+  remote MUST render based on its own current state.
+- Not valid from `pending-media` or `idle` senders.
 
 ---
 
 ### 3.12 `peer_left` (S→C)
 
-**Purpose**: notify the remaining participant that the other peer is
-gone.
+**Purpose**: convenience message that notifies the remaining
+participant the **in-call peer** is gone — its only job is to give
+the client a single obvious trigger point for the remote-peer-left
+cleanup (data-model §C.5 Path B).
+
+**When sent**: **only when the remote participant had reached
+`callPhase ∈ {role-assigned, negotiating, connected}`** — i.e., a
+peer who was actually in the call. Pending-media releases (the
+remote never became `ready`, or it failed before pairing) are NOT
+announced via `peer_left`; they are announced via
+`peer_presence_changed` (§3.4) with `presence: "released"` only.
+This keeps the event log clean: pending-media departures appear as
+"pending peer released" and only actual in-call departures appear as
+"peer left".
 
 **Direction**: S→C (to the remaining peer).
 
@@ -550,15 +717,16 @@ gone.
 ```json
 {
   "peerId": "uuid-v4",
-  "reason": "graceful_leave" | "disconnect" | "media_failed" | "pending_released"
+  "reason": "graceful_leave" | "disconnect"
 }
 ```
 
 - `graceful_leave` — peer sent `leave_room`.
 - `disconnect` — WebSocket closed without `leave_room`.
-- `media_failed` — peer sent `media_failed` and slot was released.
-- `pending_released` — pending-media participant disconnected before
-  reporting `media_ready` (FR-010d).
+
+Only these two reasons are valid for `peer_left`. Pre-pairing
+reasons (`media_failed`, `pending_released`) are delivered through
+`peer_presence_changed` alone.
 
 **Example**:
 
@@ -571,24 +739,44 @@ gone.
 }
 ```
 
-**Client behavior**:
+**Client behavior** (remote peer departed; this is NOT a local
+failure):
 
-- Close the `RTCPeerConnection` and DataChannel.
-- Reset to `waiting-for-peer` (if the local peer is still media-ready)
-  OR to `idle` (if the local peer was `pending-media` and hasn't
-  completed media acquisition).
-- Do NOT enter terminal `failed` — `peer_left` is not a local failure
-  (spec FR-005 split).
+1. Close the `RTCPeerConnection` and `RTCDataChannel`.
+2. Clear `RemoteMediaState` and any references to remote tracks.
+3. **Keep local `MediaStreamTrack`s running** (camera/mic/screen).
+   The local user has not left — only the remote peer did.
+4. Transition session state:
+   - If local is still media-ready → `waiting-for-peer`.
+   - If local was still `pending-media` (shouldn't happen
+     post-connected, but possible mid-negotiation) → back to
+     `pending-media`.
+5. Do NOT enter terminal `failed` — `peer_left` is not a local
+   failure (spec FR-005 split).
+6. Log event `peer left` with `reason`.
+
+See data-model §C.5 for the full cleanup-ordering contract (three
+distinct cleanup paths: local leave, remote peer_left, local
+terminal failure — they are NOT the same).
 
 ---
 
-### 3.13 `participant_released_media_failed` (S→C)
+### 3.13 `participant_released` (S→C)
 
-**Purpose**: tell the failed client that its own slot was released
-after its `media_failed` (or after a pending-media disconnect that
-the server observed).
+**Purpose**: tell a previously-admitted client that **its own** slot
+was released. Unlike `join_rejected` (pre-admission), this is a
+post-admission release — the slot was reserved but never became
+`in-call`. Typical triggers: the client's own `media_failed` signal,
+a pending-media WS disconnect observed by the server.
 
-**Direction**: S→C (to the released peer only).
+**Direction**: S→C (to the released peer only — unicast). **Note
+however**: if the release is caused by a WebSocket disconnect, the
+released peer is by definition unreachable, so `participant_released`
+cannot be delivered to it. In that case the server MUST still
+release the slot and MUST notify any remaining reserved participant
+via `peer_presence_changed` with `presence: "released"` and
+`reason: "disconnect"` (the "disconnect → released" path is how the
+remaining peer learns about the pending-media failure).
 
 **Required fields**: `v`, `type`, `roomId`, `payload`
 
@@ -596,14 +784,50 @@ the server observed).
 
 ```json
 {
-  "reason": "media_failed",
+  "result": "participant_released_media_failed" | "participant_released_disconnect",
+  "reason": "media_failed" | "disconnect",
   "detail": "camera_permission_denied"
 }
 ```
 
-**Client behavior**: UI shows a clear permission/media error with a
-retry affordance (per FR-009). Transition to `idle` or `failed` (spec
-allows either; plan picks `idle` to allow immediate retry).
+- `result` — canonical Join-Result-style enum for post-admission
+  outcomes.
+- `reason` — short machine-readable tag.
+- `detail` — optional short human string (no secrets, no SDP, no
+  ICE content).
+
+**Example**:
+
+```json
+{
+  "v": 1,
+  "type": "participant_released",
+  "roomId": "demo",
+  "payload": {
+    "result": "participant_released_media_failed",
+    "reason": "media_failed",
+    "detail": "camera_permission_denied"
+  }
+}
+```
+
+**Client behavior**: media-acquisition failure is **retry-able**, not
+terminal. The client MUST:
+
+- Show a clear permission/media error with a visible Retry affordance
+  (per FR-009) — do NOT enter terminal `failed`.
+- Keep the WS alive; the user can click Join again after fixing the
+  permission / hardware issue, which re-enters `joining` →
+  `pending-media` without reconnecting the WS.
+- Transition session state to a **retry-able** state:
+  `pending-media → media-error`, or back to `idle-with-error` in
+  simpler implementations. (Canonical: `media-error` in data-model
+  §B.1.)
+- Log event `error occurred` with reason = `result`.
+
+Reserved terminal-`failed` is only for local peer-connection
+failures (ICE failure, local fatal), never for media-acquisition
+failures.
 
 ---
 
@@ -662,20 +886,25 @@ client-originated `error` except to log it.
 
 | Code | Meaning |
 |---|---|
-| `invalid_room_id` | room ID failed validation |
-| `room_full` | duplicated for transport parity; primary channel is `room_full` message |
 | `already_joined` | same WS tried to join two rooms |
-| `unexpected_media_ready` | media_ready in wrong state |
-| `unexpected_offer` | offer from non-offerer or wrong state |
-| `unexpected_answer` | answer from non-answerer or wrong state |
+| `unexpected_media_ready` | `media_ready` received while sender's `mediaReadiness` ≠ `pending-media` |
+| `unsupported_media_capability` | `media_ready.mediaCapabilities` missing `audio` or `video` (MVP requires both; §3.5) |
+| `unexpected_offer` | `offer` received from non-offerer or with wrong `mediaReadiness` / `callPhase` |
+| `unexpected_answer` | `answer` received from non-answerer or with wrong `mediaReadiness` / `callPhase` |
 | `not_in_room` | protocol action requires room membership |
-| `malformed` | envelope or payload failed schema validation |
+| `malformed` | envelope or payload failed schema validation (includes `ice_candidate` with `candidate: ""`) |
 | `unsupported_version` | `v != 1` |
 | `internal_error` | server-side fault (no detail leaked) |
 
+> **`room_full` and `invalid_room_id` are NOT `error` codes.** Pre-
+> admission rejection is delivered via the dedicated `join_rejected`
+> message (§3.3) with `payload.result` = `join_rejected_room_full`
+> or `join_rejected_invalid_room`. This keeps admission outcomes on
+> one canonical channel.
+
 **Client behavior**: log `error occurred` with code; do not mutate
 state based on an `error` except to reset after certain terminal
-codes (`invalid_room_id`, `room_full`, `already_joined`).
+codes (`already_joined`, `unsupported_version`).
 
 ---
 
@@ -686,16 +915,22 @@ codes (`invalid_room_id`, `room_full`, `already_joined`).
 **Direction**: server-initiated Ping frames (WS control frames, not
 JSON messages).
 
-**Timing**:
+**Timing** (sized to satisfy SC-009's **10-second worst-case**
+detection bound; a 10s + 10s layout has a 20s worst case and would
+fail the criterion):
 
-- Ping interval: 10 seconds.
-- Pong timeout: 10 seconds.
-- On timeout: server closes the WS and treats the participant as
-  disconnected (per `peer_left` with `reason: "disconnect"` /
-  `pending_released`).
+- Ping interval: **5 seconds**.
+- Pong timeout: **5 seconds** after each Ping send.
+- Worst-case detection: peer goes silent just after a Ping is sent ⇒
+  next Ping 5s later ⇒ Pong timeout 5s after that ⇒ server closes
+  within **≤ 10 seconds**.
+- On timeout: server closes the WS and releases the slot via
+  `peer_presence_changed(presence: "left", reason: "disconnect")`
+  (and the convenience `peer_left` message if the slot was in-call).
 
 Clients do NOT send app-level ping messages. The browser auto-responds
-with Pong.
+with Pong. Both timings are exposed as env vars (`PING_INTERVAL_MS`,
+`PONG_TIMEOUT_MS`) with the 5000 ms defaults above.
 
 ---
 
@@ -721,46 +956,65 @@ This implements spec FR-011 (media path is peer-to-peer) and FR-029
 
 ## 5. Message sequence — happy path
 
-```
-C_A → S:  join_room
-C_A ← S:  join_accepted          (admissionOrder=1)
-                                  → C_A acquires media
-C_A → S:  media_ready
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CA as Client A
+    participant S as Signaling Server
+    participant CB as Client B
 
-C_B → S:  join_room
-C_B ← S:  join_accepted          (admissionOrder=2, remotePeer=C_A)
-C_A ← S:  peer_joined            (remote=C_B, state=pending-media)
-                                  → C_B acquires media
-C_B → S:  media_ready
+    Note over CA,CB: Phase — first peer admission
+    CA->>S: join_room
+    S-->>CA: join_accepted (admissionOrder=1)
+    Note over CA: acquire camera + mic
+    CA->>S: media_ready
 
-C_A ← S:  ready_for_offer        (role=offerer)
-C_B ← S:  ready_for_offer        (role=answerer)
-                                  → C_A creates DataChannel
-                                  → C_A createOffer → setLocalDescription
-C_A → S:  offer
-C_B ← S:  offer                  → C_B setRemoteDescription
-                                  → C_B createAnswer → setLocalDescription
-C_B → S:  answer
-C_A ← S:  answer                 → C_A setRemoteDescription
+    Note over CA,CB: Phase — second peer admission
+    CB->>S: join_room
+    S-->>CB: join_accepted (admissionOrder=2, remotePeer=A ready)
+    S-->>CA: peer_presence_changed (subject=B, presence=pending-media, reason=admitted)
+    S-->>CB: peer_presence_changed (subject=B, presence=pending-media, reason=admitted)
+    Note over CB: acquire camera + mic
+    CB->>S: media_ready
+    S-->>CA: peer_presence_changed (subject=B, presence=ready, reason=media_ready)
+    S-->>CB: peer_presence_changed (subject=B, presence=ready, reason=media_ready)
 
-(trickle)
-C_A → S:  ice_candidate ×N
-C_B → S:  ice_candidate ×N
-C_B ← S:  ice_candidate ×N       → addIceCandidate (or buffer)
-C_A ← S:  ice_candidate ×N       → addIceCandidate (or buffer)
+    Note over S: room reaches `paired` → assign roles by admissionOrder
+    S-->>CA: ready_for_offer (role=offerer)
+    S-->>CB: ready_for_offer (role=answerer)
 
-(connected)
-                                  → both render remote video
-                                  → DataChannel open on both sides
+    Note over CA: createDataChannel("chat")<br/>createOffer<br/>setLocalDescription
+    CA->>S: offer
+    S-->>CB: offer
+    Note over CB: setRemoteDescription<br/>createAnswer<br/>setLocalDescription
+    CB->>S: answer
+    S-->>CA: answer
+    Note over CA: setRemoteDescription
 
-(chat / toggles)
-C_A → S:  media_state            → relayed to C_B
-C_A ⇄ C_B:  DataChannel messages (not via server)
+    Note over CA,CB: ICE trickle (both directions, interleaved)
+    par A → B
+      CA->>S: ice_candidate (xN)
+      S-->>CB: ice_candidate (from=A, xN)
+      Note over CB: addIceCandidate\n(or buffer if RD not set)
+    and B → A
+      CB->>S: ice_candidate (xN)
+      S-->>CA: ice_candidate (from=B, xN)
+      Note over CA: addIceCandidate\n(or buffer if RD not set)
+    end
 
-(leave)
-C_A → S:  leave_room
-C_B ← S:  peer_left              (reason=graceful_leave)
-                                  → C_B cleans up, returns to waiting
+    Note over CA,CB: connectionState = "connected"<br/>DataChannel open on both sides<br/>remote video + audio rendering
+
+    Note over CA,CB: Runtime — media-state & chat
+    CA->>S: media_state (microphone/camera/screenShare)
+    S-->>CB: media_state (from=A)
+    CA-->>CB: DataChannel message (P2P, not via server)
+    CB-->>CA: DataChannel message (P2P, not via server)
+
+    Note over CA,CB: Leave
+    CA->>S: leave_room
+    S-->>CB: peer_presence_changed (subject=A, presence=left, reason=graceful_leave)
+    S-->>CB: peer_left (reason=graceful_leave)
+    Note over CB: cleanup path B (remote peer_left):<br/>close PC + DC, clear remote state,<br/>KEEP local tracks alive,<br/>SessionState → waiting_for_peer
 ```
 
 ---
@@ -769,16 +1023,42 @@ C_B ← S:  peer_left              (reason=graceful_leave)
 
 A compliant implementation MUST:
 
-- [ ] Validate every inbound message against its schema in §3.
-- [ ] Reject any message with `v != 1`.
-- [ ] Refuse to create an `RTCPeerConnection` before receiving
-      `ready_for_offer`.
-- [ ] Refuse to `createOffer` unless `role === "offerer"`.
-- [ ] Buffer remote ICE candidates arriving before `setRemoteDescription`.
-- [ ] Send a `media_state` message on every local mic/camera/screen
-      transition.
-- [ ] Tag every chat event in the UI event log with its transport
-      (signaling vs datachannel — see US5 Conditional events).
-- [ ] Never log SDP bodies, ICE candidate strings, or TURN credentials
-      (NFR-003).
-- [ ] Close WS within 10 s of Pong timeout (SC-009).
+- Validate every inbound message against its schema in §3.
+- Reject any message with `v != 1`.
+- Use **one** pre-admission rejection message (`join_rejected`) and
+  **one** post-admission release message (`participant_released`).
+  Do not implement a separate `room_full` message type.
+- Use **one** peer-presence-change message
+  (`peer_presence_changed`). The legacy `peer_joined` /
+  `peer_state_changed` types are not present; `peer_left` is kept
+  only as a convenience fired alongside `peer_presence_changed(
+  presence: "left" | "released")`.
+- Emit `peer_presence_changed` to **both** reserved participants on
+  every readiness / call-phase transition (bidirectional pending-
+  media visibility per FR-022b).
+- Refuse to create an `RTCPeerConnection` before receiving
+  `ready_for_offer`.
+- Refuse to `createOffer` unless `role === "offerer"`.
+- Buffer remote ICE candidates arriving before `setRemoteDescription`.
+- Forward `ice_candidate` end-of-candidates as `candidate: null`
+  exactly (reject `candidate: ""` as `malformed`).
+- Send a `media_state` message on every local mic/camera/screen
+  transition.
+- Reject `media_ready` payloads where either `audio` or `video` is
+  not `true` (return `error` with `unsupported_media_capability`).
+- On a remote `peer_left`, **keep local `MediaStreamTrack`s running**
+  (cleanup path B, data-model §C.5). Stopping local tracks is only
+  correct when the **local** user leaves (path A) or eventually
+  clicks Leave from `failed` (path C).
+- On WS-level Pong timeout, close the WS within the configured
+  window (default 5 s after Ping; ≤ 10 s total worst case per
+  SC-009).
+- Tag every chat event in the UI event log with its transport
+  (`signaling` vs `datachannel` — see US5 Conditional events).
+- Omit envelope `from` on system-originated S→C messages
+  (join_accepted, join_rejected, participant_released,
+  peer_presence_changed, ready_for_offer, peer_left). Carry
+  `from = sender.peerId` only on relay messages (offer, answer,
+  ice_candidate, media_state).
+- Never log SDP bodies, ICE candidate strings, or TURN credentials
+  (NFR-003).

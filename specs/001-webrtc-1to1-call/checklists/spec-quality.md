@@ -337,6 +337,112 @@ Format: **CHK### — Status** — notes.
 
 **Blocking issues before `/speckit.plan`**: none.
 
+---
+
+## Post-plan cross-document re-evaluation (review-pass-4, 2026-04-19)
+
+A review of the Phase-0/Phase-1 artifacts against the spec surfaced a
+different class of issue — **inconsistencies between spec, data-model,
+and signaling contract** that would have destabilized implementation.
+These are not "requirements quality" failures (the spec itself was
+internally consistent); they are **cross-document alignment failures**.
+They have been fixed. For traceability:
+
+- Spec `§US5 AC-1`: "every entry from both groups" → now explicitly
+  limits the happy-path log expectation to Base events + Conditional
+  events whose trigger occurred. Failure-only conditionals are checked
+  via their dedicated edge cases.
+- Spec / data-model / contract: pre-admission rejection unified under
+  a single `join_rejected` message; post-admission release unified
+  under a single `participant_released` message.
+- Spec `FR-022b` / data-model / contract: `peer_presence_changed`
+  replaces the separate `peer_joined` / `peer_left` /
+  `peer_state_changed` designs.
+- Data-model: `Participant.state` split into orthogonal `MediaReadiness`
+  and `CallPhase` enums; room call-readiness = `paired` now holds
+  across the in-call progression.
+- Data-model `§C.5`: three distinct cleanup paths (local leave /
+  remote peer_left / local terminal failure) — `peer_left` MUST NOT
+  stop local tracks.
+- Data-model `§B.1`: added `media_error` as a retry-able state;
+  terminal `failed` is reserved for local peer-connection failure.
+- Data-model `§B.1.1`: `SignalingTransportState` added as an
+  orthogonal state machine so a WS drop during `connected` doesn't
+  promote the session to terminal `failed`.
+- Research / contract: heartbeat re-anchored to 5s ping + 5s timeout
+  (≤10s worst-case) to satisfy SC-009.
+- Contract: `media_ready` now requires `audio && video`; end-of-
+  candidates is `candidate: null` only; envelope `from` is omitted on
+  server-originated system messages.
+- Plan: DoD bullets no longer carry `[x]` (agents read that as
+  "already completed").
+
+**Checklist re-evaluation verdict**: all 40 items still PASS. The
+changes strengthened consistency without invalidating any previously-
+passing item. Ready for `/speckit.tasks`.
+
+---
+
+## Post-review-pass-5 delta (2026-04-19, second cross-document sweep)
+
+A re-review of the plan and protocol against the spec caught **stale
+terminology in `plan.md`** (Phase 3/4 contract-message lists + Diagram
+2 peer_joined), **`in-call` checks in the signaling contract that no
+longer matched the split server state**, and **an obsolete legacy
+row** in the error table. Fixed:
+
+- `plan.md` Phase 3 contract list: `room_full` / `peer_joined`
+  replaced by `join_rejected` / `peer_presence_changed`; notes added
+  explaining that `join_rejected_room_full` is a payload result, not
+  a message type.
+- `plan.md` Phase 4 contract list: `participant_released_media_failed`
+  clarified as a payload result of the `participant_released` message.
+- `plan.md` Diagram 2 (join + negotiation): all `peer_joined`
+  transitions replaced with explicit `peer_presence_changed` pairs
+  (pending-media admitted, then ready after `media_ready`).
+- `plan.md` Diagram 3 (screen share): `media_state` now flows A → S → B
+  explicitly (not A → B), preserving the signaling-vs-media-path
+  distinction. Explanatory note added.
+- `plan.md` source-tree comments aligned with canonical decisions:
+  `state.go` is `MediaReadiness + CallPhase`, `heartbeat.go` is
+  `5s ping, 5s pong`, `slog_setup.go` is `JSON default`.
+- `data-model.md §B.1` "Transitions on failure" rewritten: media
+  failure → `media_error` (retry-able, not terminal); WS drop during
+  `connected` → `SignalingTransportState = error` with `SessionState`
+  preserved.
+- `contracts/signaling-protocol.md` offer / answer / ice_candidate /
+  media_state validation blocks rewritten to use the split server
+  model (`mediaReadiness == ready` + `callPhase ∈ {...}` + role
+  check), removing all `state MUST be in-call` language.
+- `contracts/signaling-protocol.md §3.12 peer_left` scoped to
+  **in-call** departures only. Pending-media releases are delivered
+  exclusively via `peer_presence_changed`. `peer_left` payload
+  reasons reduced to `graceful_leave` / `disconnect`.
+- `contracts/signaling-protocol.md §3.13 participant_released` now
+  explicitly notes that the message cannot reach a disconnected peer;
+  the remaining reserved peer learns via
+  `peer_presence_changed(presence="released", reason="disconnect")`.
+- `contracts/signaling-protocol.md §3.15 error` table: `room_full`
+  row removed (it was a legacy double-channel). Added explicit banner
+  stating that `room_full` and `invalid_room_id` are NOT error codes
+  — they ride on `join_rejected`.
+- `contracts/signaling-protocol.md` error table now includes
+  `unsupported_media_capability` (matches the `media_ready` audio+video
+  requirement locked in review-pass-4).
+- `data-model.md §C.5 Path C` Rejoin clarified: Rejoin = Leave + fresh
+  Join (Option A). No new `release_slot` / `restart_join` message is
+  added to the MVP contract.
+- `spec.md` Clarifications review-pass-2 SC-002 entry updated from
+  "second participant reports `media_ready`" to "room reaches
+  `paired` call-readiness" to match canonical SC-002 wording.
+
+**Verdict**: all 40 checklist items still PASS. Plan + contract +
+data-model are now internally consistent end-to-end — there are no
+more stale message-type names, no more single-flat-state server
+checks, and no more ambiguous recovery paths. **Ready for
+`/speckit.tasks`** without risk of resurrecting superseded protocol
+names.
+
 ## Proposed concrete spec changes
 
 ### (Required) Fix for CHK038 — Add IDs to Edge Cases

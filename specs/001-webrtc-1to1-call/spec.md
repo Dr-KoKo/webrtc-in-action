@@ -176,10 +176,14 @@ These were locked as follows:
   released). This makes two-phase join observable, which aligns with
   the project's learning purpose. (See FR-022b.)
 - Q: Where does SC-002's 5-second window start? →
-  A: **At the moment the second participant reports `media_ready`.**
-  Time spent at the browser permission prompt is excluded. The metric
-  measures signaling + ICE + negotiation latency, not human reaction
-  time. (See SC-002.)
+  A: **At the moment the room reaches `paired` call-readiness**
+  (i.e., both admitted participants have reported `media_ready` and
+  `ready_for_offer` may be sent). This is equivalent to "the second
+  participant reports `media_ready`" in the happy path but is the
+  canonical model-level boundary and is stable under two-phase join.
+  Time spent at the browser permission prompt is excluded. The
+  metric measures signaling + ICE + negotiation latency, not human
+  reaction time. (See SC-002.)
 - Q: What is the observable event-log contract for US5 Acceptance
   Scenario 1? →
   A: Events split into **Base lifecycle** (always produced during
@@ -441,7 +445,14 @@ cleanup lifecycle.
    Concretely: a user who runs the full learning-path session
    (join → connect → toggle microphone → toggle camera → send chat
    message → start screen share → stop screen share → leave) MUST
-   observe, in the combined logs, every entry from both groups above.
+   observe, in the combined logs, **every Base lifecycle event** AND
+   every Conditional lifecycle event **whose corresponding action
+   occurs during that session** — specifically `media toggled`,
+   `chat message sent` / `chat message received`, and
+   `screen share started` / `screen share stopped`. Failure-only
+   conditional events (`pending peer released`, `error occurred`) are
+   NOT expected in the happy path and are verified separately by
+   their dedicated edge-case scenarios (EC-004, EC-006..EC-013).
 2. **Given** an event log with many entries, **When** the user scrolls and
    reads, **Then** each entry is human-readable (not raw JSON) and the
    ordering reflects the actual sequence of events.

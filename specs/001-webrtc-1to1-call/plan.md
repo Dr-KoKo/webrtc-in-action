@@ -137,14 +137,14 @@ signaling/
 │   ├── room/
 │   │   ├── manager.go                    # RoomManager
 │   │   ├── room.go                       # Room + Participant
-│   │   └── state.go                      # ParticipantState + transitions
+│   │   └── state.go                      # MediaReadiness + CallPhase enums + transitions
 │   ├── signaling/
 │   │   ├── envelope.go                   # generic envelope + dispatch
 │   │   ├── messages.go                   # per-type structs + validate()
 │   │   ├── handler.go                    # WS upgrader + per-conn loop
-│   │   └── heartbeat.go                  # 10s ping, 10s pong timeout
+│   │   └── heartbeat.go                  # 5s ping, 5s pong timeout (≤10s worst case, SC-009)
 │   └── logging/
-│       └── slog_setup.go                 # text in dev, JSON in prod
+│       └── slog_setup.go                 # JSON default; text selectable via LOG_FORMAT=text
 ├── tests/
 │   ├── room_manager_test.go
 │   ├── messages_test.go
@@ -252,9 +252,12 @@ sequenceDiagram
     Note over A,B: Phase 2b: second peer admission + pairing
     B->>S: join_room {roomId:"demo", reqId:β}
     S-->>B: join_accepted {peerId:b, admissionOrder:2, remotePeer:{a,ready}}
-    S-->>A: peer_joined {peerId:b, state:pending-media}
+    S-->>A: peer_presence_changed {subjectPeerId:b, presence:"pending-media", reason:"admitted"}
+    S-->>B: peer_presence_changed {subjectPeerId:b, presence:"pending-media", reason:"admitted"}
     Note over B: acquire camera+mic
     B->>S: media_ready
+    S-->>A: peer_presence_changed {subjectPeerId:b, presence:"ready", reason:"media_ready"}
+    S-->>B: peer_presence_changed {subjectPeerId:b, presence:"ready", reason:"media_ready"}
     Note over S: RoomState=paired → assign roles by admissionOrder
 
     S-->>A: ready_for_offer {role:"offerer", iceServers}
@@ -288,30 +291,37 @@ sequenceDiagram
     autonumber
     participant UA as User A
     participant A as Browser A
+    participant S as Signaling Server
     participant B as Browser B
 
-    Note over A,B: Call is in "connected" state.
+    Note over A,S,B: Call is in "connected" state.<br/>Media path is P2P (A ⇄ B directly or via TURN).<br/>media_state change notifications travel the signaling path (A → S → B).
 
     UA->>A: click "Share screen"
     A->>A: navigator.mediaDevices.getDisplayMedia()
     Note over A: success → screenTrack
     A->>A: sender.replaceTrack(screenTrack)
-    A->>B: (no signaling; P2P track swap)
+    Note over A,B: P2P media: the swapped track flows directly<br/>A → B over the existing RTCPeerConnection<br/>(no signaling traffic for the track itself)
     Note over A: event log: "screen share started", "track replaced"
-    A->>+B: media_state {screenShare:"active"} via signaling
-    Note over B: remote video automatically switches to screen content<br/>event log: "screen share started (remote)"
-    B-->>-A: (no response expected)
+    A->>S: media_state {screenShare:"active"}
+    S-->>B: media_state {from:A, screenShare:"active"}
+    Note over B: remote media_state slice updated;<br/>remote video already displaying screen content from P2P path<br/>event log: "screen share started (remote)"
 
     UA->>A: click "Stop sharing" OR browser-native stop
     A->>A: screenTrack.stop()
     A->>A: sender.replaceTrack(cameraTrack)  %% if camera is on
     Note over A: event log: "screen share stopped", "track replaced"
-    A->>B: media_state {screenShare:"inactive"}
+    A->>S: media_state {screenShare:"inactive"}
+    S-->>B: media_state {from:A, screenShare:"inactive"}
 
     alt Alternative path (renegotiation — NOT the default)
-      Note right of A: If the plan ever chooses renegotiation instead of<br/>replaceTrack, the flow would be:<br/>removeTrack → addTrack(screen) → createOffer →<br/>offer/answer exchange via server → SDP updated.<br/>MVP does NOT take this path.
+      Note right of A: If the plan ever chooses renegotiation instead of<br/>replaceTrack, the flow would be:<br/>removeTrack → addTrack(screen) → createOffer →<br/>offer/answer exchange via the signaling server → SDP updated.<br/>MVP does NOT take this path.
     end
 ```
+
+**Reading**: note that `media_state` messages travel **A → S → B**
+(signaling path), while the actual media tracks swap peer-to-peer
+without touching `S`. Signaling and media paths staying distinct is
+the whole point of Constitution Principle III.
 
 ### Diagram 4 — Leave & cleanup
 
@@ -360,10 +370,10 @@ implementation in one pass" is forbidden (Principle IV).
 - `docker-compose.yml` with two services; shared `.env.example`.
 
 **DoD**:
-- [x] `docker compose up --build` succeeds.
-- [x] `curl http://localhost:8080/healthz` returns `{"status":"ok"}`.
-- [x] `http://localhost:5173` renders.
-- [x] No dependencies beyond the stack defined in Technical Context.
+- `docker compose up --build` succeeds.
+- `curl http://localhost:8080/healthz` returns `{"status":"ok"}`.
+- `http://localhost:5173` renders.
+- No dependencies beyond the stack defined in Technical Context.
 
 ### Phase 2 — Signaling health + WebSocket connection
 
@@ -378,9 +388,9 @@ logs connects/disconnects; no room logic yet.
 - Event-log panel stub (FR-020 skeleton).
 
 **DoD**:
-- [x] WS connects within 1 s.
-- [x] Server logs `ws_connected` / `ws_disconnected` with `peer_id`.
-- [x] Event log shows `signaling connected` / `signaling disconnected`.
+- WS connects within 1 s.
+- Server logs `ws_connected` / `ws_disconnected` with `peer_id`.
+- Event log shows `signaling connected` / `signaling disconnected`.
 
 ### Phase 3 — Room join / leave and peer presence (server + client)
 
@@ -390,20 +400,28 @@ with `room_full`. No media yet.
 **Work**:
 - `signaling/internal/room/`: `RoomManager`, `Room`, `Participant`, state
   enum, slot-occupancy admission.
-- Contract messages: `join_room`, `join_accepted`, `room_full`,
-  `peer_joined`, `peer_left`, `leave_room`, `error`.
+- Contract messages (canonical names per
+  `contracts/signaling-protocol.md` v1): `join_room`, `join_accepted`,
+  `join_rejected`, `peer_presence_changed`, `peer_left`, `leave_room`,
+  `error`.
+  - Room-full rejection is `join_rejected` with
+    `payload.result = "join_rejected_room_full"` — it is **not** a
+    separate message type.
+  - Peer admission / readiness transitions flow through
+    `peer_presence_changed` — the legacy `peer_joined` /
+    `peer_state_changed` types are not in the contract.
 - Client: `JoinForm`, session state `idle → joining → waiting-for-peer`.
 - Event log: `room joined`, `peer joined`, `peer left`.
 - Persistent state indicators (FR-022a) initial version — room state,
   peer presence.
 
 **DoD**:
-- [x] Two windows join; third is rejected within 2 s (SC-003).
-- [x] US1 AC-7 (third rejected when slot is pending-media) passes once
+- Two windows join; third is rejected within 2 s (SC-003).
+- US1 AC-7 (third rejected when slot is pending-media) passes once
       Phase 4 provides pending-media. (Document acceptance here, test in
       Phase 4.)
-- [x] Explicit Leave cleans both sides (FR-023, FR-026).
-- [x] `go test ./internal/room/...` passes.
+- Explicit Leave cleans both sides (FR-023, FR-026).
+- `go test ./internal/room/...` passes.
 
 ### Phase 4 — Local media preview + two-phase `media_ready`
 
@@ -415,25 +433,33 @@ is sent (but answered with a stub — no PC yet).
 **Work**:
 - `frontend/src/webrtc/media-acquisition.ts`: `getUserMedia` +
   permission-denial UX + retry button (FR-009).
-- Contract messages: `media_ready`, `media_failed`,
-  `participant_released_media_failed`, `ready_for_offer`.
+- Contract messages (canonical names): `media_ready`, `media_failed`,
+  `participant_released`, `ready_for_offer`, `peer_presence_changed`
+  (emitted on each readiness transition).
+  - `participant_released_media_failed` is a **payload result**, not a
+    message type:
+    `participant_released.payload.result = "participant_released_media_failed"`.
 - Pending-media peer-presence updates (FR-022b).
 - US1 AC-6 (permission-denied mid-flow) end-to-end tested.
 
 **DoD**:
-- [x] Local video preview visible.
-- [x] Permission denial shows clear error before any negotiation; slot
+- Local video preview visible.
+- Permission denial shows clear error before any negotiation; slot
       released; remote returns to `waiting_for_peer`.
-- [x] `ready_for_offer` is delivered exactly once per pairing with the
+- `ready_for_offer` is delivered exactly once per pairing with the
       correct role assignment (lower admissionOrder = offerer).
-- [x] `quickstart.md §5.1` passes manually.
+- `quickstart.md §5.1` passes manually.
 
 ### Phase 5 — Offer / Answer exchange
 
 **Goal**: Offerer creates `RTCPeerConnection`, attaches local tracks,
 creates offer; answerer processes it; both reach
-`signalingState === "stable"`. No ICE gathering yet (use
-`iceTransportPolicy: "all"` but don't trickle).
+`signalingState === "stable"`. **ICE candidate relay is deferred to
+Phase 6.** The browser may begin gathering local ICE candidates after
+`setLocalDescription()` — that is unavoidable — but
+`onicecandidate` is not yet wired to the signaling transport, and
+remote `ice_candidate` messages are not yet consumed. Phase 5 only
+validates that offer/answer negotiation succeeds at the SDP layer.
 
 **Work**:
 - `frontend/src/webrtc/peer-connection.ts`: wraps lifecycle.
@@ -444,9 +470,9 @@ creates offer; answerer processes it; both reach
   `answer received`, `signaling state changed`.
 
 **DoD**:
-- [x] Both peers reach `signalingState === "stable"`.
-- [x] Offer SDP contains audio + video + data m-lines.
-- [x] Answerer receives `ondatachannel` (kept for Phase 9, not used yet).
+- Both peers reach `signalingState === "stable"`.
+- Offer SDP contains audio + video + data m-lines.
+- Answerer receives `ondatachannel` (kept for Phase 9, not used yet).
 
 ### Phase 6 — ICE candidate exchange + buffering
 
@@ -463,11 +489,11 @@ remote SDP is set are buffered (research §6).
   observed, TURN configured.
 
 **DoD**:
-- [x] `iceConnectionState === "connected"` (or `"completed"`) reached
+- `iceConnectionState === "connected"` (or `"completed"`) reached
       within 5 s on localhost (SC-002).
-- [x] Learning Inspector shows at least one `host` candidate pair; if
+- Learning Inspector shows at least one `host` candidate pair; if
       STUN is reachable, also `srflx`.
-- [x] Buffering exercised by a reordered-ice test in protocol-flow
+- Buffering exercised by a reordered-ice test in protocol-flow
       tests.
 
 ### Phase 7 — Remote stream rendering
@@ -481,10 +507,10 @@ remote SDP is set are buffered (research §6).
   `connecting → connected`.
 
 **DoD**:
-- [x] `quickstart.md §4.1` passes (two browsers see and hear each
+- `quickstart.md §4.1` passes (two browsers see and hear each
       other).
-- [x] SC-001 (first-try two-browser call) passes.
-- [x] SC-002 (5 s from `paired` to remote video) passes on localhost.
+- SC-001 (first-try two-browser call) passes.
+- SC-002 (5 s from `paired` to remote video) passes on localhost.
 
 ### Phase 8 — Full connection-state logging + persistent indicators
 
@@ -500,10 +526,10 @@ nine persistent indicators from FR-022a display live values.
   summary.
 
 **DoD**:
-- [x] SC-004 (full ordered lifecycle in UI without devtools) passes.
-- [x] FR-021 (no devtools needed for common cases) verifiable by
+- SC-004 (full ordered lifecycle in UI without devtools) passes.
+- FR-021 (no devtools needed for common cases) verifiable by
       review.
-- [x] Eleven of the twelve learning outcomes have at least one
+- Eleven of the twelve learning outcomes have at least one
       observable moment in the UI (remaining one — DataChannel — lands
       in Phase 9).
 
@@ -527,11 +553,11 @@ risk appears high during Phase 5/6.
   declaring MVP complete (FR-016a).
 
 **DoD for 9**:
-- [x] Round-trip chat works between two browsers.
-- [x] Every chat log entry carries `transport`.
-- [x] FR-015a validation tested (empty rejected, 501-char rejected,
+- Round-trip chat works between two browsers.
+- Every chat log entry carries `transport`.
+- FR-015a validation tested (empty rejected, 501-char rejected,
       HTML rendered as text).
-- [x] `chat-channel state` indicator updates correctly
+- `chat-channel state` indicator updates correctly
       (`connecting → open → closed`).
 
 ### Phase 10 — Media toggles (mic / camera) with explicit signaling
@@ -546,9 +572,9 @@ risk appears high during Phase 5/6.
   event log (`media toggled`).
 
 **DoD**:
-- [x] `quickstart.md §4.2` passes.
-- [x] Remote indicator reflects mic/camera within ~1 s of local toggle.
-- [x] No renegotiation triggered by toggle (still stable `signalingState`).
+- `quickstart.md §4.2` passes.
+- Remote indicator reflects mic/camera within ~1 s of local toggle.
+- No renegotiation triggered by toggle (still stable `signalingState`).
 
 ### Phase 11 — Screen sharing via `replaceTrack`
 
@@ -563,9 +589,9 @@ handle browser-native Stop-Sharing event.
   source (`app` | `browser`), plus `track replaced` entry.
 
 **DoD**:
-- [x] `quickstart.md §4.4` passes for both app-stop and browser-stop.
-- [x] SC-007 (2 s stop latency) met.
-- [x] Picker cancellation logs `screen share cancelled`.
+- `quickstart.md §4.4` passes for both app-stop and browser-stop.
+- SC-007 (2 s stop latency) met.
+- Picker cancellation logs `screen share cancelled`.
 
 ### Phase 12 — Cleanup + failure hardening
 
@@ -581,10 +607,10 @@ handle browser-native Stop-Sharing event.
   `TestIceFailureEntersFailed`, `TestWSPongTimeoutReleasesSlot`.
 
 **DoD**:
-- [x] Every scenario in `quickstart.md §5` passes.
-- [x] SC-005 (5 s clean cleanup) met.
-- [x] SC-009 (10 s ungraceful detection) met.
-- [x] No `go test ./...` failures; no Vitest failures.
+- Every scenario in `quickstart.md §5` passes.
+- SC-005 (5 s clean cleanup) met.
+- SC-009 (10 s ungraceful detection) met.
+- No `go test ./...` failures; no Vitest failures.
 
 ### Phase 13 — Docker Compose polish
 
@@ -599,10 +625,10 @@ handle browser-native Stop-Sharing event.
   localhost with public STUN.
 
 **DoD**:
-- [x] Fresh clone + `docker compose up --build` follows `quickstart.md`
+- Fresh clone + `docker compose up --build` follows `quickstart.md`
       with no additional setup.
-- [x] `.env.example` contains every config variable the system reads.
-- [x] No secrets committed.
+- `.env.example` contains every config variable the system reads.
+- No secrets committed.
 
 ### Phase 14 — Optional coturn documentation & configuration
 
@@ -619,10 +645,10 @@ and have a working relay.
   present: yes/no`, distinct from `STUN configured`.
 
 **DoD**:
-- [x] Uncommenting the coturn block + setting env yields a working
+- Uncommenting the coturn block + setting env yields a working
       relay.
-- [x] Forcing UDP-block confirms browser falls back to TURN candidate.
-- [x] Secrets sourced from env, not file.
+- Forcing UDP-block confirms browser falls back to TURN candidate.
+- Secrets sourced from env, not file.
 
 ---
 
