@@ -347,12 +347,22 @@ acquisition** (sent to the already-waiting peer):
   (`peer joined`, `peer ready`, `peer left`, `pending peer released`,
   etc.).
 
-**Relationship to `peer_left` (§3.12)**: `peer_left` is a convenience
-message sent at the same time as the terminating `peer_presence_changed`
-so the remaining peer has a single trigger point for cleanup. A
-compliant server MAY send **only** `peer_presence_changed(presence:
-"left" | "released")` if the client supports it; the spec-default
-behavior is to send both for clarity and ease of implementation.
+**Relationship to `peer_left` (§3.12)**: `peer_presence_changed` is
+the canonical peer-presence event stream and is always emitted.
+
+`peer_left` is a narrow convenience cleanup trigger reserved for
+**in-call departures**. It is sent **only** alongside
+`peer_presence_changed(presence: "left")`, and only when the
+departing participant had reached
+`callPhase ∈ {role-assigned, negotiating, connected}`.
+
+**Pending-media releases MUST NOT emit `peer_left`.** They are
+represented exclusively by
+`peer_presence_changed(presence: "released")`, because no
+`RTCPeerConnection` / `RTCDataChannel` exists yet — the remote
+side has nothing to tear down, and firing `peer_left` would
+incorrectly invoke the in-call cleanup path (data-model §C.5
+Path B) against state that was never created.
 
 ---
 

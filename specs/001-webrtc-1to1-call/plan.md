@@ -294,7 +294,7 @@ sequenceDiagram
     participant S as Signaling Server
     participant B as Browser B
 
-    Note over A,S,B: Call is in "connected" state.<br/>Media path is P2P (A ⇄ B directly or via TURN).<br/>media_state change notifications travel the signaling path (A → S → B).
+    Note over A,B: Call is in "connected" state.<br/>Media path is P2P (A ⇄ B directly or via TURN).<br/>media_state change notifications travel the signaling path (A → S → B).
 
     UA->>A: click "Share screen"
     A->>A: navigator.mediaDevices.getDisplayMedia()
@@ -304,7 +304,7 @@ sequenceDiagram
     Note over A: event log: "screen share started", "track replaced"
     A->>S: media_state {screenShare:"active"}
     S-->>B: media_state {from:A, screenShare:"active"}
-    Note over B: remote media_state slice updated;<br/>remote video already displaying screen content from P2P path<br/>event log: "screen share started (remote)"
+    Note over B: remote media_state slice updated<br/>remote video already displaying screen content from P2P path<br/>event log: "screen share started (remote)"
 
     UA->>A: click "Stop sharing" OR browser-native stop
     A->>A: screenTrack.stop()
@@ -337,16 +337,18 @@ sequenceDiagram
     participant A as Browser A
 
     UB->>B: click "Leave"
-    Note over B: cleanup order (C.5):<br/>1. stop local tracks<br/>2. close DataChannel<br/>3. close RTCPeerConnection<br/>4. send leave_room<br/>5. drop refs, reset reducer<br/>6. log "cleanup completed"
+    Note over B: cleanup order (data-model §C.5 Path A):<br/>1. stop local tracks<br/>2. close DataChannel<br/>3. close RTCPeerConnection<br/>4. send leave_room<br/>5. drop refs, reset reducer<br/>6. log "cleanup completed"
     B->>S: leave_room
     B-xS: WS close
-    S->>S: release B's slot
+    S->>S: release B's slot + reset Room.rolesAssigned
+    S-->>A: peer_presence_changed {subjectPeerId:b, presence:"left", reason:"graceful_leave"}
     S-->>A: peer_left {peerId:b, reason:"graceful_leave"}
-    Note over A: close RTCPeerConnection & DataChannel<br/>sessionState → waiting-for-peer<br/>event log: "peer left", "cleanup completed"
+    Note over A: Path B cleanup (remote peer_left):<br/>close PC + DC, clear remote state,<br/>KEEP local tracks alive,<br/>sessionState → waiting-for-peer<br/>event log: "peer left", "cleanup completed"
 
     Note over A,S: Alternative: ungraceful disconnect (EC-009)
     UB-xB: close tab (no leave_room)
-    Note over S: WS Ping times out after 10 s (SC-009)
+    Note over S: Server detects disconnect within ≤10 s<br/>via 5 s Ping + 5 s Pong timeout (SC-009)
+    S-->>A: peer_presence_changed {subjectPeerId:b, presence:"left", reason:"disconnect"}
     S-->>A: peer_left {peerId:b, reason:"disconnect"}
     Note over A: same cleanup as graceful leave,<br/>but reason differs in event log
 ```
