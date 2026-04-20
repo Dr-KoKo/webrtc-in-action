@@ -395,7 +395,9 @@ logs connects/disconnects; no room logic yet.
 ### Phase 3 — Room join / leave and peer presence (server + client)
 
 **Goal**: Two clients can join the same room; third client is rejected
-with `room_full`. No media yet.
+with a `join_rejected` message whose
+`payload.result = "join_rejected_room_full"` (see contract §3.3 —
+`room_full` is not a message type). No media yet.
 
 **Work**:
 - `signaling/internal/room/`: `RoomManager`, `Room`, `Participant`, state

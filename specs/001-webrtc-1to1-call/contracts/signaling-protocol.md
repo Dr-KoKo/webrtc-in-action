@@ -829,6 +829,14 @@ Reserved terminal-`failed` is only for local peer-connection
 failures (ICE failure, local fatal), never for media-acquisition
 failures.
 
+**Server-side retry support**: after sending
+`participant_released` (for `media_failed`), the server MUST clear
+the WebSocket's room / participant association so that **the same
+WebSocket MAY send a new `join_room` afterward**. This retry path
+MUST NOT be rejected with `already_joined`. (The server's
+"already joined" check applies only to WSes that currently hold a
+reserved slot; a released WS holds none.)
+
 ---
 
 ### 3.14 `leave_room` (C→S)
@@ -852,9 +860,20 @@ failures.
 }
 ```
 
-**Server behavior**: release the sender's slot; broadcast `peer_left`
-with `reason: "graceful_leave"` to the remaining peer (if any); close
-the WS.
+**Server behavior** (follows the canonical cleanup contract in
+data-model §C.6):
+
+1. Classify the departure: **in-call** if the sender had reached
+   `callPhase ∈ {role-assigned, negotiating, connected}`, otherwise
+   **pre-pairing**.
+2. Release the sender's slot and reset `Room.rolesAssigned = false`.
+3. Broadcast `peer_presence_changed` to the remaining reserved
+   participant (if any):
+   - in-call → `presence: "left", reason: "graceful_leave"`.
+   - pre-pairing → `presence: "released", reason: "graceful_leave"`.
+4. **Only for in-call departures**, additionally send `peer_left`
+   (convenience trigger) with `reason: "graceful_leave"`.
+5. Close the sender's WS.
 
 **Validation**: sender must be in the room. Otherwise `error` with
 `not_in_room`.
@@ -1030,9 +1049,14 @@ A compliant implementation MUST:
   Do not implement a separate `room_full` message type.
 - Use **one** peer-presence-change message
   (`peer_presence_changed`). The legacy `peer_joined` /
-  `peer_state_changed` types are not present; `peer_left` is kept
-  only as a convenience fired alongside `peer_presence_changed(
-  presence: "left" | "released")`.
+  `peer_state_changed` types are not present. `peer_left` is kept
+  only as a convenience fired **alongside
+  `peer_presence_changed(presence: "left")`** for in-call
+  departures. Pending-media releases use
+  `peer_presence_changed(presence: "released")` **only** — no
+  `peer_left` is emitted, because there is no
+  `RTCPeerConnection` / `RTCDataChannel` to tear down on the
+  remote side.
 - Emit `peer_presence_changed` to **both** reserved participants on
   every readiness / call-phase transition (bidirectional pending-
   media visibility per FR-022b).

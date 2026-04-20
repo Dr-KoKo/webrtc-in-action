@@ -215,10 +215,26 @@ messages on state changes).
 Whenever any participant's `mediaReadiness` OR `callPhase` changes,
 the server broadcasts a **single** `peer_presence_changed` message
 to **both** reserved slots (including the subject participant
-itself). For clarity and ease of client implementation, the server
-also emits the convenience `peer_left` message alongside the
-terminating `peer_presence_changed` (presence = `left` | `released`).
-This powers FR-022b (bidirectional peer-presence updates).
+itself). This is the canonical event stream and is sufficient on
+its own for UI state + event-log consumers. It powers FR-022b
+(bidirectional peer-presence updates).
+
+The convenience `peer_left` message is fired **only** when the
+departing participant had reached
+`callPhase ∈ {role-assigned, negotiating, connected}` — i.e., it
+was actually in the call. It rides alongside the
+terminating `peer_presence_changed(presence: "left")` and serves as a
+single obvious trigger point for the remote-peer-left cleanup path
+(§C.5 Path B).
+
+**Pending-media releases do NOT emit `peer_left`.** A participant
+that was released before pairing (media_failed, pending disconnect)
+is communicated via `peer_presence_changed(presence: "released",
+reason: "media_failed" | "disconnect")` alone. The remaining peer's
+UI transitions `remotePeer: pending-media → absent` without closing
+any `RTCPeerConnection` (none existed yet). This keeps the event log
+honest: "pending peer released" and "peer left" are distinct
+observable facts.
 
 The earlier separate `peer_joined` / `peer_left` /
 `peer_state_changed` designs are superseded — see review-pass 4
@@ -467,8 +483,25 @@ message back to the server.
 
 ### C.2 `media_ready` is the only signal that advances pairing
 
-- Server MUST ignore any `offer`/`answer` from a participant whose
-  `state != in-call`.
+Server-side validation uses the split state model
+(`MediaReadiness` × `CallPhase` + assigned role). There is no single
+`in-call` enum.
+
+- Server MUST ignore any `offer` / `answer` / `ice_candidate` from a
+  participant whose `mediaReadiness != ready`.
+- `offer` is accepted only when **all** of:
+  - participant's role for this pairing is `offerer`,
+  - `callPhase ∈ {role-assigned, negotiating}`.
+- `answer` is accepted only when **all** of:
+  - participant's role for this pairing is `answerer`,
+  - `callPhase ∈ {role-assigned, negotiating}`.
+- `ice_candidate` is accepted when:
+  - `mediaReadiness == ready`,
+  - `callPhase ∈ {role-assigned, negotiating, connected}` (late
+    trickle during an established call is legal).
+- `media_state` is accepted when `mediaReadiness == ready`;
+  `callPhase` SHOULD be `connected` for normal MVP operation
+  (see `contracts/signaling-protocol.md §3.11`).
 - Client MUST NOT create an `RTCPeerConnection` before receiving
   `ready_for_offer` (answerer may create it on receipt of
   `ready_for_offer` before the remote offer arrives).
@@ -541,8 +574,9 @@ handling differ slightly:
 4. Transition `SessionState → failed`. Surface a clear error +
    **Leave / Rejoin** UI.
 5. **Do NOT stop local tracks yet** — the user may want the local
-   preview visible while they decide, and Rejoin is the preferred
-   recovery path (no re-prompt for permission).
+   preview visible while they decide between Leave and Rejoin. The
+   tracks are released when the user actually clicks one of the two
+   buttons (both branches below run Path A, which stops tracks).
 6. On user clicking **Leave**: execute Path A from step 1.
 7. On user clicking **Rejoin**: **Rejoin is a convenience alias for
    "Leave followed by a fresh Join"** — not an in-place slot
@@ -570,15 +604,42 @@ handling differ slightly:
 
 ### C.6 Cleanup (server)
 
-On WS close or `leave_room`:
+On WS close or `leave_room`, the server follows a fixed sequence
+that distinguishes **in-call departure** (the departing peer had
+reached a real call phase) from **pre-pairing release** (the
+departing peer never became `ready` + paired). This distinction
+decides whether the convenience `peer_left` message is fired.
 
-1. Mark participant `leaving` then `failed`/released (whichever
-   applies).
-2. Remove from `Room.slots`.
-3. Broadcast `peer_left` to the remaining participant (if any) —
-   carries the `peerId` and the reason (`graceful_leave` |
-   `disconnect` | `media_failed`).
-4. If `Room` is now empty, remove it from `RoomManager.rooms`.
+1. Capture the departing participant's **departure classification**
+   before mutating state:
+   - `in-call departure` if `callPhase ∈ {role-assigned, negotiating,
+     connected}`.
+   - `pre-pairing release` otherwise (i.e., `mediaReadiness ==
+     pending-media`, or `mediaReadiness == ready` but `callPhase ==
+     idle`).
+2. Advance participant state: `leaving` (if triggered by
+   `leave_room`) or proceed directly to release (if triggered by WS
+   close / pong timeout / media failure).
+3. Remove the participant from `Room.slots` and reset
+   `Room.rolesAssigned = false`.
+4. **Always** broadcast `peer_presence_changed` to the remaining
+   reserved participant (if any):
+   - `presence: "left"` with `reason: "graceful_leave" | "disconnect"`
+     for an in-call departure.
+   - `presence: "released"` with `reason: "media_failed" |
+     "disconnect"` for a pre-pairing release.
+5. **Only for in-call departures**, additionally send the
+   convenience `peer_left` message to the remaining participant
+   with the same `reason` (`graceful_leave` | `disconnect`). Do not
+   emit `peer_left` for pre-pairing releases — doing so would
+   falsely trigger the remote's Path B cleanup against an
+   `RTCPeerConnection` that was never created.
+6. If `Room` is now empty, remove it from `RoomManager.rooms`.
+
+> The rule can be stated as: **`peer_presence_changed` is canonical
+> and always emitted; `peer_left` is a cleanup-trigger convenience
+> reserved for departures that had an `RTCPeerConnection` to tear
+> down.**
 
 ---
 

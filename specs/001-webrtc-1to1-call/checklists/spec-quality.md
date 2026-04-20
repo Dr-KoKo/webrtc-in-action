@@ -443,6 +443,58 @@ checks, and no more ambiguous recovery paths. **Ready for
 `/speckit.tasks`** without risk of resurrecting superseded protocol
 names.
 
+---
+
+## Post-review-pass-6 delta (2026-04-19, third cross-document sweep)
+
+A third review found two remaining cross-document conflicts that
+would have produced real bugs in the implementation plus some minor
+wording:
+
+- **`peer_left` scoping** — data-model `§A.5` and `§C.6` still hinted
+  that `peer_left` rode alongside both `presence: "left"` and
+  `presence: "released"`. Canonical contract has already scoped
+  `peer_left` to in-call departures only. Both sections now match:
+  `peer_presence_changed` is always emitted; `peer_left` is emitted
+  **only** alongside `presence: "left"` (in-call departures). A
+  pending-media release produces `peer_presence_changed(presence:
+  "released")` alone — no `peer_left`, no remote PC/DC cleanup
+  trigger.
+- **`§C.6 Cleanup (server)`** rewritten around departure
+  classification (in-call vs pre-pairing), with explicit reasons per
+  branch and an explicit "do not emit `peer_left` for pre-pairing
+  releases" rule.
+- **`§C.2`** — removed the stale `state != in-call` check; replaced
+  with explicit `mediaReadiness` / `callPhase` / role rules per
+  message type, matching the contract validation blocks exactly.
+- **Contract `§3.14 leave_room`** server behavior rewritten to the
+  same departure-classification shape: always
+  `peer_presence_changed`, plus `peer_left` only for in-call.
+- **Contract `§3.13 participant_released`** now explicitly states
+  that the server MUST clear the WS's room/participant association
+  after `participant_released` so the same WebSocket MAY re-send
+  `join_room` without hitting `already_joined`. This closes the
+  retry loop for permission-denied recovery.
+- **Contract conformance checklist** — `peer_left` description
+  tightened: only alongside `presence: "left"`; pending-media
+  release uses `presence: "released"` **only**.
+- **`plan.md` Phase 3 Goal** — "rejected with `room_full`" →
+  "rejected with `join_rejected` where
+  `payload.result = "join_rejected_room_full"`" so task generators
+  don't reintroduce `room_full` as a message type.
+- **`data-model.md` Path C step 5** rationale cleaned up to match
+  the locked Option A semantics (Rejoin = Leave + fresh Join runs
+  Path A in full, so both Leave and Rejoin branches stop local
+  tracks).
+
+**Verdict**: all 40 checklist items still PASS. After three cross-
+document sweeps, the spec, plan, research, data-model, contract,
+and quickstart are now end-to-end aligned. The final remaining
+inconsistencies that would have caused real implementation bugs —
+`peer_left` over-firing on pending-media release, and stale
+`state != in-call` validation — are resolved. **Ready for
+`/speckit.tasks`.**
+
 ## Proposed concrete spec changes
 
 ### (Required) Fix for CHK038 — Add IDs to Edge Cases
