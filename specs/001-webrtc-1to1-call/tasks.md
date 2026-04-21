@@ -605,14 +605,14 @@ deterministic by `admissionOrder` (FR-010a / EC-013 — glare
 impossible by construction). Still no `RTCPeerConnection` on the
 client.
 
-- [ ] T029 Implement `media_ready` / `media_failed` dispatch + state transitions (`pending-media → ready` / `→ failed`) — `signaling/internal/signaling/handler.go`
-- [ ] T030 Implement `participant_released` (post-admission release; clears WS room-association so retry-join is accepted) — `signaling/internal/signaling/handler.go`
-- [ ] T031 Emit `ready_for_offer` exactly once per pairing when room reaches `paired`; lower `admissionOrder` = offerer — `signaling/internal/signaling/handler.go`
-- [ ] T032 Emit `peer_presence_changed` on every `pending-media → ready` transition and every release — `signaling/internal/signaling/handler.go`
-- [ ] T033 Pending-media WS-disconnect cleanup (release slot + `peer_presence_changed(presence="released", reason="disconnect")`; no `peer_left`) — `signaling/internal/signaling/handler.go`
-- [ ] T034 [P] Protocol-flow tests (media_failed, pending disconnect, both ready → `ready_for_offer` once, role assignment) — `signaling/tests/protocol_flow_test.go`
-- [ ] T034A Implement stateful relay validation helpers (sender-admitted, `mediaReadiness`, `callPhase`, assigned-role checks; envelope `from` stamping; remote-peer resolver) — `signaling/internal/room/room.go`, `signaling/internal/signaling/handler.go`
-- [ ] T034B Implement `offer` / `answer` relay with split-state validators + `callPhase` advance (`role-assigned → negotiating`) + protocol-flow tests for in-call leave and duplicate-offer rejection — `signaling/internal/signaling/handler.go`, `signaling/tests/protocol_flow_test.go`
+- [X] T029 Implement `media_ready` / `media_failed` dispatch + state transitions (`pending-media → ready` / `→ failed`) — `signaling/internal/signaling/handler.go`
+- [X] T030 Implement `participant_released` (post-admission release; clears WS room-association so retry-join is accepted) — `signaling/internal/signaling/handler.go`
+- [X] T031 Emit `ready_for_offer` exactly once per pairing when room reaches `paired`; lower `admissionOrder` = offerer — `signaling/internal/signaling/handler.go`
+- [X] T032 Emit `peer_presence_changed` on every `pending-media → ready` transition and every release — `signaling/internal/signaling/handler.go`
+- [X] T033 Pending-media WS-disconnect cleanup (release slot + `peer_presence_changed(presence="released", reason="disconnect")`; no `peer_left`) — `signaling/internal/signaling/handler.go`
+- [X] T034 [P] Protocol-flow tests (media_failed, pending disconnect, both ready → `ready_for_offer` once, role assignment) — `signaling/tests/protocol_flow_test.go`
+- [X] T034A Implement stateful relay validation helpers (sender-admitted, `mediaReadiness`, `callPhase`, assigned-role checks; envelope `from` stamping; remote-peer resolver) — `signaling/internal/room/room.go`, `signaling/internal/signaling/handler.go`
+- [X] T034B Implement `offer` / `answer` relay with split-state validators + `callPhase` advance (`role-assigned → negotiating`) + protocol-flow tests for in-call leave and duplicate-offer rejection — `signaling/internal/signaling/handler.go`, `signaling/tests/protocol_flow_test.go`
 
 ### T029
 - **Phase**: 4 — Two-phase join and media readiness

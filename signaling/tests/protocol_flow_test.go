@@ -454,3 +454,559 @@ func TestJoinRoomRejectsNonUUIDRequestId(t *testing.T) {
 	}
 	_ = env
 }
+
+// ---------------------------------------------------------------------
+// Phase 4 — media-ready pairing, role assignment, offer/answer relay
+// ---------------------------------------------------------------------
+
+// mediaReadyMsg crafts a §3.5 envelope with explicit audio/video
+// booleans so capability-rejection tests can flip either one to
+// false.
+func mediaReadyMsg(roomID string, audio, video bool) any {
+	return map[string]any{
+		"v":      1,
+		"type":   "media_ready",
+		"roomId": roomID,
+		"payload": map[string]any{
+			"mediaCapabilities": map[string]any{
+				"audio": audio,
+				"video": video,
+			},
+		},
+	}
+}
+
+func mediaFailedMsg(roomID, reason string) any {
+	return map[string]any{
+		"v":       1,
+		"type":    "media_failed",
+		"roomId":  roomID,
+		"payload": map[string]any{"reason": reason},
+	}
+}
+
+func offerMsg(roomID, sdpStr string) any {
+	return map[string]any{
+		"v":      1,
+		"type":   "offer",
+		"roomId": roomID,
+		"payload": map[string]any{
+			"sdp": map[string]any{"type": "offer", "sdp": sdpStr},
+		},
+	}
+}
+
+func answerMsg(roomID, sdpStr string) any {
+	return map[string]any{
+		"v":      1,
+		"type":   "answer",
+		"roomId": roomID,
+		"payload": map[string]any{
+			"sdp": map[string]any{"type": "answer", "sdp": sdpStr},
+		},
+	}
+}
+
+// joinBoth admits both clients to the same room and drains the
+// cross-peer admission events so each client's read queue starts
+// empty relative to Phase 4 events.
+func joinBoth(t *testing.T, a, b *testClient, roomID string) (peerA, peerB string) {
+	t.Helper()
+	peerA = a.joinAndAck(roomID, newRequestID())
+	peerB = b.joinAndAck(roomID, newRequestID())
+	// A sees B's admission presence event.
+	_, _ = a.expect(sig.TypePeerPresenceChanged)
+	return peerA, peerB
+}
+
+// bothReady drives both clients through media_ready so the room
+// reaches paired. Returns each client's ready_for_offer payload.
+// The sequence is:
+//
+//   A media_ready → presence(A, ready) to {A, B}
+//   B media_ready → presence(B, ready) to {A, B} → paired
+//                → ready_for_offer to {A, B}
+//
+// Any extra message in a client's queue when this returns is a bug
+// either in the server or this helper.
+func bothReady(t *testing.T, a, b *testClient, roomID string) (sig.ReadyForOfferPayload, sig.ReadyForOfferPayload) {
+	t.Helper()
+
+	a.send(mediaReadyMsg(roomID, true, true))
+	// presence(A, ready) fans out to both A and B.
+	_, _ = a.expect(sig.TypePeerPresenceChanged)
+	_, _ = b.expect(sig.TypePeerPresenceChanged)
+
+	b.send(mediaReadyMsg(roomID, true, true))
+	// presence(B, ready) fans out to both A and B.
+	_, _ = a.expect(sig.TypePeerPresenceChanged)
+	_, _ = b.expect(sig.TypePeerPresenceChanged)
+
+	_, rawA := a.expect(sig.TypeReadyForOffer)
+	_, rawB := b.expect(sig.TypeReadyForOffer)
+	return parsePayload[sig.ReadyForOfferPayload](t, rawA),
+		parsePayload[sig.ReadyForOfferPayload](t, rawB)
+}
+
+// ---------------------------------------------------------------------
+// T029 — media_ready / media_failed
+// ---------------------------------------------------------------------
+
+func TestMediaReadyRejectsIncompleteCapabilities(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	_ = a.joinAndAck("demo", newRequestID())
+
+	// audio=false MUST be rejected — contract §3.5.
+	a.send(mediaReadyMsg("demo", false, true))
+	_, raw := a.expect(sig.TypeError)
+	payload := parsePayload[sig.ErrorPayload](t, raw)
+	if payload.Code != sig.CodeUnsupportedMediaCapability {
+		t.Fatalf("audio=false: error.code=%q want unsupported_media_capability", payload.Code)
+	}
+
+	// video=false MUST be rejected too.
+	a.send(mediaReadyMsg("demo", true, false))
+	_, raw = a.expect(sig.TypeError)
+	payload = parsePayload[sig.ErrorPayload](t, raw)
+	if payload.Code != sig.CodeUnsupportedMediaCapability {
+		t.Fatalf("video=false: error.code=%q want unsupported_media_capability", payload.Code)
+	}
+}
+
+func TestMediaReadyAdvancesToReady(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	peerA := a.joinAndAck("demo", newRequestID())
+
+	a.send(mediaReadyMsg("demo", true, true))
+
+	_, raw := a.expect(sig.TypePeerPresenceChanged)
+	pres := parsePayload[sig.PeerPresenceChangedPayload](t, raw)
+	if pres.SubjectPeerID != peerA {
+		t.Fatalf("subject=%s want %s", pres.SubjectPeerID, peerA)
+	}
+	if pres.Presence != sig.PresenceReady {
+		t.Fatalf("presence=%q want ready", pres.Presence)
+	}
+	if pres.Reason != sig.PresenceReasonMediaReady {
+		t.Fatalf("reason=%q want media_ready", pres.Reason)
+	}
+
+	// A second media_ready from the same peer MUST be rejected — the
+	// sender's mediaReadiness is already `ready`.
+	a.send(mediaReadyMsg("demo", true, true))
+	_, rawErr := a.expect(sig.TypeError)
+	perr := parsePayload[sig.ErrorPayload](t, rawErr)
+	if perr.Code != sig.CodeUnexpectedMediaReady {
+		t.Fatalf("second media_ready: error.code=%q want unexpected_media_ready", perr.Code)
+	}
+
+	// No ready_for_offer yet — room has only one participant.
+	a.expectNone(200 * time.Millisecond)
+}
+
+// ---------------------------------------------------------------------
+// T030 — participant_released (post-admission) + retry support
+// ---------------------------------------------------------------------
+
+func TestMediaFailedAllowsRetry(t *testing.T) {
+	ts := flowServer(t)
+	b := dialClient(t, ts)
+	_ = b.joinAndAck("demo", newRequestID())
+
+	b.send(mediaFailedMsg("demo", "permission_denied"))
+
+	// B receives its own participant_released.
+	_, raw := b.expect(sig.TypeParticipantReleased)
+	rel := parsePayload[sig.ParticipantReleasedPayload](t, raw)
+	if rel.Result != sig.ParticipantReleasedMediaFailed {
+		t.Fatalf("result=%q want participant_released_media_failed", rel.Result)
+	}
+	if rel.Reason != sig.ReleasedReasonMediaFailed {
+		t.Fatalf("reason=%q want media_failed", rel.Reason)
+	}
+
+	// Same WS MUST be able to send another join_room without
+	// already_joined (contract §3.13 server-side retry support).
+	b.send(joinRoomMsg("demo", newRequestID()))
+	_, rawAcc := b.expect(sig.TypeJoinAccepted)
+	acc := parsePayload[sig.JoinAcceptedPayload](t, rawAcc)
+	if acc.PeerID == "" {
+		t.Fatalf("retry join_accepted: peerID empty")
+	}
+	// And the self-presence(pending-media, admitted) arrives too.
+	_, _ = b.expect(sig.TypePeerPresenceChanged)
+}
+
+func TestParticipantReleasedBroadcastsToRemaining(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	peerA, peerB := joinBoth(t, a, b, "demo")
+	_ = peerA
+
+	b.send(mediaFailedMsg("demo", "device_in_use"))
+
+	// B receives participant_released.
+	_, _ = b.expect(sig.TypeParticipantReleased)
+
+	// A receives peer_presence_changed(released, media_failed) and
+	// NO peer_left — pending-media release is pre-pairing by
+	// definition.
+	_, raw := a.expect(sig.TypePeerPresenceChanged)
+	pres := parsePayload[sig.PeerPresenceChangedPayload](t, raw)
+	if pres.SubjectPeerID != peerB {
+		t.Fatalf("subject=%s want %s", pres.SubjectPeerID, peerB)
+	}
+	if pres.Presence != sig.PresenceReleased {
+		t.Fatalf("presence=%q want released", pres.Presence)
+	}
+	if pres.Reason != sig.PresenceReasonMediaFailed {
+		t.Fatalf("reason=%q want media_failed", pres.Reason)
+	}
+	a.expectNone(200 * time.Millisecond)
+}
+
+// ---------------------------------------------------------------------
+// T031 — ready_for_offer exactly once, role by admissionOrder
+// ---------------------------------------------------------------------
+
+func TestReadyForOfferSentExactlyOncePerPairing(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, _ = joinBoth(t, a, b, "demo")
+
+	_, _ = bothReady(t, a, b, "demo")
+
+	// A second media_ready from either peer MUST be rejected with
+	// unexpected_media_ready and MUST NOT trigger a second
+	// ready_for_offer (rolesAssigned guard).
+	a.send(mediaReadyMsg("demo", true, true))
+	_, rawErr := a.expect(sig.TypeError)
+	perr := parsePayload[sig.ErrorPayload](t, rawErr)
+	if perr.Code != sig.CodeUnexpectedMediaReady {
+		t.Fatalf("repeat media_ready: error.code=%q want unexpected_media_ready", perr.Code)
+	}
+	a.expectNone(200 * time.Millisecond)
+	b.expectNone(200 * time.Millisecond)
+}
+
+func TestOffererIsLowerAdmissionOrder(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	peerA, peerB := joinBoth(t, a, b, "demo")
+
+	payloadA, payloadB := bothReady(t, a, b, "demo")
+
+	// A was admitted first → order 1 → offerer.
+	if payloadA.Role != sig.RoleOfferer {
+		t.Fatalf("A role=%q want offerer", payloadA.Role)
+	}
+	if payloadA.RemotePeer.PeerID != peerB {
+		t.Fatalf("A remotePeer.peerId=%s want %s", payloadA.RemotePeer.PeerID, peerB)
+	}
+	if payloadA.RemotePeer.AdmissionOrder != 2 {
+		t.Fatalf("A remotePeer.admissionOrder=%d want 2", payloadA.RemotePeer.AdmissionOrder)
+	}
+	if len(payloadA.IceServers) == 0 {
+		t.Fatalf("A iceServers empty; expected STUN fallback at minimum")
+	}
+
+	// B was admitted second → order 2 → answerer.
+	if payloadB.Role != sig.RoleAnswerer {
+		t.Fatalf("B role=%q want answerer", payloadB.Role)
+	}
+	if payloadB.RemotePeer.PeerID != peerA {
+		t.Fatalf("B remotePeer.peerId=%s want %s", payloadB.RemotePeer.PeerID, peerA)
+	}
+}
+
+// ---------------------------------------------------------------------
+// T033 — pending-media disconnect / leave releases slot, NO peer_left
+// ---------------------------------------------------------------------
+
+func TestPendingMediaDisconnectReleasesSlotNoPeerLeft(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, peerB := joinBoth(t, a, b, "demo")
+
+	// A is media-ready but still waiting for B to send media_ready.
+	// B is pending-media.
+	a.send(mediaReadyMsg("demo", true, true))
+	_, _ = a.expect(sig.TypePeerPresenceChanged)
+	_, _ = b.expect(sig.TypePeerPresenceChanged)
+
+	// B disconnects ungracefully while pending-media.
+	_ = b.conn.Close(websocket.StatusAbnormalClosure, "test disconnect")
+
+	_, raw := a.expect(sig.TypePeerPresenceChanged)
+	pres := parsePayload[sig.PeerPresenceChangedPayload](t, raw)
+	if pres.SubjectPeerID != peerB {
+		t.Fatalf("subject=%s want %s", pres.SubjectPeerID, peerB)
+	}
+	if pres.Presence != sig.PresenceReleased {
+		t.Fatalf("presence=%q want released", pres.Presence)
+	}
+	if pres.Reason != sig.PresenceReasonDisconnect {
+		t.Fatalf("reason=%q want disconnect", pres.Reason)
+	}
+	// Must NOT emit peer_left for a pending-media departure.
+	a.expectNone(300 * time.Millisecond)
+}
+
+func TestPendingMediaReleaseDoesNotEmitPeerLeft(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, _ = joinBoth(t, a, b, "demo")
+
+	// A is media-ready; B is still pending-media. B gracefully leaves.
+	a.send(mediaReadyMsg("demo", true, true))
+	_, _ = a.expect(sig.TypePeerPresenceChanged)
+	_, _ = b.expect(sig.TypePeerPresenceChanged)
+
+	b.send(leaveRoomMsg("demo"))
+
+	_, raw := a.expect(sig.TypePeerPresenceChanged)
+	pres := parsePayload[sig.PeerPresenceChangedPayload](t, raw)
+	if pres.Presence != sig.PresenceReleased {
+		t.Fatalf("presence=%q want released (pending-media graceful leave)", pres.Presence)
+	}
+	if pres.Reason != sig.PresenceReasonGracefulLeave {
+		t.Fatalf("reason=%q want graceful_leave", pres.Reason)
+	}
+	a.expectNone(300 * time.Millisecond)
+}
+
+// ---------------------------------------------------------------------
+// T034B — offer / answer relay, callPhase advance, glare guard
+// ---------------------------------------------------------------------
+
+func TestOfferFromOffererRelayed(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	peerA, peerB := joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
+
+	env, raw := b.expect(sig.TypeOffer)
+	if env.From != peerA {
+		t.Fatalf("offer envelope.from=%s want %s", env.From, peerA)
+	}
+	if env.To != "" && env.To != peerB {
+		t.Fatalf("offer envelope.to=%s want '' or %s", env.To, peerB)
+	}
+	offer := parsePayload[sig.OfferPayload](t, raw)
+	if offer.SDP.Type != "offer" {
+		t.Fatalf("sdp.type=%q want offer", offer.SDP.Type)
+	}
+	// Sender receives no echo.
+	a.expectNone(200 * time.Millisecond)
+}
+
+func TestOfferFromAnswererRejected(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, _ = joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	// B is answerer — any offer from B MUST be rejected with
+	// unexpected_offer and MUST NOT be relayed to A.
+	b.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
+
+	_, raw := b.expect(sig.TypeError)
+	perr := parsePayload[sig.ErrorPayload](t, raw)
+	if perr.Code != sig.CodeUnexpectedOffer {
+		t.Fatalf("error.code=%q want unexpected_offer", perr.Code)
+	}
+	a.expectNone(200 * time.Millisecond)
+}
+
+func TestDuplicateOfferRejected(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, _ = joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
+	// Drain B's first relay.
+	_, _ = b.expect(sig.TypeOffer)
+
+	// Second offer for the same pairing MUST be rejected.
+	a.send(offerMsg("demo", "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\n"))
+
+	_, raw := a.expect(sig.TypeError)
+	perr := parsePayload[sig.ErrorPayload](t, raw)
+	if perr.Code != sig.CodeUnexpectedOffer {
+		t.Fatalf("duplicate offer: error.code=%q want unexpected_offer", perr.Code)
+	}
+	// B MUST NOT receive the duplicate.
+	b.expectNone(200 * time.Millisecond)
+}
+
+func TestAnswerFromAnswererRelayed(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	peerA, peerB := joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	// Drive a complete offer first so the peers are mid-negotiation.
+	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
+	_, _ = b.expect(sig.TypeOffer)
+
+	b.send(answerMsg("demo", "v=0\r\no=- 3 3 IN IP4 127.0.0.1\r\n"))
+
+	env, raw := a.expect(sig.TypeAnswer)
+	if env.From != peerB {
+		t.Fatalf("answer envelope.from=%s want %s", env.From, peerB)
+	}
+	if env.To != "" && env.To != peerA {
+		t.Fatalf("answer envelope.to=%s want '' or %s", env.To, peerA)
+	}
+	ans := parsePayload[sig.AnswerPayload](t, raw)
+	if ans.SDP.Type != "answer" {
+		t.Fatalf("sdp.type=%q want answer", ans.SDP.Type)
+	}
+	b.expectNone(200 * time.Millisecond)
+}
+
+func TestAnswerFromOffererRejected(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, _ = joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	// A is offerer — any answer from A MUST be rejected.
+	a.send(answerMsg("demo", "v=0\r\no=- 3 3 IN IP4 127.0.0.1\r\n"))
+
+	_, raw := a.expect(sig.TypeError)
+	perr := parsePayload[sig.ErrorPayload](t, raw)
+	if perr.Code != sig.CodeUnexpectedAnswer {
+		t.Fatalf("error.code=%q want unexpected_answer", perr.Code)
+	}
+	b.expectNone(200 * time.Millisecond)
+}
+
+// TestCallPhaseAdvancesOnOffer verifies that once the offerer sends
+// a valid offer, its callPhase advances (role-assigned → negotiating)
+// and a second offer is rejected on that basis. The observable proxy
+// is: duplicate offer is rejected.
+func TestCallPhaseAdvancesOnOffer(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, _ = joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
+	_, _ = b.expect(sig.TypeOffer)
+
+	// Without any answer, send another offer. Since the first accepted
+	// offer advances callPhase to negotiating, the second is rejected
+	// by the duplicate guard — observable evidence of the advance.
+	a.send(offerMsg("demo", "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\n"))
+	_, raw := a.expect(sig.TypeError)
+	perr := parsePayload[sig.ErrorPayload](t, raw)
+	if perr.Code != sig.CodeUnexpectedOffer {
+		t.Fatalf("second offer in negotiating: error.code=%q want unexpected_offer", perr.Code)
+	}
+}
+
+// TestNoGlare_OnlyOffererSendsOffer guards R-3: the server rejects
+// `offer` from the non-offerer peer even if sent racily. A's
+// relayed-offer and B's own rejection error can arrive in either
+// order on B's queue depending on goroutine scheduling — we only
+// require that both are present and exactly one is the rejection.
+func TestNoGlare_OnlyOffererSendsOffer(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, _ = joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	// Both try to send an offer simultaneously. Only A (offerer) is
+	// allowed to; B is rejected.
+	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
+	b.send(offerMsg("demo", "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\n"))
+
+	// Consume exactly two frames on B's queue; they MUST be one
+	// `offer` (relayed from A) and one `error` (B's rejection).
+	sawOffer, sawError := false, false
+	for i := 0; i < 2; i++ {
+		rctx, cancel := context.WithTimeout(b.ctx, 2*time.Second)
+		_, raw, err := b.conn.Read(rctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("B read %d: %v", i, err)
+		}
+		var env sig.Envelope
+		if err := json.Unmarshal(raw, &env); err != nil {
+			t.Fatalf("B unmarshal: %v", err)
+		}
+		switch env.Type {
+		case sig.TypeOffer:
+			sawOffer = true
+		case sig.TypeError:
+			sawError = true
+			perr := parsePayload[sig.ErrorPayload](t, env.Payload)
+			if perr.Code != sig.CodeUnexpectedOffer {
+				t.Fatalf("B error.code=%q want unexpected_offer", perr.Code)
+			}
+		default:
+			t.Fatalf("B unexpected frame type %q raw=%s", env.Type, string(raw))
+		}
+	}
+	if !sawOffer || !sawError {
+		t.Fatalf("expected both relayed offer and rejection; got offer=%v error=%v",
+			sawOffer, sawError)
+	}
+	// A must NOT have received B's forbidden offer.
+	a.expectNone(200 * time.Millisecond)
+}
+
+// TestInCallLeaveEmitsPeerLeft verifies the in-call classification
+// branch of §C.6 step 5: a departing peer that reached callPhase ∈
+// {role-assigned, negotiating, connected} MUST produce peer_left to
+// the remaining peer.
+func TestInCallLeaveEmitsPeerLeft(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	peerA, peerB := joinBoth(t, a, b, "demo")
+	_ = peerA
+	_, _ = bothReady(t, a, b, "demo") // both reach callPhase = role-assigned
+
+	// B leaves gracefully from role-assigned — in-call departure.
+	b.send(leaveRoomMsg("demo"))
+
+	// A observes peer_presence_changed(left, graceful_leave) AND
+	// peer_left(graceful_leave). Order: presence first, then peer_left
+	// (matches releaseAndNotify's emit order).
+	_, rawPres := a.expect(sig.TypePeerPresenceChanged)
+	pres := parsePayload[sig.PeerPresenceChangedPayload](t, rawPres)
+	if pres.Presence != sig.PresenceLeft {
+		t.Fatalf("presence=%q want left (in-call departure)", pres.Presence)
+	}
+	if pres.SubjectPeerID != peerB {
+		t.Fatalf("subject=%s want %s", pres.SubjectPeerID, peerB)
+	}
+
+	_, rawLeft := a.expect(sig.TypePeerLeft)
+	pl := parsePayload[sig.PeerLeftPayload](t, rawLeft)
+	if pl.PeerID != peerB {
+		t.Fatalf("peer_left.peerId=%s want %s", pl.PeerID, peerB)
+	}
+	if pl.Reason != sig.PeerLeftGracefulLeave {
+		t.Fatalf("peer_left.reason=%q want graceful_leave", pl.Reason)
+	}
+}

@@ -32,3 +32,9 @@ services:
       SIGNALING_PORT: "8080"
       PING_INTERVAL_MS: ${PING_INTERVAL_MS:-5000}
       PONG_TIMEOUT_MS: ${PONG_TIMEOUT_MS:-5000}
+      # Phase 4: the server includes these in `ready_for_offer` so both
+      # peers see the same ICE list. TURN credentials are never logged.
+      VITE_STUN_URLS: ${VITE_STUN_URLS:-stun:stun.l.google.com:19302}
+      VITE_TURN_URL: ${VITE_TURN_URL:-}
+      VITE_TURN_USERNAME: ${VITE_TURN_USERNAME:-}
+      VITE_TURN_CREDENTIAL: ${VITE_TURN_CREDENTIAL:-}

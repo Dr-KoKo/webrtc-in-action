@@ -6,7 +6,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,16 +20,23 @@ import (
 
 // Handler is the /ws upgrader + per-connection dispatcher.
 //
-// Phase 3 scope: admission flow (join_room / join_accepted /
-// join_rejected / peer_presence_changed / leave_room / pre-pairing
-// peer_left classification). Media-ready pairing, role assignment,
-// and relay (offer / answer / ice_candidate / media_state) land in
-// Phase 4.
+// Phase 4 scope (on top of Phase 3 admission): two-phase join with
+// media readiness (media_ready / media_failed / participant_released /
+// ready_for_offer), role assignment by admissionOrder, and the first
+// stateful relays (offer / answer) with callPhase advancement. ICE
+// candidate and media_state relay + browser RTCPeerConnection remain
+// out of scope here (Phase 7+).
 type Handler struct {
 	Log           *slog.Logger
 	Heartbeat     HeartbeatConfig
 	Rooms         *room.RoomManager
 	AcceptOptions *websocket.AcceptOptions
+
+	// IceServers is the RTCIceServer list relayed in `ready_for_offer`
+	// (contract §3.7). Loaded once at construction from env; never
+	// logged (TURN credentials are secrets). If the list is empty, a
+	// public STUN fallback is used so a fresh clone works on localhost.
+	IceServers []IceServer
 
 	connSeq atomic.Uint64
 }
@@ -39,9 +48,10 @@ func NewHandler(log *slog.Logger) *Handler {
 		log = slog.Default()
 	}
 	return &Handler{
-		Log:       log,
-		Heartbeat: LoadHeartbeatConfig(),
-		Rooms:     room.NewRoomManager(),
+		Log:        log,
+		Heartbeat:  LoadHeartbeatConfig(),
+		Rooms:      room.NewRoomManager(),
+		IceServers: loadIceServers(),
 		AcceptOptions: &websocket.AcceptOptions{
 			// Dev convenience: allow WS from any origin so the Vite dev
 			// server on a different port can connect. Phase 13 tightens
@@ -49,6 +59,39 @@ func NewHandler(log *slog.Logger) *Handler {
 			InsecureSkipVerify: true,
 		},
 	}
+}
+
+// loadIceServers reads VITE_STUN_URLS / VITE_TURN_URL / VITE_TURN_USERNAME /
+// VITE_TURN_CREDENTIAL from env and produces the RTCIceServer list
+// relayed in `ready_for_offer`. TURN credentials are never logged
+// (contract §3.7 explicitly forbids it).
+func loadIceServers() []IceServer {
+	var servers []IceServer
+	if raw := strings.TrimSpace(os.Getenv("VITE_STUN_URLS")); raw != "" {
+		urls := strings.Split(raw, ",")
+		cleaned := urls[:0]
+		for _, u := range urls {
+			if t := strings.TrimSpace(u); t != "" {
+				cleaned = append(cleaned, t)
+			}
+		}
+		if len(cleaned) > 0 {
+			servers = append(servers, IceServer{URLs: cleaned})
+		}
+	}
+	if len(servers) == 0 {
+		servers = append(servers, IceServer{
+			URLs: []string{"stun:stun.l.google.com:19302"},
+		})
+	}
+	if turn := strings.TrimSpace(os.Getenv("VITE_TURN_URL")); turn != "" {
+		servers = append(servers, IceServer{
+			URLs:       []string{turn},
+			Username:   os.Getenv("VITE_TURN_USERNAME"),
+			Credential: os.Getenv("VITE_TURN_CREDENTIAL"),
+		})
+	}
+	return servers
 }
 
 // connCtx carries per-WS mutable state. Wrapped in a struct so the
@@ -191,27 +234,33 @@ func (h *Handler) readLoop(ctx context.Context, cc *connCtx) error {
 	}
 }
 
-// dispatch routes a decoded envelope to the correct Phase 3 handler.
-// Unknown-for-Phase-3 types are rejected with an `error` frame; this
-// prevents a client from accidentally advancing state via a message
-// type that has not been wired yet.
+// dispatch routes a decoded envelope to the correct handler for the
+// current phase. Types not yet wired are rejected with an `error`
+// frame so a malformed client cannot drive state we have not built.
 func (h *Handler) dispatch(ctx context.Context, cc *connCtx, d *Decoded) error {
 	switch d.Envelope.Type {
 	case TypeJoinRoom:
 		return h.handleJoinRoom(ctx, cc, d)
 	case TypeLeaveRoom:
 		return h.handleLeaveRoom(ctx, cc, d)
-	case TypeMediaReady, TypeMediaFailed, TypeReadyForOffer,
-		TypeOffer, TypeAnswer, TypeIceCandidate, TypeMediaState:
-		// Phase 4+ territory — explicitly rejected here so a malformed
-		// client cannot drive state we have not built yet.
+	case TypeMediaReady:
+		return h.handleMediaReady(ctx, cc, d)
+	case TypeMediaFailed:
+		return h.handleMediaFailed(ctx, cc, d)
+	case TypeOffer:
+		return h.handleOffer(ctx, cc, d)
+	case TypeAnswer:
+		return h.handleAnswer(ctx, cc, d)
+	case TypeIceCandidate, TypeMediaState:
+		// Phase 8+ territory — helpers exist (T034A) but relay is not
+		// wired until ICE / media_state dispatch lands.
 		h.writeError(ctx, cc, &DecodeError{
 			Code:    CodeMalformed,
-			Message: "message type not yet supported (Phase 4+)",
+			Message: "message type not yet supported in this phase",
 		}, d.Envelope.RequestID)
 		return nil
-	case TypeJoinAccepted, TypeJoinRejected, TypePeerPresenceChanged,
-		TypePeerLeft, TypeParticipantReleased:
+	case TypeReadyForOffer, TypeJoinAccepted, TypeJoinRejected,
+		TypePeerPresenceChanged, TypePeerLeft, TypeParticipantReleased:
 		// These are server-originated; a client sending them is a bug.
 		h.writeError(ctx, cc, &DecodeError{
 			Code:    CodeMalformed,
@@ -342,17 +391,15 @@ func (h *Handler) handleLeaveRoom(ctx context.Context, cc *connCtx, d *Decoded) 
 
 // releaseAndNotify runs the canonical server-side cleanup sequence
 // from data-model §C.6 for a single departing participant. reason is
-// either "graceful_leave" (leave_room) or "disconnect" (WS close /
-// heartbeat timeout).
+// "graceful_leave" (leave_room), "disconnect" (WS close / heartbeat
+// timeout), or "media_failed" (post-admission media acquisition
+// failure).
 //
 // Classification happens BEFORE the slot is mutated so the
 // in-call-vs-pre-pairing decision is based on the participant's
-// CallPhase at the moment of departure.
-//
-// Phase 3 only ever sees CallPhaseIdle (since media_ready isn't wired
-// yet), so in practice the peer_left branch is dormant here — but the
-// classification code is present so the later phases do not need to
-// re-plumb this path.
+// CallPhase at the moment of departure. Pending-media releases
+// (media_failed, pending-media disconnect) are ALWAYS classified as
+// pre-pairing and MUST NOT emit peer_left, even in Phase 4+.
 func (h *Handler) releaseAndNotify(_ context.Context, cc *connCtx, reason string) {
 	roomID := cc.roomID
 	peerID := cc.peerID
@@ -399,6 +446,8 @@ func (h *Handler) releaseAndNotify(_ context.Context, cc *connCtx, reason string
 		presReason = PresenceReasonGracefulLeave
 	case "disconnect":
 		presReason = PresenceReasonDisconnect
+	case "media_failed":
+		presReason = PresenceReasonMediaFailed
 	default:
 		presReason = PresenceReasonDisconnect
 	}
@@ -573,4 +622,354 @@ func classifyReadError(err error) string {
 
 func formatConnID(n uint64) string {
 	return "c-" + strconv.FormatUint(n, 10)
+}
+
+// ---------------------------------------------------------------------
+// Phase 4 — media-ready pairing + role assignment
+// ---------------------------------------------------------------------
+
+// handleMediaReady transitions the sender's mediaReadiness
+// pending-media → ready, broadcasts peer_presence_changed(ready,
+// media_ready), and — if the room reaches paired call-readiness —
+// assigns roles by admissionOrder and emits ready_for_offer to both
+// peers exactly once per pairing attempt (contract §§3.5, 3.7).
+func (h *Handler) handleMediaReady(ctx context.Context, cc *connCtx, d *Decoded) error {
+	if cc.peerID == "" {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "media_ready requires an admitted participant",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	rm := h.Rooms.Room(cc.roomID)
+	if rm == nil {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "room not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+
+	rm.Lock()
+	p := rm.FindByPeerID(cc.peerID)
+	if p == nil {
+		rm.Unlock()
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "participant not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	if p.MediaReadiness != room.MediaReadinessPending {
+		rm.Unlock()
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeUnexpectedMediaReady,
+			Message: "media_ready requires mediaReadiness = pending-media",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+
+	p.MediaReadiness = room.MediaReadinessReady
+
+	// Capture everything we need for post-unlock work.
+	assignRoles := rm.CallReadiness() == room.CallReadinessPaired && !rm.RolesAssigned()
+	var pairParticipants []*room.Participant
+	if assignRoles {
+		pairParticipants = rm.Participants()
+		for _, pp := range pairParticipants {
+			pp.CallPhase = room.CallPhaseRoleAssigned
+		}
+		rm.SetRolesAssigned(true)
+	}
+	rm.Unlock()
+
+	h.broadcastPresence(ctx, rm, p, PresenceReady, PresenceReasonMediaReady)
+
+	if assignRoles {
+		h.sendReadyForOffer(ctx, rm, pairParticipants)
+	}
+
+	h.Log.Info("media ready",
+		slog.String("event", "media_ready"),
+		slog.String("conn_id", cc.connID),
+		slog.String("peer_id", cc.peerID),
+		slog.String("room_id", cc.roomID),
+		slog.Bool("roles_assigned", assignRoles),
+	)
+	return nil
+}
+
+// handleMediaFailed releases the sender's slot, notifies the sender
+// with `participant_released`, notifies any remaining peer via
+// `peer_presence_changed(released, media_failed)`, and clears the
+// connCtx's room / peer association so the same WebSocket MAY send
+// another `join_room` (contract §§3.6, 3.13 "Server-side retry
+// support"). No `peer_left` is emitted — pending-media releases are
+// pre-pairing by definition.
+func (h *Handler) handleMediaFailed(ctx context.Context, cc *connCtx, d *Decoded) error {
+	if cc.peerID == "" {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "media_failed requires an admitted participant",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	payload, _ := d.Message.(*MediaFailedPayload)
+
+	rm := h.Rooms.Room(cc.roomID)
+	if rm == nil {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "room not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+
+	rm.Lock()
+	p := rm.FindByPeerID(cc.peerID)
+	if p == nil {
+		rm.Unlock()
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "participant not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	if p.MediaReadiness != room.MediaReadinessPending {
+		rm.Unlock()
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeMalformed,
+			Message: "media_failed requires mediaReadiness = pending-media",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	rm.Unlock()
+
+	// Send participant_released to the failed peer BEFORE releasing —
+	// the WS is still open and reachable.
+	detail := ""
+	if payload != nil {
+		detail = string(payload.Reason)
+	}
+	relPayload, _ := json.Marshal(ParticipantReleasedPayload{
+		Result: ParticipantReleasedMediaFailed,
+		Reason: ReleasedReasonMediaFailed,
+		Detail: detail,
+	})
+	relEnv := Envelope{
+		V:       ContractVersion,
+		Type:    TypeParticipantReleased,
+		RoomID:  cc.roomID,
+		TS:      time.Now().UnixMilli(),
+		Payload: relPayload,
+	}
+	if err := cc.sendJSON(ctx, relEnv); err != nil {
+		h.Log.Warn("participant_released send failed",
+			slog.String("conn_id", cc.connID),
+			slog.String("error", err.Error()))
+	}
+
+	// Release the slot and notify any remaining peer. The in-call
+	// classification inside releaseAndNotify will correctly pick
+	// presence=released (pending-media implies !inCall).
+	h.releaseAndNotify(ctx, cc, "media_failed")
+
+	// Clear association so the SAME WS can send join_room again
+	// without hitting already_joined. ServeHTTP's deferred cleanup now
+	// short-circuits on cc.peerID == "" and will not double-release.
+	// Reset cc.released so a future rejoin's disconnect still triggers
+	// the cleanup path for the NEW slot.
+	cc.peerID = ""
+	cc.roomID = ""
+	cc.released.Store(false)
+
+	h.Log.Info("media failed",
+		slog.String("event", "media_failed"),
+		slog.String("conn_id", cc.connID),
+		slog.String("reason", detail),
+	)
+	return nil
+}
+
+// sendReadyForOffer emits exactly one ready_for_offer per peer in the
+// supplied pairing, using the lower `admissionOrder` as offerer
+// (contract §§3.7, §C.1). Callers MUST have already flipped
+// rm.SetRolesAssigned(true) and advanced both participants'
+// CallPhase to role-assigned under the room lock.
+func (h *Handler) sendReadyForOffer(_ context.Context, rm *room.Room, participants []*room.Participant) {
+	if len(participants) != room.MaxParticipants {
+		return
+	}
+	offerer, answerer := participants[0], participants[1]
+	if answerer.AdmissionOrder < offerer.AdmissionOrder {
+		offerer, answerer = answerer, offerer
+	}
+
+	send := func(self, remote *room.Participant, role Role) {
+		payload, _ := json.Marshal(ReadyForOfferPayload{
+			Role: role,
+			RemotePeer: ReadyForOfferRemote{
+				PeerID:         remote.PeerID,
+				AdmissionOrder: remote.AdmissionOrder,
+			},
+			IceServers: h.IceServers,
+		})
+		env := Envelope{
+			V:       ContractVersion,
+			Type:    TypeReadyForOffer,
+			RoomID:  rm.ID(),
+			To:      self.PeerID,
+			TS:      time.Now().UnixMilli(),
+			Payload: payload,
+		}
+		if self.Conn == nil {
+			return
+		}
+		if err := self.Conn.SendJSON(env); err != nil {
+			h.Log.Warn("ready_for_offer send failed",
+				slog.String("peer_id", self.PeerID),
+				slog.String("error", err.Error()))
+		}
+	}
+
+	send(offerer, answerer, RoleOfferer)
+	send(answerer, offerer, RoleAnswerer)
+
+	// Structured log — role + admissionOrder only; MUST NOT log
+	// iceServers (TURN credential confidentiality per §3.7).
+	h.Log.Info("ready_for_offer sent",
+		slog.String("event", "ready_for_offer"),
+		slog.String("room_id", rm.ID()),
+		slog.String("offerer_peer_id", offerer.PeerID),
+		slog.String("answerer_peer_id", answerer.PeerID),
+	)
+}
+
+// ---------------------------------------------------------------------
+// Phase 4 — offer / answer relay (T034B)
+// ---------------------------------------------------------------------
+
+// handleOffer validates an offer against the sender's assigned role
+// and state (mediaReadiness × callPhase), relays it to the remote
+// peer with envelope.from = sender peerId, and advances the sender's
+// CallPhase role-assigned → negotiating (§§3.8, C.2).
+func (h *Handler) handleOffer(ctx context.Context, cc *connCtx, d *Decoded) error {
+	return h.handleSDPRelay(ctx, cc, d, TypeOffer)
+}
+
+// handleAnswer mirrors handleOffer for §3.9.
+func (h *Handler) handleAnswer(ctx context.Context, cc *connCtx, d *Decoded) error {
+	return h.handleSDPRelay(ctx, cc, d, TypeAnswer)
+}
+
+// handleSDPRelay is the shared offer / answer pathway. Keeps the
+// three-field truth table (role × mediaReadiness × callPhase)
+// centralized behind room.CanSendOffer / CanSendAnswer so offer and
+// answer cannot drift apart.
+//
+// Importantly, the server NEVER parses payload.sdp.sdp — the inbound
+// payload bytes are forwarded verbatim on the new envelope with only
+// envelope.from / envelope.to / envelope.ts overwritten. NFR-003.
+func (h *Handler) handleSDPRelay(ctx context.Context, cc *connCtx, d *Decoded, t Type) error {
+	if cc.peerID == "" {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: string(t) + " requires an admitted participant",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	rm := h.Rooms.Room(cc.roomID)
+	if rm == nil {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "room not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+
+	rm.Lock()
+	p := rm.FindByPeerID(cc.peerID)
+	if p == nil {
+		rm.Unlock()
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "participant not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+
+	role := rm.AssignedRole(cc.peerID)
+	var relayErr *room.RelayError
+	switch t {
+	case TypeOffer:
+		relayErr = p.CanSendOffer(role)
+	case TypeAnswer:
+		relayErr = p.CanSendAnswer(role)
+	}
+	if relayErr != nil {
+		rm.Unlock()
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    ErrorCode(relayErr.Code),
+			Message: relayErr.Message,
+		}, d.Envelope.RequestID)
+		return nil
+	}
+
+	remote := rm.ResolveRemote(cc.peerID)
+	if remote == nil {
+		rm.Unlock()
+		// Contract: remote-peer unresolvable is a transient protocol
+		// failure — the remote may have just disconnected. Surface as
+		// not_in_room to the sender.
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "remote peer not present",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+
+	// Advance sender's CallPhase through role-assigned → negotiating
+	// on the first accepted offer / answer for this pairing (§3.8,
+	// §3.9). Subsequent relays are no-ops at the phase layer (the
+	// duplicate-offer guard lives in CanSendOffer).
+	if p.CallPhase == room.CallPhaseRoleAssigned {
+		p.CallPhase = room.CallPhaseNegotiating
+	}
+
+	remoteConn := remote.Conn
+	remotePeerID := remote.PeerID
+	rm.Unlock()
+
+	// Relay payload bytes verbatim. Only envelope metadata is
+	// rewritten — per NFR-003 the server does not parse SDP content.
+	outEnv := Envelope{
+		V:       ContractVersion,
+		Type:    t,
+		RoomID:  cc.roomID,
+		From:    cc.peerID,
+		To:      remotePeerID,
+		TS:      time.Now().UnixMilli(),
+		Payload: d.Envelope.Payload,
+	}
+	if remoteConn == nil {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "remote peer not present",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	if err := remoteConn.SendJSON(outEnv); err != nil {
+		h.Log.Warn("sdp relay failed",
+			slog.String("type", string(t)),
+			slog.String("peer_id", remotePeerID),
+			slog.String("error", err.Error()))
+	}
+
+	h.Log.Info("sdp relayed",
+		slog.String("event", "sdp_relay"),
+		slog.String("type", string(t)),
+		slog.String("from_peer_id", cc.peerID),
+		slog.String("to_peer_id", remotePeerID),
+	)
+	return nil
 }
