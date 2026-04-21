@@ -1,0 +1,38 @@
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/*
+!.vscode/settings.json
+.idea/
+
+# Node / Vite / frontend
+node_modules/
+dist/
+build/
+.vite/
+frontend/coverage/
+frontend/.turbo/
+*.tsbuildinfo
+
+# Go build artifacts
+*.exe
+*.test
+*.out
+signaling/signaling
+signaling/cmd/signaling/signaling
+
+# Docker / compose local volumes
+docker-compose.override.yml
+.data/

@@ -1,0 +1,13 @@
+# Phase 0 dev image — minimal. Phase 13 (T084) will replace this with a
+# multi-stage production image.
+FROM golang:1.23-alpine
+
+WORKDIR /app
+
+COPY go.mod ./
+COPY . .
+
+RUN go build -o /usr/local/bin/signaling ./cmd/signaling
+
+EXPOSE 8080
+CMD ["/usr/local/bin/signaling"]

@@ -18,7 +18,7 @@ each producing a runnable system with its own Definition of Done.
 ## Technical Context
 
 **Language / Version** — Frontend: **TypeScript 5.4+** (strict) / **React 18**;
-Signaling: **Go 1.22+**.
+Signaling: **Go 1.23+** (pinned by `github.com/coder/websocket` v1.8.14).
 **Primary Dependencies** — Frontend: `react`, `react-dom`, `vite`, `zod`,
 `vitest`, `@testing-library/react`. Signaling: `github.com/coder/websocket`,
 `github.com/stretchr/testify`, stdlib `net/http`, `log/slog`.

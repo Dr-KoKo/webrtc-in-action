@@ -1,0 +1,34 @@
+# Phase 0 baseline compose file. Both services build from their
+# Dockerfile.dev. Full production wiring + coturn land in Phase 13.
+#
+# Note: the Phase 0 signaling placeholder main() exits immediately,
+# so `docker compose up` will show the signaling container exiting
+# successfully. A long-running server with /healthz arrives in Phase 2
+# (T015). Until then, the Phase 0 verification target is
+# `docker compose config` and `docker compose build`.
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    environment:
+      VITE_STUN_URLS: ${VITE_STUN_URLS:-stun:stun.l.google.com:19302}
+      VITE_TURN_URL: ${VITE_TURN_URL:-}
+      VITE_TURN_USERNAME: ${VITE_TURN_USERNAME:-}
+      VITE_TURN_CREDENTIAL: ${VITE_TURN_CREDENTIAL:-}
+
+  signaling:
+    build:
+      context: ./signaling
+      dockerfile: Dockerfile.dev
+    ports:
+      - "${SIGNALING_PORT:-8080}:8080"
+    environment:
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SIGNALING_PORT: "8080"
+      PING_INTERVAL_MS: ${PING_INTERVAL_MS:-5000}
+      PONG_TIMEOUT_MS: ${PONG_TIMEOUT_MS:-5000}

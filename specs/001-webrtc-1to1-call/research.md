@@ -48,7 +48,10 @@ indicators), Principle I (primitives exposed).
 
 ## 2. Signaling server stack — Go with a small WebSocket library
 
-**Decision**: Go 1.22+. Use **`github.com/coder/websocket`** (also known
+**Decision**: Go 1.23+ (the floor is set by
+`github.com/coder/websocket` v1.8.14's `go.mod`, not by anything we
+use directly; `go get` will auto-bump the directive on first install).
+Use **`github.com/coder/websocket`** (also known
 historically as `nhooyr.io/websocket`) for the WebSocket handshake +
 frames. Use `net/http` for routing (`/healthz`, `/ws`) without a router
 framework. Keep the server under ~500 LoC for the MVP.

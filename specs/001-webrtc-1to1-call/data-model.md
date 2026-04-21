@@ -45,8 +45,7 @@ admission decisions.
 | Field | Type | Purpose |
 |---|---|---|
 | `id` | `string` | room identifier |
-| `slots` | `[2]*Participant` | fixed-size capacity; nil slots are free |
-| `admissionCounter` | `uint64` | monotonic per-room; assigned on admission; establishes offerer ordering |
+| `slots` | `[2]*Participant` | fixed-size capacity; nil slots are free. A participant's `admissionOrder` is `slotIndex + 1` (so always `1` or `2`), which establishes offerer ordering. |
 | `rolesAssigned` | `bool` | set `true` when `ready_for_offer` has been sent for the current pairing; reset to `false` on any slot release |
 | `createdAt` | `time.Time` | diagnostic only |
 | `mu` | `sync.Mutex` | serializes all room-scoped mutations |
@@ -85,9 +84,15 @@ re-acquiring media.
 
 - Capacity for admission is based on reserved slot count, never on
   call-readiness.
-- `admissionCounter` is assigned once per successful `join_accepted`
-  and never revoked; a released slot does not renumber the remaining
-  participant.
+- `admissionOrder` equals `slotIndex + 1` (so `1` or `2`). It is
+  stamped once at `join_accepted` and does not change for the
+  lifetime of the slot's current occupant; a released slot does not
+  renumber the remaining participant. A newly-joining peer that
+  takes a freed slot therefore reuses that slot's order — e.g., if
+  peer A (order 1) leaves, peer C joining the freed slot becomes
+  order 1 and B (order 2) is unchanged. This keeps the
+  "lower `admissionOrder` = offerer" rule (FR-010a, contract §3.7)
+  deterministic across slot-reuse scenarios.
 - Role assignment (`ready_for_offer`) is sent **exactly once** per
   pairing attempt.
 
@@ -99,7 +104,7 @@ re-acquiring media.
 |---|---|---|
 | `peerID` | `string` | server-assigned, UUIDv4 |
 | `roomID` | `string` | back-reference |
-| `admissionOrder` | `uint64` | from `Room.admissionCounter` at join |
+| `admissionOrder` | `int` | `1` or `2` — the 1-based index of the slot this participant occupies. Stable for the slot occupant's lifetime; reused by the next occupant if the slot is freed. |
 | `mediaReadiness` | `MediaReadiness` | see enum below |
 | `callPhase` | `CallPhase` | see enum below |
 | `conn` | `*websocket.Conn` | the active WS connection |

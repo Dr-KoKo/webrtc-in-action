@@ -144,7 +144,14 @@ messages (offer / answer / ice_candidate / media_state) carry
 - `peerId` — the server-assigned identity of this participant. Clients
   MUST read their own peerId from `payload.peerId` (not from
   envelope `from`).
-- `admissionOrder` — 1 or 2; strictly monotonic per room.
+- `admissionOrder` — `1` or `2`; equals the 1-based index of the
+  slot the participant occupies. Strictly monotonic within a
+  pairing session (first joiner is 1, second is 2). A released
+  slot's order is **reused** by the next joiner of that slot — so
+  across a room's lifetime the sequence is not globally monotonic
+  but the two live participants always have distinct orders in
+  `{1, 2}`. This is what makes the "lower `admissionOrder` =
+  offerer" rule (FR-010a, §3.7) valid even after slot reuse.
 - `roomReadiness` — room call-readiness at the moment of admission.
 - `remotePeer` — snapshot of the other reserved slot if any, else null:
 

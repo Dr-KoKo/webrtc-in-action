@@ -65,13 +65,13 @@ are permitted. In particular:
 that links to the spec-kit artifacts, and see the directory skeleton the
 plan §Project Structure prescribes. No runtime yet.
 
-- [ ] T001 Create root `README.md` with feature intro + spec-kit links — `README.md`
-- [ ] T002 [P] Create directory skeleton for `frontend/`, `signaling/`, `infra/coturn/` — directories only
-- [ ] T003 [P] Create `.gitignore` covering Node/Vite/Go/Docker artifacts — `.gitignore`
-- [ ] T004 Scaffold `frontend/` package (Vite + React 18 + TS strict) — `frontend/package.json`, `frontend/tsconfig.json`, `frontend/vite.config.ts`, `frontend/index.html`, `frontend/src/main.tsx`, `frontend/src/App.tsx`
-- [ ] T005 [P] Scaffold `signaling/` Go module (`go.mod`, empty `cmd/signaling/main.go`) — `signaling/go.mod`, `signaling/cmd/signaling/main.go`
-- [ ] T006 Create baseline `docker-compose.yml` declaring `frontend` + `signaling` services (build contexts only; detailed env wiring lands in Phase 13) — `docker-compose.yml`
-- [ ] T007 [P] Create `.env.example` enumerating every config variable (`VITE_STUN_URLS`, `VITE_TURN_URL`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL`, `LOG_FORMAT`, `PING_INTERVAL_MS`, `PONG_TIMEOUT_MS`, ports) — `.env.example`
+- [X] T001 Create root `README.md` with feature intro + spec-kit links — `README.md`
+- [X] T002 [P] Create directory skeleton for `frontend/`, `signaling/`, `infra/coturn/` — directories only
+- [X] T003 [P] Create `.gitignore` covering Node/Vite/Go/Docker artifacts — `.gitignore`
+- [X] T004 Scaffold `frontend/` package (Vite + React 18 + TS strict) — `frontend/package.json`, `frontend/tsconfig.json`, `frontend/vite.config.ts`, `frontend/index.html`, `frontend/src/main.tsx`, `frontend/src/App.tsx`
+- [X] T005 [P] Scaffold `signaling/` Go module (`go.mod`, empty `cmd/signaling/main.go`) — `signaling/go.mod`, `signaling/cmd/signaling/main.go`
+- [X] T006 Create baseline `docker-compose.yml` declaring `frontend` + `signaling` services (build contexts only; detailed env wiring lands in Phase 13) — `docker-compose.yml`
+- [X] T007 [P] Create `.env.example` enumerating every config variable (`VITE_STUN_URLS`, `VITE_TURN_URL`, `VITE_TURN_USERNAME`, `VITE_TURN_CREDENTIAL`, `LOG_FORMAT`, `PING_INTERVAL_MS`, `PONG_TIMEOUT_MS`, ports) — `.env.example`
 
 ### T001
 - **Phase**: 0 — Repository and documentation foundation
@@ -145,7 +145,9 @@ plan §Project Structure prescribes. No runtime yet.
 - **Parallelizable**: yes (independent from T004).
 - **Definition of Done**: module name is `github.com/<org>/webrtc-lab/signaling`
   (or `webrtc-lab/signaling` if no org prefix chosen); Go version
-  ≥ `1.22`; `go build ./...` succeeds.
+  ≥ `1.23` (the floor is promoted by `github.com/coder/websocket`'s
+  own go.mod when that dep is added in Phase 2); `go build ./...`
+  succeeds.
 - **Verification**: `cd signaling && go build ./...` exits 0.
 
 ### T006
@@ -201,13 +203,13 @@ placeholder is allowed to exit immediately.
 `contracts/signaling-protocol.md` v1. No server logic and no UI is
 written against the contract until this phase is green.
 
-- [ ] T008 Implement Zod envelope schema + shared primitives (`v`, `type`, `roomId`, `from`, `to`, `requestId`, `ts`) — `frontend/src/signaling/schema.ts`
-- [ ] T009 Implement Zod per-message schemas for all 15 types from contract §3 — `frontend/src/signaling/schema.ts`
-- [ ] T010 [P] Derive TS contract types from Zod inference (`z.infer<typeof …>` exports) — `frontend/src/types/contract.ts`
-- [ ] T011 [P] Frontend schema validation tests (envelope, room ID, chat, each message, direction asymmetries) — `frontend/tests/unit/schema.spec.ts`
-- [ ] T012 Implement Go envelope struct + dispatch helpers — `signaling/internal/signaling/envelope.go`
-- [ ] T013 Implement Go per-message structs + `Validate()` for all 15 types — `signaling/internal/signaling/messages.go`
-- [ ] T014 [P] Go contract tests (marshal, unmarshal, validator reject paths) — `signaling/tests/messages_test.go`
+- [X] T008 Implement Zod envelope schema + shared primitives (`v`, `type`, `roomId`, `from`, `to`, `requestId`, `ts`) — `frontend/src/signaling/schema.ts`
+- [X] T009 Implement Zod per-message schemas for all 15 types from contract §3 — `frontend/src/signaling/schema.ts`
+- [X] T010 [P] Derive TS contract types from Zod inference (`z.infer<typeof …>` exports) — `frontend/src/types/contract.ts`
+- [X] T011 [P] Frontend schema validation tests (envelope, room ID, chat, each message, direction asymmetries) — `frontend/tests/unit/schema.spec.ts`
+- [X] T012 Implement Go envelope struct + dispatch helpers — `signaling/internal/signaling/envelope.go`
+- [X] T013 Implement Go per-message structs + `Validate()` for all 15 types — `signaling/internal/signaling/messages.go`
+- [X] T014 [P] Go contract tests (marshal, unmarshal, validator reject paths) — `signaling/tests/messages_test.go`
 
 ### T008
 - **Phase**: 1 — Signaling contract foundation
@@ -338,12 +340,12 @@ canonical messages.
 logging, connection lifecycle logs, and a 5 s Ping / 5 s Pong-timeout
 heartbeat. Still **no** room logic and **no** media relay.
 
-- [ ] T015 Implement `/healthz` endpoint + HTTP server bootstrap — `signaling/cmd/signaling/main.go`
-- [ ] T016 [P] Configure `log/slog` with JSON default, `LOG_FORMAT=text` override — `signaling/internal/logging/slog_setup.go`
-- [ ] T017 Implement `/ws` upgrader + per-connection read loop — `signaling/internal/signaling/handler.go`
-- [ ] T018 Implement heartbeat (5 s Ping interval, 5 s Pong deadline) — `signaling/internal/signaling/heartbeat.go`
-- [ ] T019 Emit structured `ws_connected` / `ws_disconnected` log events — `signaling/internal/signaling/handler.go`
-- [ ] T020 [P] Handler + heartbeat unit tests (pong-timeout closes within 10 s) — `signaling/tests/heartbeat_test.go`
+- [X] T015 Implement `/healthz` endpoint + HTTP server bootstrap — `signaling/cmd/signaling/main.go`
+- [X] T016 [P] Configure `log/slog` with JSON default, `LOG_FORMAT=text` override — `signaling/internal/logging/slog_setup.go`
+- [X] T017 Implement `/ws` upgrader + per-connection read loop — `signaling/internal/signaling/handler.go`
+- [X] T018 Implement heartbeat (5 s Ping interval, 5 s Pong deadline) — `signaling/internal/signaling/heartbeat.go`
+- [X] T019 Emit structured `ws_connected` / `ws_disconnected` log events — `signaling/internal/signaling/handler.go`
+- [X] T020 [P] Handler + heartbeat unit tests (pong-timeout closes within 10 s) — `signaling/tests/heartbeat_test.go`
 
 ### T015
 - **Phase**: 2 — Signaling server baseline
@@ -445,14 +447,14 @@ JSON, and closes stale sockets within 10 s.
 with two-slot capacity, room-full rejection, invalid-room rejection,
 and clean leave + disconnect behavior. No media messages yet.
 
-- [ ] T021 Implement `MediaReadiness` + `CallPhase` enums and their transition helpers — `signaling/internal/room/state.go`
-- [ ] T022 Implement `Room` (two reserved slots, `rolesAssigned`, mutex, derived call-readiness) — `signaling/internal/room/room.go`
-- [ ] T023 Implement `RoomManager` (`Admit`, `Release`, empty-room GC) — `signaling/internal/room/manager.go`
-- [ ] T024 Wire `join_room` / `join_accepted` / `join_rejected` in the handler (room-full = `join_rejected_room_full`, invalid-room = `join_rejected_invalid_room`) — `signaling/internal/signaling/handler.go`
-- [ ] T025 Emit `peer_presence_changed` broadcasts on admission — `signaling/internal/signaling/handler.go`
-- [ ] T026 Wire `leave_room` + in-call-only `peer_left` convenience message — `signaling/internal/signaling/handler.go`
-- [ ] T027 [P] Unit tests for `RoomManager` (admit, full, invalid, release, empty-GC) — `signaling/tests/room_manager_test.go`
-- [ ] T028 Protocol-flow tests (two clients join, third rejected, leave, disconnect) — `signaling/tests/protocol_flow_test.go`
+- [X] T021 Implement `MediaReadiness` + `CallPhase` enums and their transition helpers — `signaling/internal/room/state.go`
+- [X] T022 Implement `Room` (two reserved slots, `rolesAssigned`, mutex, derived call-readiness) — `signaling/internal/room/room.go`
+- [X] T023 Implement `RoomManager` (`Admit`, `Release`, empty-room GC) — `signaling/internal/room/manager.go`
+- [X] T024 Wire `join_room` / `join_accepted` / `join_rejected` in the handler (room-full = `join_rejected_room_full`, invalid-room = `join_rejected_invalid_room`) — `signaling/internal/signaling/handler.go`
+- [X] T025 Emit `peer_presence_changed` broadcasts on admission — `signaling/internal/signaling/handler.go`
+- [X] T026 Wire `leave_room` + in-call-only `peer_left` convenience message — `signaling/internal/signaling/handler.go`
+- [X] T027 [P] Unit tests for `RoomManager` (admit, full, invalid, release, empty-GC) — `signaling/tests/room_manager_test.go`
+- [X] T028 Protocol-flow tests (two clients join, third rejected, leave, disconnect) — `signaling/tests/protocol_flow_test.go`
 
 ### T021
 - **Phase**: 3 — Room manager and admission flow
@@ -470,10 +472,11 @@ and clean leave + disconnect behavior. No media messages yet.
 
 ### T022
 - **Phase**: 3
-- **Purpose**: `Room` owns the two reserved slots, the monotonic
-  `admissionCounter`, the `rolesAssigned` flag, and the derived
-  call-readiness (`empty`, `waiting_for_media`, `waiting_for_peer`,
-  `paired`) computed per data-model §A.2.
+- **Purpose**: `Room` owns the two reserved slots, the slot-positional
+  `admissionOrder` (stamped as `slotIndex + 1`, so always `1` or `2`),
+  the `rolesAssigned` flag, and the derived call-readiness
+  (`empty`, `waiting_for_media`, `waiting_for_peer`, `paired`)
+  computed per data-model §A.2.
 - **Files**: `signaling/internal/room/room.go`.
 - **Dependencies**: T021.
 - **Parallelizable**: no.
@@ -1775,7 +1778,7 @@ production-default safety, and documented optional `coturn`.
 - **Files**: `signaling/Dockerfile`.
 - **Dependencies**: T005.
 - **Parallelizable**: yes.
-- **Definition of Done**: `FROM golang:1.22 AS builder` → `FROM
+- **Definition of Done**: `FROM golang:1.23 AS builder` → `FROM
   gcr.io/distroless/static` (or `scratch`); binary runs under non-
   root user; exposes `:8080`.
 - **Verification**: `docker compose up --build` logs `listening`
