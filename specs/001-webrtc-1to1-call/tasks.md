@@ -783,15 +783,15 @@ validates inbound messages through the Zod schemas, dispatches them
 into a reducer, shows the event log and the persistent state indicators
 with live values. Still no `getUserMedia` and no `RTCPeerConnection`.
 
-- [ ] T035 Wire top-level app (main, App, layout) — `frontend/src/main.tsx`, `frontend/src/App.tsx`
-- [ ] T036 Implement WebSocket client (connect, send, heartbeat echo, close) — `frontend/src/signaling/client.ts`
-- [ ] T037 Implement signaling dispatcher (Zod validate → reducer action) — `frontend/src/signaling/dispatcher.ts`
-- [ ] T038 [P] Implement session reducer skeleton: `idle → joining`, `joining → pending-media` on `join_accepted`, `joining → idle` on `join_rejected`; `peer_presence_changed` updates remote-peer slice. `waiting-for-peer` is defined but NOT entered here — it is reached only after Phase 6 `media_ready`. — `frontend/src/state/session.ts`
-- [ ] T039 [P] Implement event-log slice (ring buffer, 500 entries, transport field on chat) — `frontend/src/state/event-log.ts`
-- [ ] T040 Implement event log panel component — `frontend/src/components/EventLogPanel.tsx`
-- [ ] T041 [P] Implement persistent state indicators component (FR-022a/b skeleton) — `frontend/src/components/StateIndicators.tsx`
-- [ ] T042 Implement `JoinForm` (room ID validation, Join button, disabled during `joining`) — `frontend/src/components/JoinForm.tsx`
-- [ ] T043 [P] Dispatcher + reducer unit tests (schema validation failure path, session transitions) — `frontend/tests/unit/session.spec.ts`, `frontend/tests/contract/dispatcher.spec.ts`
+- [X] T035 Wire top-level app (main, App, layout) — `frontend/src/main.tsx`, `frontend/src/App.tsx`
+- [X] T036 Implement WebSocket client (connect, send, heartbeat echo, close) — `frontend/src/signaling/client.ts`
+- [X] T037 Implement signaling dispatcher (Zod validate → reducer action) — `frontend/src/signaling/dispatcher.ts`
+- [X] T038 [P] Implement session reducer skeleton: `idle → joining`, `joining → pending-media` on `join_accepted`, `joining → idle` on `join_rejected`; `peer_presence_changed` updates remote-peer slice. `waiting-for-peer` is defined but NOT entered here — it is reached only after Phase 6 `media_ready`. — `frontend/src/state/session.ts`
+- [X] T039 [P] Implement event-log slice (ring buffer, 500 entries, transport field on chat) — `frontend/src/state/event-log.ts`
+- [X] T040 Implement event log panel component — `frontend/src/components/EventLogPanel.tsx`
+- [X] T041 [P] Implement persistent state indicators component (FR-022a/b skeleton) — `frontend/src/components/StateIndicators.tsx`
+- [X] T042 Implement `JoinForm` (room ID validation, Join button, disabled during `joining`) — `frontend/src/components/JoinForm.tsx`
+- [X] T043 [P] Dispatcher + reducer unit tests (schema validation failure path, session transitions) — `frontend/tests/unit/session.spec.ts`, `frontend/tests/contract/dispatcher.spec.ts`
 
 ### T035
 - **Phase**: 5 — Frontend baseline
