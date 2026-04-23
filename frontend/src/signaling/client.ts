@@ -140,9 +140,10 @@ export function createSignalingClient(
 
   function onTransportChange(listener: TransportListener): () => void {
     transportListeners.add(listener);
-    // Emit current state immediately so subscribers don't race the
-    // open/close callbacks.
-    listener(transport);
+    // Deliberately no synchronous emit on subscribe — that would turn
+    // every mount into a fake "transport → <current>" log entry
+    // (doubled under StrictMode). Consumers that need the current
+    // value should call getTransportState() directly.
     return () => transportListeners.delete(listener);
   }
 

@@ -251,7 +251,7 @@ describe("event-log ring buffer", () => {
       slice = eventLogReducer(slice, {
         type: "EVENT_LOG_APPEND",
         entry: makeEventLogEntry({
-          type: "test",
+          type: "transport_changed",
           direction: "system",
           summary: `entry-${i}`,
           ts: 1000 + i,
@@ -270,7 +270,7 @@ describe("event-log ring buffer", () => {
   it("entries are not mutated after insertion", () => {
     __resetEventLogSequence();
     const entry = makeEventLogEntry({
-      type: "test",
+      type: "transport_changed",
       direction: "local",
       summary: "hello",
     });
@@ -284,7 +284,7 @@ describe("event-log ring buffer", () => {
     const slice2 = eventLogReducer(slice, {
       type: "EVENT_LOG_APPEND",
       entry: makeEventLogEntry({
-        type: "test",
+        type: "transport_changed",
         direction: "local",
         summary: "world",
       }),

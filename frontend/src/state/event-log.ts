@@ -10,10 +10,32 @@ export const EVENT_LOG_MAX_ENTRIES = 500;
 export type EventDirection = "local" | "remote" | "system";
 export type EventTransport = "signaling" | "datachannel";
 
+export type EventLogEntryType =
+  // app-originated UI / transport events
+  | "room_joined"
+  | "error_occurred"
+  | "peer_presence_changed"
+  | "transport_changed"
+  | "join_room_sent"
+  | "leave_requested"
+  // future-phase canonical inbound message pass-throughs — the
+  // dispatcher's fallback branch emits msg.type verbatim while the
+  // phase-specific handler is still pending.
+  | "media_ready"
+  | "media_failed"
+  | "ready_for_offer"
+  | "offer"
+  | "answer"
+  | "ice_candidate"
+  | "media_state"
+  | "peer_left"
+  | "participant_released"
+  | "leave_room";
+
 export interface EventLogEntry {
   readonly id: string;
   readonly ts: number;
-  readonly type: string;
+  readonly type: EventLogEntryType;
   readonly direction: EventDirection;
   readonly summary: string;
   readonly transport?: EventTransport;

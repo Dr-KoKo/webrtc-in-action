@@ -121,6 +121,7 @@ export const presenceSchema = z.enum([
   "left",
   "released",
 ]);
+export type PresenceStatus = z.infer<typeof presenceSchema>;
 
 export const presenceReasonSchema = z.enum([
   "admitted",

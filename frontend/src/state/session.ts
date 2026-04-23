@@ -26,6 +26,7 @@ import type {
   JoinAcceptedMessage,
   JoinRejectedMessage,
   PeerPresenceChangedMessage,
+  PresenceStatus,
 } from "../types/contract";
 
 export type SessionState =
@@ -44,13 +45,6 @@ export type SignalingTransportState =
   | "connecting"
   | "connected"
   | "error";
-
-export type PresenceStatus =
-  | "pending-media"
-  | "ready"
-  | "in-call"
-  | "left"
-  | "released";
 
 export interface RemoteParticipant {
   peerId: string;
@@ -101,6 +95,7 @@ export function sessionReducer(
 ): SessionSlice {
   switch (action.type) {
     case "TRANSPORT_CHANGED":
+      if (action.transport === state.transport) return state;
       return { ...state, transport: action.transport };
 
     case "PEER_PRESENCE_CHANGED": {

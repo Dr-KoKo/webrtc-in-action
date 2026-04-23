@@ -2,8 +2,7 @@
 //
 // Phase 5 scope:
 // - Parse raw strings as JSON.
-// - Validate through `envelopeBaseSchema` + the per-type schema in
-//   `schemasByType`.
+// - Validate through the signaling-message discriminated union (schema.ts).
 // - On success: emit a reducer action. For Phase 5 the meaningfully
 //   mutating actions are `JOIN_ACCEPTED`, `JOIN_REJECTED`, and
 //   `PEER_PRESENCE_CHANGED`. Other canonical types (media_ready,
@@ -12,18 +11,17 @@
 //   are logged via the event log (so we never silently swallow a
 //   canonical message) but do not mutate state yet — those phases
 //   will extend this dispatcher.
-// - On failure (malformed JSON, unsupported `v`, unknown type, payload
-//   validation failure): append an "error occurred" event log entry
-//   AND send an `error` message back through the WS client when
-//   possible. No reducer state is mutated on validation failure
-//   (data-model §B.9).
+// - On failure (malformed JSON, unsupported `v`, payload validation
+//   failure): append an "error occurred" event log entry AND send an
+//   `error` message back through the WS client when possible. No
+//   reducer state is mutated on validation failure (data-model §B.9).
 
 import type { Dispatch } from "react";
 import type { RootAction } from "../state";
 import { makeEventLogEntry } from "../state/event-log";
 import {
-  envelopeBaseSchema,
-  schemasByType,
+  CONTRACT_VERSION,
+  signalingMessageSchema,
   type ErrorMessage,
   type JoinAcceptedMessage,
   type JoinRejectedMessage,
@@ -37,6 +35,17 @@ interface DispatcherDeps {
   client: Pick<SignalingClient, "send" | "close"> | null;
 }
 
+type ClientErrorCode = Extract<
+  ErrorMessage["payload"]["code"],
+  "malformed" | "unsupported_version"
+>;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" && value !== null && !Array.isArray(value)
+  );
+}
+
 export function createSignalingDispatcher(deps: DispatcherDeps) {
   return function handleInbound(raw: string): void {
     let json: unknown;
@@ -47,36 +56,22 @@ export function createSignalingDispatcher(deps: DispatcherDeps) {
       return;
     }
 
-    const envelope = envelopeBaseSchema.safeParse(json);
-    if (!envelope.success) {
-      // If envelope parse failed we cannot trust `v` or `type`. Treat as
-      // malformed. The `v != 1` case is also caught by this path because
-      // `versionSchema` rejects it.
-      const containsWrongVersion =
-        typeof (json as { v?: unknown }).v !== "undefined" &&
-        (json as { v?: unknown }).v !== 1;
-      const code = containsWrongVersion ? "unsupported_version" : "malformed";
-      logError(deps, code, envelope.error.message);
+    // Classify an `unsupported_version` before schema parsing. The
+    // discriminated union may short-circuit on an invalid `type` and
+    // never emit a `["v"]` issue, which would silently demote an
+    // unsupported-version message to `malformed`.
+    if (isPlainObject(json) && "v" in json && json.v !== CONTRACT_VERSION) {
+      logError(deps, "unsupported_version", `unsupported contract version: ${String(json.v)}`);
       return;
     }
 
-    const parsedType = envelope.data.type;
-    const schema = schemasByType[parsedType];
-    if (!schema) {
-      // The enum in envelopeBaseSchema means we should never get here,
-      // but guard anyway so an unknown type produces the right log and
-      // error response rather than a silent pass.
-      logError(deps, "malformed", `unknown message type: ${parsedType}`);
+    const parsed = signalingMessageSchema.safeParse(json);
+    if (!parsed.success) {
+      logError(deps, "malformed", parsed.error.message);
       return;
     }
 
-    const perType = schema.safeParse(json);
-    if (!perType.success) {
-      logError(deps, "malformed", perType.error.message);
-      return;
-    }
-
-    dispatchValidated(deps, perType.data as SignalingMessage);
+    dispatchValidated(deps, parsed.data);
   };
 }
 
@@ -198,11 +193,7 @@ function dispatchValidated(
 
 function logError(
   { dispatch, client }: DispatcherDeps,
-  code:
-    | "malformed"
-    | "unsupported_version"
-    | "internal_error"
-    | string,
+  code: ClientErrorCode,
   message: string,
 ): void {
   dispatch({
@@ -218,31 +209,21 @@ function logError(
   });
   if (client) {
     try {
-      // Build a minimal v1 error envelope. We omit roomId because we may
-      // not know it (e.g., unsupported_version or malformed envelope).
+      // Minimal v1 error envelope. `roomId` is omitted because an
+      // unsupported-version or malformed envelope may not carry one we
+      // can trust.
       client.send({
-        v: 1,
+        v: CONTRACT_VERSION,
         type: "error",
         payload: {
-          code: normalizeErrorCode(code),
+          code,
           message: truncate(message, 200),
         },
-      } as ErrorMessage);
+      });
     } catch {
-      // If the send itself fails (transport down, schema rejects),
-      // swallow — the event-log entry already records the cause.
+      // Send itself failed (transport down, schema rejects) — the
+      // event-log entry above already records the cause.
     }
-  }
-}
-
-function normalizeErrorCode(code: string): ErrorMessage["payload"]["code"] {
-  switch (code) {
-    case "unsupported_version":
-      return "unsupported_version";
-    case "malformed":
-      return "malformed";
-    default:
-      return "malformed";
   }
 }
 

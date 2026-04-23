@@ -13,6 +13,7 @@ export {
 
 export type {
   MessageType,
+  PresenceStatus,
   SignalingMessage,
   JoinRoomMessage,
   JoinAcceptedMessage,

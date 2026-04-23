@@ -18,7 +18,7 @@
 //   `leave_room` (best-effort) and resets the reducer to idle.
 
 import { useState, type FormEvent } from "react";
-import { ROOM_ID_REGEX } from "../types/contract";
+import { CONTRACT_VERSION, ROOM_ID_REGEX } from "../types/contract";
 import { useDispatch, useRootState } from "../state";
 import { useSignalingClient } from "../signaling/provider";
 import { makeEventLogEntry } from "../state/event-log";
@@ -32,19 +32,6 @@ function resolveSignalingUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const host = window.location.hostname || "localhost";
   return `${proto}//${host}:8080/ws`;
-}
-
-function makeRequestId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  // Fallback for test environments without crypto.randomUUID (vitest
-  // jsdom provides it, but CI may not).
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
 }
 
 export function JoinForm() {
@@ -96,10 +83,10 @@ export function JoinForm() {
       return;
     }
 
-    const requestId = makeRequestId();
+    const requestId = crypto.randomUUID();
     try {
       client.send({
-        v: 1,
+        v: CONTRACT_VERSION,
         type: "join_room",
         roomId: trimmed,
         requestId,
@@ -133,7 +120,7 @@ export function JoinForm() {
     if (session.roomId) {
       try {
         client.send({
-          v: 1,
+          v: CONTRACT_VERSION,
           type: "leave_room",
           roomId: session.roomId,
           payload: {},
