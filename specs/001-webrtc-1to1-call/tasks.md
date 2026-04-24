@@ -1051,13 +1051,13 @@ sends `offer`; answerer sets remote description, creates answer, sends
 relay is deferred to Phase 8** (browser gathers locally; we do not
 yet wire `onicecandidate`).
 
-- [ ] T050 Implement `peer-connection.ts` wrapper (create PC with `iceServers`, attach tracks, expose events) — `frontend/src/webrtc/peer-connection.ts`
-- [ ] T051 Wire `ready_for_offer` → PC creation + offerer/answerer branching — `frontend/src/webrtc/peer-connection.ts`, `frontend/src/state/peer-connection.ts`
-- [ ] T052 Offerer path: `createDataChannel("chat")` before `createOffer`; `setLocalDescription`; send `offer` — `frontend/src/webrtc/peer-connection.ts`
-- [ ] T053 Answerer path: `setRemoteDescription(offer)`; `createAnswer`; `setLocalDescription`; send `answer` — `frontend/src/webrtc/peer-connection.ts`
-- [ ] T054 Offerer receives `answer`; `setRemoteDescription(answer)` — `frontend/src/webrtc/peer-connection.ts`
-- [ ] T055 [P] Log every `signalingstatechange` + offer/answer event into the event log — `frontend/src/state/peer-connection.ts`, `frontend/src/state/event-log.ts`
-- [ ] T056 [P] Protocol-flow test `TestOnlyOffererSendsOffer` (R-3 glare guard) — `signaling/tests/protocol_flow_test.go`
+- [X] T050 Implement `peer-connection.ts` wrapper (create PC with `iceServers`, attach tracks, expose events) — `frontend/src/webrtc/peer-connection.ts`
+- [X] T051 Wire `ready_for_offer` → PC creation + offerer/answerer branching — `frontend/src/webrtc/peer-connection.ts`, `frontend/src/state/peer-connection.ts`
+- [X] T052 Offerer path: `createDataChannel("chat")` before `createOffer`; `setLocalDescription`; send `offer` — `frontend/src/webrtc/peer-connection.ts`
+- [X] T053 Answerer path: `setRemoteDescription(offer)`; `createAnswer`; `setLocalDescription`; send `answer` — `frontend/src/webrtc/peer-connection.ts`
+- [X] T054 Offerer receives `answer`; `setRemoteDescription(answer)` — `frontend/src/webrtc/peer-connection.ts`
+- [X] T055 [P] Log every `signalingstatechange` + offer/answer event into the event log — `frontend/src/state/peer-connection.ts`, `frontend/src/state/event-log.ts`
+- [X] T056 [P] Protocol-flow test `TestOnlyOffererSendsOffer` (R-3 glare guard) — `signaling/tests/protocol_flow_test.go`
 
 ### T050
 - **Phase**: 7 — Offer/answer negotiation

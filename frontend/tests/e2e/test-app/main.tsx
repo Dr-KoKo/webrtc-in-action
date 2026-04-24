@@ -35,6 +35,7 @@ import { AppShell } from "../../../src/components/AppShell";
 import { StoreProvider } from "../../../src/state";
 import { SignalingProvider } from "../../../src/signaling/provider";
 import { LocalMediaProvider } from "../../../src/webrtc/local-media-provider";
+import { PeerConnectionProvider } from "../../../src/webrtc/peer-connection-provider";
 import type { AcquireLocalMediaOptions } from "../../../src/webrtc/media-acquisition";
 
 type MediaMode = "real" | "failOnce";
@@ -81,7 +82,9 @@ createRoot(rootElement).render(
       <LocalMediaProvider
         {...(acquireOptions ? { acquireOptions } : {})}
       >
-        <AppShell />
+        <PeerConnectionProvider>
+          <AppShell />
+        </PeerConnectionProvider>
       </LocalMediaProvider>
     </SignalingProvider>
   </StoreProvider>,

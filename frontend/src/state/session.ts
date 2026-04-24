@@ -97,6 +97,7 @@ export type SessionAction =
       type: "PARTICIPANT_RELEASED";
       message: ParticipantReleasedMessage;
     }
+  | { type: "READY_FOR_OFFER" }
   | { type: "RETRY_REQUESTED" }
   | { type: "LEAVE_REQUESTED" }
   | { type: "TRANSPORT_CHANGED"; transport: SignalingTransportState };
@@ -203,6 +204,20 @@ export function sessionReducer(
         throw new IllegalSessionTransitionError(state.session, action.type);
       }
       return { ...state, session: "waiting-for-peer" };
+
+    case "READY_FOR_OFFER":
+      // Server sent `ready_for_offer` — we're paired, role assigned.
+      // Transition is waiting-for-peer → connecting (data-model §B.1).
+      // The PeerConnectionProvider pre-filters on session state before
+      // dispatching this action; if somehow dispatched from a
+      // non-legal state (late duplicate, server bug, race), silently
+      // no-op rather than throw. The provider logs the duplicate as
+      // `unexpected_ready_for_offer` at the event-log layer per
+      // contract §3.7.
+      if (state.session !== "waiting-for-peer") {
+        return state;
+      }
+      return { ...state, session: "connecting" };
 
     case "PARTICIPANT_RELEASED": {
       // Server released our slot. Phase 6 only wires the media_failed

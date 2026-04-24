@@ -974,6 +974,65 @@ func TestNoGlare_OnlyOffererSendsOffer(t *testing.T) {
 	a.expectNone(200 * time.Millisecond)
 }
 
+// TestOnlyOffererSendsOffer — T056 / Phase 7 glare guard.
+//
+// Consolidates the two sides of "only the offerer may send an offer
+// per pairing attempt" into a single named test:
+//
+//  1. The answerer (higher admissionOrder) attempting to send `offer`
+//     MUST be rejected with `error{code:"unexpected_offer"}` and MUST
+//     NOT be relayed to the offerer.
+//  2. The offerer may send exactly one offer per pairing attempt; a
+//     second offer from the same offerer in the same pairing MUST be
+//     rejected with the same error code.
+//
+// Companion tests `TestOfferFromAnswererRejected`,
+// `TestDuplicateOfferRejected`, and `TestNoGlare_OnlyOffererSendsOffer`
+// cover each rejection in isolation + the racing-concurrent case; this
+// test exists to satisfy T056's exact-named requirement and exercise
+// both assertions against a single pairing.
+func TestOnlyOffererSendsOffer(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts) // admissionOrder=1 → offerer
+	b := dialClient(t, ts) // admissionOrder=2 → answerer
+	_, _ = joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	// (1) Answerer attempts to send `offer` — must be rejected with
+	// unexpected_offer. The "A does not receive the forbidden offer"
+	// half of this assertion is covered by the terminal expectNone on
+	// A at the end of the test; we cannot expectNone on A here
+	// because further sends on A would follow, and expectNone leaves
+	// a Read goroutine parked that would race those sends.
+	b.send(offerMsg("demo", "v=0\r\no=- 10 10 IN IP4 127.0.0.1\r\n"))
+	_, rawErrB := b.expect(sig.TypeError)
+	peB := parsePayload[sig.ErrorPayload](t, rawErrB)
+	if peB.Code != sig.CodeUnexpectedOffer {
+		t.Fatalf("answerer offer: code=%q want unexpected_offer", peB.Code)
+	}
+
+	// (2) Offerer sends a valid first offer — relayed to B.
+	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
+	_, _ = b.expect(sig.TypeOffer)
+
+	// (3) Offerer sends a second offer in the same pairing — server
+	// must reject the duplicate with unexpected_offer.
+	a.send(offerMsg("demo", "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\n"))
+	_, rawErrA := a.expect(sig.TypeError)
+	peA := parsePayload[sig.ErrorPayload](t, rawErrA)
+	if peA.Code != sig.CodeUnexpectedOffer {
+		t.Fatalf("duplicate offer: code=%q want unexpected_offer", peA.Code)
+	}
+
+	// Terminal per-client assertions:
+	// - A must not have received B's forbidden offer (step 1) nor an
+	//   echo of A's own accepted offer (step 2) nor any relay of A's
+	//   duplicate (step 3).
+	// - B must not have received a second `offer` relay (step 3).
+	a.expectNone(200 * time.Millisecond)
+	b.expectNone(200 * time.Millisecond)
+}
+
 // TestInCallLeaveEmitsPeerLeft verifies the in-call classification
 // branch of §C.6 step 5: a departing peer that reached callPhase ∈
 // {role-assigned, negotiating, connected} MUST produce peer_left to

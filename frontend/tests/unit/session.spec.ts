@@ -232,6 +232,43 @@ describe("sessionReducer", () => {
     expect(next).toStrictEqual(pending);
   });
 
+  it("READY_FOR_OFFER transitions waiting-for-peer → connecting (Phase 7)", () => {
+    const waiting = run(initialSessionSlice, [
+      { type: "JOIN_REQUESTED", roomId: ROOM },
+      { type: "JOIN_ACCEPTED", message: joinAccepted(1) },
+      { type: "MEDIA_READY_SENT" },
+    ]);
+    expect(waiting.session).toBe("waiting-for-peer");
+    const next = sessionReducer(waiting, { type: "READY_FOR_OFFER" });
+    expect(next.session).toBe("connecting");
+  });
+
+  it("READY_FOR_OFFER from any state other than waiting-for-peer is a no-op", () => {
+    // Contract §3.7: late duplicates must be ignored (logged as
+    // `unexpected_ready_for_offer` at the provider layer). The
+    // reducer no-ops so a stray action cannot drop state.
+    const cases: Array<{ from: string; state: SessionSlice }> = [
+      { from: "idle", state: initialSessionSlice },
+      {
+        from: "joining",
+        state: run(initialSessionSlice, [
+          { type: "JOIN_REQUESTED", roomId: ROOM },
+        ]),
+      },
+      {
+        from: "pending-media",
+        state: run(initialSessionSlice, [
+          { type: "JOIN_REQUESTED", roomId: ROOM },
+          { type: "JOIN_ACCEPTED", message: joinAccepted(1) },
+        ]),
+      },
+    ];
+    for (const c of cases) {
+      const next = sessionReducer(c.state, { type: "READY_FOR_OFFER" });
+      expect(next, `from=${c.from}`).toBe(c.state);
+    }
+  });
+
   it("TRANSPORT_CHANGED updates the transport slice independently", () => {
     const next = sessionReducer(initialSessionSlice, {
       type: "TRANSPORT_CHANGED",

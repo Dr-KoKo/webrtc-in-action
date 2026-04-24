@@ -154,14 +154,23 @@ function dispatchValidated(
       });
       return;
     }
+    // Phase 7 — negotiation messages are handled by a dedicated
+    // listener registered by `PeerConnectionProvider` (which parses
+    // the same frame through the shared Zod schema and emits richer
+    // event-log entries: `ready_for_offer_received`, `offer_received`,
+    // `answer_received`, etc.). The dispatcher returns without logging
+    // so each inbound negotiation message produces exactly one
+    // event-log entry from the PC provider rather than a duplicate
+    // placeholder row here.
+    case "ready_for_offer":
+    case "offer":
+    case "answer":
+      return;
     // Canonical messages handled in later phases. We log them so we
     // never "silently swallow" a known type; state mutation belongs to
     // future phases.
     case "media_ready":
     case "media_failed":
-    case "ready_for_offer":
-    case "offer":
-    case "answer":
     case "ice_candidate":
     case "media_state":
     case "peer_left":

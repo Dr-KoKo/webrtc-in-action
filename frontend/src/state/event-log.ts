@@ -22,14 +22,25 @@ export type EventLogEntryType =
   | "media_acquire_started"
   | "media_ready_sent"
   | "media_failed_sent"
+  // Phase 7 — negotiation lifecycle (one entry per observable step,
+  // no raw SDP). `offer_*` / `answer_*` pairs split created / sent /
+  // received so the event log narrates each side of the handshake.
+  | "ready_for_offer_received"
+  | "peer_connection_created"
+  | "data_channel_created"
+  | "offer_created"
+  | "offer_sent"
+  | "offer_received"
+  | "answer_created"
+  | "answer_sent"
+  | "answer_received"
+  | "signaling_state_changed"
+  | "peer_connection_state_changed"
   // future-phase canonical inbound message pass-throughs — the
   // dispatcher's fallback branch emits msg.type verbatim while the
   // phase-specific handler is still pending.
   | "media_ready"
   | "media_failed"
-  | "ready_for_offer"
-  | "offer"
-  | "answer"
   | "ice_candidate"
   | "media_state"
   | "peer_left"

@@ -1,8 +1,8 @@
-// Root reducer + React context. Phase 5 scope only.
+// Root reducer + React context.
 //
-// `RootState` is a thin composition of the two Phase 5 slices
-// (`session` + `eventLog`). Future phases (media, peer-connection, chat)
-// will add new slices here.
+// `RootState` composes the shipped slices: `session` (Phase 5/6),
+// `eventLog` (Phase 5), and `peerConnection` (Phase 7 — mirrors the
+// four `RTCPeerConnection` getters from data-model §B.4).
 
 import {
   createContext,
@@ -19,6 +19,12 @@ import {
   type EventLogSlice,
 } from "./event-log";
 import {
+  initialPeerConnectionSlice,
+  peerConnectionReducer,
+  type PeerConnectionAction,
+  type PeerConnectionSlice,
+} from "./peer-connection";
+import {
   initialSessionSlice,
   sessionReducer,
   type SessionAction,
@@ -28,17 +34,29 @@ import {
 export interface RootState {
   session: SessionSlice;
   eventLog: EventLogSlice;
+  peerConnection: PeerConnectionSlice;
 }
 
-export type RootAction = SessionAction | EventLogAction;
+export type RootAction = SessionAction | EventLogAction | PeerConnectionAction;
 
 export const initialRootState: RootState = {
   session: initialSessionSlice,
   eventLog: initialEventLogSlice,
+  peerConnection: initialPeerConnectionSlice,
 };
 
 function isEventLogAction(action: RootAction): action is EventLogAction {
   return action.type === "EVENT_LOG_APPEND";
+}
+
+function isPeerConnectionAction(
+  action: RootAction,
+): action is PeerConnectionAction {
+  return (
+    action.type === "PEER_CONNECTION_CREATED" ||
+    action.type === "PEER_CONNECTION_STATE_CHANGED" ||
+    action.type === "PEER_CONNECTION_CLOSED"
+  );
 }
 
 export function rootReducer(state: RootState, action: RootAction): RootState {
@@ -46,6 +64,12 @@ export function rootReducer(state: RootState, action: RootAction): RootState {
     return {
       ...state,
       eventLog: eventLogReducer(state.eventLog, action),
+    };
+  }
+  if (isPeerConnectionAction(action)) {
+    return {
+      ...state,
+      peerConnection: peerConnectionReducer(state.peerConnection, action),
     };
   }
   return {
