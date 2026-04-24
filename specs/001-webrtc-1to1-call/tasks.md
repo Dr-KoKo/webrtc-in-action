@@ -1753,13 +1753,13 @@ no cleanup path touches state it shouldn't.
 **Goal**: one-command local bring-up with correct env wiring, minimal
 production-default safety, and documented optional `coturn`.
 
-- [ ] T088 Write production `frontend/Dockerfile` (multi-stage: Node build → Nginx or Vite preview) — `frontend/Dockerfile`
-- [ ] T089 [P] Write `signaling/Dockerfile` (multi-stage: Go builder → scratch/distroless) — `signaling/Dockerfile`
-- [ ] T090 Finalize `docker-compose.yml` (env wiring for `VITE_STUN_URLS` / `VITE_TURN_*` / `LOG_FORMAT` / ports; depends-on; healthcheck for signaling) — `docker-compose.yml`
-- [ ] T091 [P] Finalize `.env.example` with every consumed var; no secrets — `.env.example`
-- [ ] T092 Create `infra/coturn/turnserver.conf.example` (disabled by default) — `infra/coturn/turnserver.conf.example`
-- [ ] T093 Add commented `coturn` service block to `docker-compose.yml` with enabling instructions — `docker-compose.yml`
-- [ ] T094 Write / update `README.md` local run instructions (quickstart link, `docker compose up --build`, `.env` override guidance) — `README.md`
+- [X] T088 Write production `frontend/Dockerfile` (multi-stage: Node build → Vite preview on node:22-alpine) — `frontend/Dockerfile`
+- [X] T089 [P] Write `signaling/Dockerfile` (multi-stage: Go builder → distroless/static-debian12:nonroot + `cmd/healthprobe` shell-free healthcheck binary) — `signaling/Dockerfile`
+- [X] T090 Finalize `docker-compose.yml` (env wiring for `VITE_STUN_URLS` / `VITE_TURN_*` / `LOG_FORMAT` / `LOG_LEVEL` / `PING_INTERVAL_MS` / `PONG_TIMEOUT_MS` / `SIGNALING_PORT` / `VITE_SIGNALING_URL` / ports; `depends_on: condition: service_healthy`; `/healthprobe` healthcheck). Also added separate `docker-compose.dev.yml` for Dockerfile.dev + Vite dev (Playwright) — `docker-compose.yml`, `docker-compose.dev.yml`
+- [X] T091 [P] Finalize `.env.example` (prod persona) and `.env.dev.example` (dev persona); every consumed var audited via `rg -n "import\.meta\.env\.|os\.Getenv\("`; no secrets committed — `.env.example`, `.env.dev.example`
+- [X] T092 Create `infra/coturn/turnserver.conf.example` (disabled by default; creds come via `--user` CLI flag, not in-file) — `infra/coturn/turnserver.conf.example`
+- [X] T093 Add commented `coturn` service block to `docker-compose.yml` with 3-step enabling recipe — `docker-compose.yml`
+- [X] T094 Write `README.md` (6 sections: what this is / quick start / enable TURN / run tests / directory layout / full docs) — `README.md`
 
 ### T088
 - **Phase**: 13 — Infrastructure and local development
