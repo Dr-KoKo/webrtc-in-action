@@ -1517,11 +1517,11 @@ handle both the in-app Stop button and the browser-native stop. On
 stop, revert to camera track (if camera was on) or to a
 camera-off indicator.
 
-- [ ] T075 Implement `screen-share.ts` (`getDisplayMedia`, `replaceTrack`, stop, `onended` subscriber) — `frontend/src/webrtc/screen-share.ts`
-- [ ] T076 [P] Implement `ScreenShareButton.tsx` (start / stop, disabled when `SessionState !== "connected"` or no outgoing video sender) — `frontend/src/components/ScreenShareButton.tsx`
-- [ ] T077 On stop (either source): `replaceTrack(cameraTrack)` OR remove track if camera is off; emit `media_state(screenShare=inactive)` — `frontend/src/webrtc/screen-share.ts`
-- [ ] T078 [P] Log `screen share started` / `screen share stopped` / `track replaced` with source tag (`app` | `browser`) — `frontend/src/state/event-log.ts`
-- [ ] T079 [P] Handle picker cancellation (log `screen share cancelled`, no state change) — `frontend/src/webrtc/screen-share.ts`
+- [X] T075 Implement `screen-share.ts` (`getDisplayMedia`, `replaceTrack`, stop, `onended` subscriber) — `frontend/src/webrtc/screen-share.ts`
+- [X] T076 [P] Implement `ScreenShareButton.tsx` (start / stop, disabled when `SessionState !== "connected"` or no outgoing video sender) — `frontend/src/components/ScreenShareButton.tsx`
+- [X] T077 On stop (either source): `replaceTrack(cameraTrack)` OR remove track if camera is off; emit `media_state(screenShare=inactive)` — `frontend/src/webrtc/screen-share.ts`
+- [X] T078 [P] Log `screen share started` / `screen share stopped` / `track replaced` with source tag (`app` | `browser`) — `frontend/src/state/event-log.ts`
+- [X] T079 [P] Handle picker cancellation (log `screen share cancelled`, no state change) — `frontend/src/webrtc/screen-share.ts`
 
 ### T075
 - **Phase**: 11 — Screen sharing

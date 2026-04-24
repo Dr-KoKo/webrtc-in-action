@@ -49,6 +49,14 @@ export type EventLogEntryType =
   | "chat_message_received"
   | "data_channel_state_changed"
   | "data_channel_error"
+  // Phase 11 — screen-share lifecycle (T078). Summaries carry only
+  // enum-like tags (source: "app" | "browser", from/to track kind);
+  // never raw displaySurface labels, window titles, URLs, or track
+  // ids (NFR-006 / Principle VIII).
+  | "screen_share_started"
+  | "screen_share_stopped"
+  | "screen_share_cancelled"
+  | "track_replaced"
   // future-phase canonical inbound message pass-throughs — the
   // dispatcher's fallback branch emits msg.type verbatim while the
   // phase-specific handler is still pending.

@@ -13,6 +13,7 @@ import { EventLogPanel } from "./EventLogPanel";
 import { LocalVideo } from "./LocalVideo";
 import { MediaControls } from "./MediaControls";
 import { RemoteVideo } from "./RemoteVideo";
+import { ScreenShareButton } from "./ScreenShareButton";
 import { StateIndicators } from "./StateIndicators";
 import { LearningInspector } from "./LearningInspector";
 import { Chat } from "./Chat";
@@ -32,6 +33,7 @@ export function AppShell() {
         <LocalVideo />
         <RemoteVideo />
         <MediaControls />
+        <ScreenShareButton />
         <StateIndicators />
         <LearningInspector />
         <Chat />
