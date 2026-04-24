@@ -1,0 +1,119 @@
+# Phase 13 production-ish local-dev compose file.
+#
+# Both services build from their production Dockerfile (multi-stage,
+# no build toolchain in the runtime image). The frontend runs
+# `vite preview` under node:22-alpine; the signaling server runs a
+# static Go binary on gcr.io/distroless/static-debian12:nonroot.
+#
+# Scope (spec Non-Goals): this is still a local-dev bring-up. There
+# is no cloud deploy, no production monitoring, no managed TURN.
+# The self-signed HTTPS cert that @vitejs/plugin-basic-ssl serves at
+# https://localhost:5173/ is DEV-ONLY — browsers will warn. See
+# quickstart.md §7 for the per-browser bypass.
+#
+# Env wiring: `.env.example` is the source of truth for every key
+# consumed by `frontend/src` and `signaling/`. Copy it to `.env` and
+# edit locally; compose auto-loads `.env` from this directory.
+#
+# Ports: FRONTEND_PORT (default 5173) and SIGNALING_PORT (default
+# 8080) are overridable via `.env` or the host environment.
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    environment:
+      # Signaling URL the browser uses for the WS upgrade. T103 makes
+      # the same-origin fallback in
+      # frontend/src/components/{JoinForm,FailurePanel}.tsx
+      # authoritative (both vite dev's server.proxy and vite preview's
+      # preview.proxy in frontend/vite.config.ts forward `/ws` to
+      # signaling:8080), so this variable is OPTIONAL. Set it only
+      # when signaling lives on a different origin from the frontend.
+      # PROD-IMAGE CAVEAT: this runtime env is a no-op against the
+      # current prod image — `vite preview` serves a pre-built bundle
+      # and frontend/Dockerfile does not declare `ARG VITE_SIGNALING_URL`
+      # in Stage 1. See .env.example for the build-arg recipe if you
+      # need to actually bake an override into the prod bundle.
+      VITE_SIGNALING_URL: ${VITE_SIGNALING_URL:-}
+    depends_on:
+      signaling:
+        # Gate Vite's boot on signaling's /healthz turning green so
+        # the first page load never lands on a WS proxy target that
+        # isn't listening yet.
+        condition: service_healthy
+
+  signaling:
+    build:
+      context: ./signaling
+      dockerfile: Dockerfile
+    ports:
+      - "${SIGNALING_PORT:-8080}:8080"
+    environment:
+      # Logging (NFR-003: never log SDP / ICE / credentials).
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Server listen port inside the container.
+      SIGNALING_PORT: "8080"
+      # WebSocket heartbeat (contract §3.16). Worst-case ungraceful-
+      # disconnect detection = PING_INTERVAL_MS + PONG_TIMEOUT_MS.
+      # Defaults 5000 + 5000 satisfy SC-009 (≤ 10 s).
+      PING_INTERVAL_MS: ${PING_INTERVAL_MS:-5000}
+      PONG_TIMEOUT_MS: ${PONG_TIMEOUT_MS:-5000}
+      # ICE server config surfaced to both peers in `ready_for_offer`
+      # so each peer sees the same list. The server never logs
+      # credentials — only config presence — per NFR-003.
+      VITE_STUN_URLS: ${VITE_STUN_URLS:-stun:stun.l.google.com:19302}
+      VITE_TURN_URL: ${VITE_TURN_URL:-}
+      VITE_TURN_USERNAME: ${VITE_TURN_USERNAME:-}
+      VITE_TURN_CREDENTIAL: ${VITE_TURN_CREDENTIAL:-}
+    healthcheck:
+      # distroless/static has no shell, no wget, no curl. The
+      # signaling image ships a tiny stdlib-only Go binary at
+      # /healthprobe that performs a single GET on /healthz. See
+      # signaling/cmd/healthprobe/main.go.
+      test: ["CMD", "/healthprobe"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+
+# -----------------------------------------------------------------
+# Optional: coturn TURN relay — DISABLED by default.
+# -----------------------------------------------------------------
+# Enabling this unlocks the "when TURN becomes necessary" learning
+# outcome (spec FR-012). The default localhost happy path works
+# without it because both browsers share the same network stack.
+#
+# To enable:
+#   1. Uncomment the coturn service block below.
+#   2. Copy `.env.example` to `.env` and fill in VITE_TURN_URL,
+#      VITE_TURN_USERNAME, VITE_TURN_CREDENTIAL, TURN_USERNAME,
+#      TURN_PASSWORD (username/password must match VITE_TURN_*).
+#   3. Run `docker compose up --build`.
+#
+# See quickstart.md §6 for the verification walkthrough (Learning
+# Inspector should report `TURN configured: yes` and, under
+# UDP-blocked conditions, `relay candidate present: yes`).
+#
+# NFR-002 / NFR-005: credentials are env-sourced; the conf file
+# (infra/coturn/turnserver.conf.example) contains no secrets.
+#
+#  coturn:
+#    image: coturn/coturn:latest
+#    # Static structural config lives in the .conf.example file.
+#    # Credentials come in via CLI flag so the conf file can stay
+#    # secret-free and be committed to the repo.
+#    command:
+#      - "-c"
+#      - "/etc/turnserver.conf"
+#      - "--user=${TURN_USERNAME}:${TURN_PASSWORD}"
+#    volumes:
+#      - ./infra/coturn/turnserver.conf.example:/etc/turnserver.conf:ro
+#    ports:
+#      - "3478:3478/udp"
+#      # - "3478:3478/tcp"   # Uncomment for TCP fallback.
+#      # - "5349:5349/tls"   # Uncomment + add certs in the conf for TLS.

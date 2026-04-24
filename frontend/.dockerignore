@@ -1,0 +1,26 @@
+# Keep the build context small. These paths are rebuilt inside the
+# image or are irrelevant at runtime. Do NOT exclude tests/ — the dev
+# image serves tests/e2e/test-app/ via Vite for Playwright.
+node_modules/
+dist/
+test-results/
+playwright-report/
+.vite/
+.turbo/
+coverage/
+*.tsbuildinfo
+*.log
+
+# Local env overrides — image must use compose-injected values.
+.env
+.env.*
+!.env.example
+
+# Editor / OS cruft.
+.DS_Store
+.vscode/
+.idea/
+
+# Docker self-reference.
+Dockerfile*
+.dockerignore
