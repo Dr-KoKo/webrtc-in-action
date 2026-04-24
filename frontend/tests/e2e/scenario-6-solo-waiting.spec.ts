@@ -8,7 +8,7 @@
 import { expect, test } from "@playwright/test";
 import {
   expectEventOfType,
-  expectSessionAdvanced,
+  expectIndicator,
   joinRoom,
   roomIdFor,
   testAppUrl,
@@ -32,7 +32,13 @@ test("solo peer joining an empty room reaches waiting-for-peer", async ({
       "media_ready_sent",
       /media_ready sent \(audio\+video ready\)/,
     );
-    await expectSessionAdvanced(page);
+    // Strict equality against `waiting-for-peer` — stronger than
+    // `expectSessionAdvanced` which would also pass for
+    // `connecting`/`connected`. Forward-compatible because a solo
+    // peer can never advance past `waiting-for-peer` under any
+    // phase: role assignment and PC creation require both peers
+    // media-ready (contract §3.7).
+    await expectIndicator(page, "session", "waiting-for-peer");
 
     await expect(page.locator(".local-video__video")).toBeVisible();
     await expect(page.locator(".local-video__placeholder")).toHaveCount(0);

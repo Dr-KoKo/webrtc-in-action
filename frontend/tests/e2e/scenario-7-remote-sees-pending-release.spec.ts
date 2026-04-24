@@ -10,7 +10,6 @@ import { test } from "@playwright/test";
 import {
   expectEventOfType,
   expectIndicator,
-  expectSessionAdvanced,
   joinRoom,
   roomIdFor,
   testAppUrl,
@@ -50,9 +49,14 @@ test("waiting peer observes a pending-media release", async ({
       /released \(media_failed\)/,
     );
 
-    // A's session state is not rolled back by the remote release;
-    // A remains in the post-pending-media set.
-    await expectSessionAdvanced(pageA);
+    // A's session remains exactly `waiting-for-peer`: the remote
+    // release clears `remoteParticipant` (session.ts:130-131) but
+    // does not mutate session state (peer_presence_changed is a
+    // slot-presence event, not a session transition). Strict
+    // equality — stronger than `expectSessionAdvanced` — and
+    // forward-compatible because A has no remote to pair with, so
+    // no phase will advance A past `waiting-for-peer` from here.
+    await expectIndicator(pageA, "session", "waiting-for-peer");
 
     // Remote indicator returns to "none" after the release.
     await expectIndicator(pageA, "remote peer presence", "none");

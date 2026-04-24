@@ -44,13 +44,19 @@ test("third peer is rejected with join_rejected_room_full", async ({
 
     await joinRoom(pageC, roomId);
 
-    await expectEventOfType(pageC, "error_occurred", /^join rejected:/);
+    // SC-003 budget: the 2 s clock starts the moment `joinRoom`
+    // returns (just after the submit click). We assert the alert
+    // FIRST so its timeout genuinely covers "click → alert visible".
+    // Putting the default-10 s `expectEventOfType` before this would
+    // burn up to 10 s of budget before the 2 s window even begins
+    // and mask an over-bound rejection.
     await expect(
       pageC
         .getByRole("alert")
         .filter({ hasText: /Room/ })
         .filter({ hasText: /reserved/ }),
     ).toBeVisible({ timeout: 2000 });
+    await expectEventOfType(pageC, "error_occurred", /^join rejected:/);
     await expectIndicator(pageC, "session", "idle");
     await expectIndicator(pageC, "room id", "—");
   } finally {
