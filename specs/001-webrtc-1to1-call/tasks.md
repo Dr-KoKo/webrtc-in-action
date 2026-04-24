@@ -946,12 +946,12 @@ sent on success, `media_failed` sent on failure, `media-error` state
 offers a Retry affordance per FR-009 / data-model §B.1. Cleans up
 local tracks on explicit Leave.
 
-- [ ] T044 Implement `media-acquisition.ts` (getUserMedia with explicit audio+video constraints, permission-denied + device-missing classification, timeout) — `frontend/src/webrtc/media-acquisition.ts`
-- [ ] T045 [P] Implement `LocalVideo.tsx` that renders `localStream` from a ref — `frontend/src/components/LocalVideo.tsx`
-- [ ] T046 Wire `media_failed` emission + `participant_released` handling into reducer (`pending-media → media-error`) — `frontend/src/state/session.ts`, `frontend/src/signaling/dispatcher.ts`
-- [ ] T047 Add `Retry` + `Leave` affordances to `media-error` state — `frontend/src/components/JoinForm.tsx`, `frontend/src/App.tsx`
-- [ ] T048 [P] Implement local track cleanup on explicit Leave (data-model §C.5 Path A for tracks only; full Path A lands in Phase 12) — `frontend/src/webrtc/media-acquisition.ts`
-- [ ] T049 [P] Unit tests for media-acquisition reason classification + reducer transitions — `frontend/tests/unit/media-acquisition.spec.ts`
+- [X] T044 Implement `media-acquisition.ts` (getUserMedia with explicit audio+video constraints, permission-denied + device-missing classification, timeout) — `frontend/src/webrtc/media-acquisition.ts`
+- [X] T045 [P] Implement `LocalVideo.tsx` that renders `localStream` from a ref — `frontend/src/components/LocalVideo.tsx`
+- [X] T046 Wire `media_failed` emission + `participant_released` handling into reducer (`pending-media → media-error`) — `frontend/src/state/session.ts`, `frontend/src/signaling/dispatcher.ts`
+- [X] T047 Add `Retry` + `Leave` affordances to `media-error` state — `frontend/src/components/JoinForm.tsx`, `frontend/src/App.tsx`
+- [X] T048 [P] Implement local track cleanup on explicit Leave (data-model §C.5 Path A for tracks only; full Path A lands in Phase 12) — `frontend/src/webrtc/media-acquisition.ts`
+- [X] T049 [P] Unit tests for media-acquisition reason classification + reducer transitions — `frontend/tests/unit/media-acquisition.spec.ts`
 
 ### T044
 - **Phase**: 6 — Local media acquisition

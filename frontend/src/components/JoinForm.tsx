@@ -1,6 +1,6 @@
-// JoinForm — room-ID entry + Join / Leave affordance.
+// JoinForm — room-ID entry + Join / Retry / Leave affordances.
 //
-// Phase 5 behavior:
+// Phase 5 + Phase 6 behavior:
 // - Client-side validates room ID against the contract regex
 //   ^[A-Za-z0-9._-]{1,64}$ and shows an inline error on mismatch;
 //   no `join_room` is sent in that case.
@@ -8,14 +8,19 @@
 //     1. dispatch JOIN_REQUESTED (session: idle → joining)
 //     2. open the WebSocket if not already open
 //     3. send a `join_room` envelope
-// - Join button disabled while session === "joining".
-// - On join_rejected, the reducer returns to idle and stores the
-//   visible error in `session.joinError`; we render it here.
-// - On join_accepted, we transition to pending-media (handled by
-//   reducer). Phase 5 has no getUserMedia, so the UI stops there
-//   per the two-phase-join rule.
-// - The Leave button is available in pending-media; it sends
-//   `leave_room` (best-effort) and resets the reducer to idle.
+// - On join_accepted, the reducer moves to pending-media; the
+//   LocalMediaProvider then runs getUserMedia and drives media_ready /
+//   media_failed. On success it dispatches MEDIA_READY_SENT (→
+//   waiting-for-peer).
+// - On server participant_released(media_failed), the reducer
+//   transitions pending-media → media-error. The Retry button
+//   dispatches RETRY_REQUESTED (media-error → joining) and re-sends
+//   join_room on the existing WS; `client.connect()` is a no-op when
+//   already open (data-model §B.1, contract §3.3).
+// - The Leave button is available in pending-media and media-error;
+//   it sends `leave_room` (best-effort), closes the WS, and resets
+//   the reducer to idle. LocalMediaProvider stops tracks when the
+//   session returns to idle (Path A local-tracks portion, §C.5).
 
 import { useState, type FormEvent } from "react";
 import { CONTRACT_VERSION, ROOM_ID_REGEX } from "../types/contract";
@@ -43,29 +48,10 @@ export function JoinForm() {
 
   const isJoining = session.session === "joining";
   const isPendingMedia = session.session === "pending-media";
+  const isMediaError = session.session === "media-error";
+  const showLeave = isPendingMedia || isMediaError;
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLocalError(null);
-    const trimmed = roomId.trim();
-    if (!ROOM_ID_REGEX.test(trimmed)) {
-      const message = "Room ID must match ^[A-Za-z0-9._-]{1,64}$.";
-      setLocalError(message);
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "error_occurred",
-          direction: "local",
-          summary: `invalid room id: ${trimmed || "(empty)"}`,
-          code: "invalid_room_id",
-          transport: "signaling",
-        }),
-      });
-      return;
-    }
-
-    dispatch({ type: "JOIN_REQUESTED", roomId: trimmed });
-
+  async function runJoinFlow(targetRoomId: string) {
     try {
       await client.connect(resolveSignalingUrl());
     } catch (err) {
@@ -88,7 +74,7 @@ export function JoinForm() {
       client.send({
         v: CONTRACT_VERSION,
         type: "join_room",
-        roomId: trimmed,
+        roomId: targetRoomId,
         requestId,
         payload: {},
       });
@@ -97,7 +83,7 @@ export function JoinForm() {
         entry: makeEventLogEntry({
           type: "join_room_sent",
           direction: "local",
-          summary: `join_room sent (roomId=${trimmed})`,
+          summary: `join_room sent (roomId=${targetRoomId})`,
           transport: "signaling",
         }),
       });
@@ -114,6 +100,47 @@ export function JoinForm() {
       });
       dispatch({ type: "LEAVE_REQUESTED" });
     }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLocalError(null);
+    const trimmed = roomId.trim();
+    if (!ROOM_ID_REGEX.test(trimmed)) {
+      const message = "Room ID must match ^[A-Za-z0-9._-]{1,64}$.";
+      setLocalError(message);
+      dispatch({
+        type: "EVENT_LOG_APPEND",
+        entry: makeEventLogEntry({
+          type: "error_occurred",
+          direction: "local",
+          summary: `invalid room id: ${trimmed || "(empty)"}`,
+          code: "invalid_room_id",
+          transport: "signaling",
+        }),
+      });
+      return;
+    }
+
+    dispatch({ type: "JOIN_REQUESTED", roomId: trimmed });
+    await runJoinFlow(trimmed);
+  }
+
+  async function handleRetry() {
+    const previousRoomId = session.roomId;
+    if (!previousRoomId) return;
+    setLocalError(null);
+    dispatch({ type: "RETRY_REQUESTED" });
+    dispatch({
+      type: "EVENT_LOG_APPEND",
+      entry: makeEventLogEntry({
+        type: "retry_requested",
+        direction: "local",
+        summary: `retry media acquisition (roomId=${previousRoomId})`,
+        transport: "signaling",
+      }),
+    });
+    await runJoinFlow(previousRoomId);
   }
 
   function handleLeave() {
@@ -143,6 +170,7 @@ export function JoinForm() {
   }
 
   const serverError = session.joinError;
+  const formDisabled = isJoining || isPendingMedia || isMediaError;
 
   return (
     <section aria-labelledby="join-form-heading" className="join-form">
@@ -156,17 +184,19 @@ export function JoinForm() {
           onChange={(e) => setRoomId(e.target.value)}
           placeholder="demo"
           autoComplete="off"
-          disabled={isJoining || isPendingMedia}
+          disabled={formDisabled}
           aria-invalid={localError !== null}
           aria-describedby={localError ? "room-id-error" : undefined}
         />
-        <button
-          type="submit"
-          disabled={isJoining || isPendingMedia}
-        >
+        <button type="submit" disabled={formDisabled}>
           {isJoining ? "Joining…" : "Join"}
         </button>
-        {isPendingMedia && (
+        {isMediaError && (
+          <button type="button" onClick={handleRetry}>
+            Retry
+          </button>
+        )}
+        {showLeave && (
           <button type="button" onClick={handleLeave}>
             Leave
           </button>
@@ -180,6 +210,12 @@ export function JoinForm() {
       {serverError && !localError && (
         <p role="alert" className="join-form__error">
           {serverError.message}
+        </p>
+      )}
+      {isMediaError && (
+        <p role="alert" className="join-form__error">
+          Camera or microphone unavailable. Use Retry to try again,
+          or Leave to return to idle.
         </p>
       )}
     </section>

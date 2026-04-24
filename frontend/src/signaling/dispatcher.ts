@@ -25,6 +25,7 @@ import {
   type ErrorMessage,
   type JoinAcceptedMessage,
   type JoinRejectedMessage,
+  type ParticipantReleasedMessage,
   type PeerPresenceChangedMessage,
   type SignalingMessage,
 } from "./schema";
@@ -133,6 +134,26 @@ function dispatchValidated(
       });
       return;
     }
+    case "participant_released": {
+      const released = msg as ParticipantReleasedMessage;
+      // Phase 6: only the media_failed branch drives a reducer
+      // transition (pending-media → media-error). The disconnect
+      // branch is logged here; the remaining-peer cleanup lands in a
+      // later phase (data-model §B.1 Failure-path rules).
+      dispatch({ type: "PARTICIPANT_RELEASED", message: released });
+      dispatch({
+        type: "EVENT_LOG_APPEND",
+        entry: makeEventLogEntry({
+          type: "participant_released",
+          direction: "system",
+          summary: `slot released (${released.payload.reason})`,
+          reason: released.payload.reason,
+          code: released.payload.result,
+          transport: "signaling",
+        }),
+      });
+      return;
+    }
     // Canonical messages handled in later phases. We log them so we
     // never "silently swallow" a known type; state mutation belongs to
     // future phases.
@@ -144,7 +165,6 @@ function dispatchValidated(
     case "ice_candidate":
     case "media_state":
     case "peer_left":
-    case "participant_released":
     case "leave_room":
       dispatch({
         type: "EVENT_LOG_APPEND",

@@ -18,6 +18,10 @@ export type EventLogEntryType =
   | "transport_changed"
   | "join_room_sent"
   | "leave_requested"
+  | "retry_requested"
+  | "media_acquire_started"
+  | "media_ready_sent"
+  | "media_failed_sent"
   // future-phase canonical inbound message pass-throughs — the
   // dispatcher's fallback branch emits msg.type verbatim while the
   // phase-specific handler is still pending.

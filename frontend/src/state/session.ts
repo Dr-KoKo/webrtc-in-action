@@ -1,30 +1,45 @@
-// Session reducer skeleton — Phase 5 scope only.
+// Session reducer — Phase 5 + Phase 6 scope.
 //
-// Implements the top-level `SessionState` FSM from data-model §B.1 for the
-// transitions reachable in Phase 5:
-//   idle          -> joining       (user submits a valid room ID)
-//   joining       -> pending-media (join_accepted; two-phase join rule:
-//                                   we do NOT jump to waiting-for-peer;
-//                                   that transition only happens in
-//                                   Phase 6 after media_ready.)
-//   joining       -> idle          (join_rejected; visible error is
-//                                   surfaced by the UI)
-//   pending-media -> idle          (explicit Leave; no local media to
-//                                   clean up in Phase 5)
+// Implements the top-level `SessionState` FSM from data-model §B.1 for
+// the transitions reachable in Phases 5 and 6:
+//   idle          -> joining          (user submits a valid room ID)
+//   joining       -> pending-media    (join_accepted; two-phase join
+//                                      rule: admission first, media
+//                                      second. We do NOT jump to
+//                                      waiting-for-peer here.)
+//   joining       -> idle             (join_rejected; visible error is
+//                                      surfaced by the UI)
+//   pending-media -> waiting-for-peer (local media_ready sent — the
+//                                      client is now media-ready.
+//                                      Pairing for offer still waits
+//                                      for ready_for_offer from the
+//                                      server in Phase 7.)
+//   pending-media -> media-error      (server participant_released with
+//                                      reason=media_failed — our slot
+//                                      was released because we sent
+//                                      media_failed or timed out.)
+//   media-error   -> joining          (user clicks Retry; re-enters the
+//                                      join flow on the existing WS)
+//   *             -> idle             (explicit Leave — from idle,
+//                                      joining, pending-media, and
+//                                      media-error. Local track
+//                                      cleanup is driven by the
+//                                      LocalMediaProvider in response
+//                                      to the LEAVE_REQUESTED action.)
 //
 // `peer_presence_changed` updates `remoteParticipant` regardless of
 // `SessionState`. `SignalingTransportState` lives in its own slice
 // (data-model §B.1.1) and is updated by reducer actions from the
 // WebSocket client.
 //
-// Future phases fill in pending-media -> waiting-for-peer, media-error,
-// connecting, connected, failed, leaving; the enum below includes them
-// as placeholders so future phases can extend this reducer without
-// changing the type surface.
+// Future phases fill in connecting, connected, failed, leaving; the
+// enum below includes them as placeholders so future phases can extend
+// this reducer without changing the type surface.
 
 import type {
   JoinAcceptedMessage,
   JoinRejectedMessage,
+  ParticipantReleasedMessage,
   PeerPresenceChangedMessage,
   PresenceStatus,
 } from "../types/contract";
@@ -77,6 +92,12 @@ export type SessionAction =
   | { type: "JOIN_ACCEPTED"; message: JoinAcceptedMessage }
   | { type: "JOIN_REJECTED"; message: JoinRejectedMessage }
   | { type: "PEER_PRESENCE_CHANGED"; message: PeerPresenceChangedMessage }
+  | { type: "MEDIA_READY_SENT" }
+  | {
+      type: "PARTICIPANT_RELEASED";
+      message: ParticipantReleasedMessage;
+    }
+  | { type: "RETRY_REQUESTED" }
   | { type: "LEAVE_REQUESTED" }
   | { type: "TRANSPORT_CHANGED"; transport: SignalingTransportState };
 
@@ -173,21 +194,65 @@ export function sessionReducer(
         },
       };
 
+    case "MEDIA_READY_SENT":
+      // Local `media_ready` envelope has been handed to the WS. This
+      // is the two-phase-join completion on the client side; the
+      // session moves to `waiting-for-peer` even though pairing for
+      // `ready_for_offer` is still the server's decision (Phase 7).
+      if (state.session !== "pending-media") {
+        throw new IllegalSessionTransitionError(state.session, action.type);
+      }
+      return { ...state, session: "waiting-for-peer" };
+
+    case "PARTICIPANT_RELEASED": {
+      // Server released our slot. Phase 6 only wires the media_failed
+      // branch: `pending-media` → `media-error`. The `disconnect`
+      // branch is logged by the dispatcher but does not drive a
+      // client-side transition here — the client typically observes
+      // the WS close directly for that case (see data-model §B.1).
+      if (action.message.payload.reason !== "media_failed") {
+        return state;
+      }
+      if (state.session !== "pending-media") {
+        throw new IllegalSessionTransitionError(state.session, action.type);
+      }
+      return { ...state, session: "media-error" };
+    }
+
+    case "RETRY_REQUESTED":
+      // User clicked Retry in `media-error`. Return to `joining` so the
+      // JoinForm can re-send `join_room` on the existing WS (data-model
+      // §B.1 "Retry re-enters joining"; contract §3.3 "same WS MAY
+      // send a new join_room afterward"). roomId is preserved; the
+      // peer-identity fields are cleared because re-admission will
+      // issue a fresh peerId.
+      if (state.session !== "media-error") {
+        throw new IllegalSessionTransitionError(state.session, action.type);
+      }
+      return {
+        ...state,
+        session: "joining",
+        selfPeerId: null,
+        admissionOrder: null,
+        remoteParticipant: null,
+        joinError: null,
+      };
+
     case "LEAVE_REQUESTED":
-      // "User abandons current attempt back to idle." Phase 5 reaches
-      // this from three places:
-      //   - JoinForm's Leave button from pending-media.
-      //   - Idle already (no-op).
-      //   - JoinForm's connect/send error path from joining (local
-      //     transport failure; the reducer still thinks we're joining
-      //     because no server message ever arrived).
-      // Any later state (waiting-for-peer / connecting / connected /
-      // etc.) belongs to future phases and will need its own cleanup
-      // path, so we still throw for those.
+      // "User abandons current attempt back to idle." Accepted from:
+      //   - idle (no-op).
+      //   - joining (JoinForm's WS connect/send error path — the
+      //     reducer is still "joining" because no server message
+      //     arrived).
+      //   - pending-media (Leave button while awaiting media).
+      //   - media-error (Leave button alongside Retry).
+      // Later states (waiting-for-peer / connecting / connected /
+      // etc.) belong to Phase 7+ and still throw.
       if (
         state.session !== "idle" &&
         state.session !== "joining" &&
-        state.session !== "pending-media"
+        state.session !== "pending-media" &&
+        state.session !== "media-error"
       ) {
         throw new IllegalSessionTransitionError(state.session, action.type);
       }
