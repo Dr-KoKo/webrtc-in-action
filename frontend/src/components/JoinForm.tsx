@@ -29,15 +29,18 @@ import { useSignalingClient } from "../signaling/provider";
 import { useCleanup } from "../webrtc/cleanup";
 import { makeEventLogEntry } from "../state/event-log";
 
-// Best-effort signaling URL. For docker-compose dev the signaling
-// server is exposed on the same host as the frontend at port 8080.
-// Override via VITE_SIGNALING_URL if needed.
+// Best-effort signaling URL. Defaults to the same origin as the page
+// so the frontend's `/ws` proxy (vite dev's server.proxy + vite
+// preview's preview.proxy in vite.config.ts) can forward the upgrade
+// request to signaling:8080 without the browser having to know the
+// signaling port or speak wss:// to a plain-HTTP listener. Override
+// via VITE_SIGNALING_URL only when signaling is on a different origin
+// (e.g., a cloud deploy that terminates TLS in front of signaling).
 function resolveSignalingUrl(): string {
   const override = import.meta.env.VITE_SIGNALING_URL as string | undefined;
   if (override && override.length > 0) return override;
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const host = window.location.hostname || "localhost";
-  return `${proto}//${host}:8080/ws`;
+  return `${proto}//${window.location.host}/ws`;
 }
 
 export function JoinForm() {

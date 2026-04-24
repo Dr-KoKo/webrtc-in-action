@@ -26,12 +26,14 @@ import { useSignalingClient } from "../signaling/provider";
 import { useCleanup } from "../webrtc/cleanup";
 import { makeEventLogEntry } from "../state/event-log";
 
+// Same-origin signaling URL — mirrors JoinForm.resolveSignalingUrl so
+// rejoin-after-failure uses identical transport setup to the initial
+// connect. See JoinForm.tsx for the override semantics.
 function resolveSignalingUrl(): string {
   const override = import.meta.env.VITE_SIGNALING_URL as string | undefined;
   if (override && override.length > 0) return override;
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const host = window.location.hostname || "localhost";
-  return `${proto}//${host}:8080/ws`;
+  return `${proto}//${window.location.host}/ws`;
 }
 
 export function FailurePanel() {

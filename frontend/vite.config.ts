@@ -24,6 +24,24 @@ export default defineConfig({
       },
     },
   },
+  // `vite preview` (the prod image's runtime) is a separate server
+  // from `vite dev` and does NOT honor `server.proxy`. Without its
+  // own proxy block, `/ws` on the production image would 404 and the
+  // same-origin fallback in JoinForm/FailurePanel would fail. Mirror
+  // server.proxy here so prod and dev transports look identical from
+  // the browser's perspective.
+  preview: {
+    host: "0.0.0.0",
+    port: 5173,
+    strictPort: true,
+    proxy: {
+      "/ws": {
+        target: "http://signaling:8080",
+        ws: true,
+        changeOrigin: true,
+      },
+    },
+  },
   test: {
     globals: true,
     environment: "jsdom",

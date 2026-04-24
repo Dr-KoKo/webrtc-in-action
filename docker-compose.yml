@@ -26,12 +26,19 @@ services:
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
     environment:
-      # Signaling URL the browser uses for the WS upgrade. Vite
-      # proxies `/ws` to the signaling container (see
-      # frontend/vite.config.ts), so the default "same origin" URL
-      # works end-to-end. Override only when reaching the stack from
-      # a LAN host (the LAN IP must appear in the browser's URL bar).
-      VITE_SIGNALING_URL: ${VITE_SIGNALING_URL:-wss://localhost:5173/ws}
+      # Signaling URL the browser uses for the WS upgrade. T103 makes
+      # the same-origin fallback in
+      # frontend/src/components/{JoinForm,FailurePanel}.tsx
+      # authoritative (both vite dev's server.proxy and vite preview's
+      # preview.proxy in frontend/vite.config.ts forward `/ws` to
+      # signaling:8080), so this variable is OPTIONAL. Set it only
+      # when signaling lives on a different origin from the frontend.
+      # PROD-IMAGE CAVEAT: this runtime env is a no-op against the
+      # current prod image — `vite preview` serves a pre-built bundle
+      # and frontend/Dockerfile does not declare `ARG VITE_SIGNALING_URL`
+      # in Stage 1. See .env.example for the build-arg recipe if you
+      # need to actually bake an override into the prod bundle.
+      VITE_SIGNALING_URL: ${VITE_SIGNALING_URL:-}
     depends_on:
       signaling:
         # Gate Vite's boot on signaling's /healthz turning green so

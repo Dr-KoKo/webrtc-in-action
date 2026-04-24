@@ -29,7 +29,11 @@ services:
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
     environment:
-      VITE_SIGNALING_URL: ${VITE_SIGNALING_URL:-wss://localhost:5173/ws}
+      # Default empty — T103 makes the same-origin fallback in
+      # frontend/src/components/{JoinForm,FailurePanel}.tsx authoritative.
+      # Set VITE_SIGNALING_URL explicitly in .env / .env.dev only when
+      # signaling lives on a different origin from the frontend.
+      VITE_SIGNALING_URL: ${VITE_SIGNALING_URL:-}
     depends_on:
       - signaling
 

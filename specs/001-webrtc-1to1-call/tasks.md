@@ -2003,6 +2003,54 @@ and the three audits (stale names, media relay, log hygiene).
 
 ---
 
+## Phase 14 follow-ups (post-exit)
+
+These items surfaced during Phase 14's deferred T095 human run but
+are out-of-scope for the Phase 14 commit split (they touch
+frontend/src). File them here as standalone follow-up tasks so the
+Phase 14 exit commits stay clean.
+
+- [X] T103 Prod-image WebSocket wiring — fix the two independent
+  bugs that made the prod compose stack unusable end-to-end for the
+  Phase 14 human verification:
+    1. `frontend/src/components/{JoinForm,FailurePanel}.tsx`
+       `resolveSignalingUrl()` fallback hard-coded `:8080`, which
+       routed the browser's `wss://` upgrade directly to the
+       plain-HTTP signaling port — guaranteed TLS handshake
+       failure. Changed to same-origin
+       `${proto}//${window.location.host}/ws` so TLS terminates on
+       the frontend container's 5173 listener.
+    2. `frontend/vite.config.ts` only declared `server.proxy`, which
+       `vite dev` honors but `vite preview` (the prod image's
+       runtime) does not. Added a `preview.proxy` block mirroring
+       `server.proxy` so the prod image forwards `/ws` to
+       `signaling:8080` exactly the way the dev image does.
+  Net effect: `VITE_SIGNALING_URL` is now OPTIONAL for both
+  personas. Localhost, LAN access, and any same-origin deployment
+  Just Work without per-user env editing. `.env.example` and
+  `.env.dev.example` updated to reflect this; the explicit override
+  path remains available for separate-origin deployments.
+  **Known limitation (out of T103 scope)**: `frontend/Dockerfile`
+  still does not declare `ARG VITE_SIGNALING_URL`, so setting the
+  variable in `.env` is a no-op against the current prod image. If
+  a future deployment needs that override, add the build ARG + ENV
+  to Stage 1 and `build.args` in `docker-compose.yml`. Not needed
+  for MVP use cases.
+- **Files**: `frontend/src/components/JoinForm.tsx`,
+  `frontend/src/components/FailurePanel.tsx`,
+  `frontend/vite.config.ts`, `.env.example`, `.env.dev.example`.
+- **Dependencies**: Phase 14 exit (T102 touched `.env.*` /
+  quickstart docs; T103 touches the fallback path the docs now
+  describe).
+- **Definition of Done**: vitest 185/185 still green; `tsc --noEmit`
+  exit 0; fresh-clone `docker compose up --build` + browser at
+  `https://localhost:5173/` → WS upgrade succeeds without any env
+  override. Same for dev compose from a LAN device.
+- **Verification**: manual T095 happy-path run against the fixed
+  prod compose stack succeeds end-to-end.
+
+---
+
 ## Dependency summary by phase
 
 ```
