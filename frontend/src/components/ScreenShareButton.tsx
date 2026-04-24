@@ -12,7 +12,7 @@
 // emitMediaState) and the event-log sink, then calls start / stop
 // from the click handler.
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useDispatch, useRootState } from "../state";
 import { useSignalingClient } from "../signaling/provider";
 import { useLocalMedia } from "../webrtc/local-media-provider";
@@ -59,15 +59,23 @@ export function ScreenShareButton() {
       getVideoSender: () => {
         const handle = getHandleRef.current();
         if (!handle) return null;
-        const senders = handle.pc.getSenders();
-        const videoSender = senders.find(
-          (s) => s.track?.kind === "video",
-        );
-        if (videoSender) return videoSender;
-        // Fallback: a sender whose track has not been attached yet.
-        // attachLocalTracks runs before this component is usable, but
-        // be defensive.
-        return senders.find((s) => s.track === null) ?? null;
+        // Fast path: current track kind identifies the video sender
+        // for the life of the pairing while a video track is attached.
+        const fast = handle.pc
+          .getSenders()
+          .find((s) => s.track?.kind === "video");
+        if (fast) return fast;
+        // Fallback: after `stop()` with camera off, the video sender's
+        // track is null. Walk transceivers and match on
+        // `receiver.track.kind === "video"` — that's the remote m-line
+        // direction, which is stable for the pairing because m-lines
+        // survive `replaceTrack(null)` on the local sender. Keyed on
+        // kind, not on null-track iteration order, so a future change
+        // that null-tracks multiple senders can't pick the wrong one.
+        const tx = handle.pc
+          .getTransceivers()
+          .find((t) => t.receiver.track?.kind === "video");
+        return tx?.sender ?? null;
       },
       getCameraTrack: () => {
         const stream = getStreamRef.current();
@@ -124,6 +132,22 @@ export function ScreenShareButton() {
     controllerRef.current = createScreenShareController(hooks);
     return controllerRef.current;
   }, []);
+
+  // Release any live screen capture on unmount. Without this effect,
+  // the controller's screen track stays open through
+  // HMR / StrictMode double-invoke / any future Phase 12 route change
+  // that unmounts the shell — a privacy + resource leak. Mirrors the
+  // unmount convention at `local-media-provider.tsx:193-199` and
+  // `peer-connection-provider.tsx:337-355`. `stop()` is a no-op when
+  // no screen track is active, so the effect is free when the user
+  // never shared.
+  useEffect(() => {
+    return () => {
+      void controller.stop("app").catch(() => {
+        /* best-effort — the store / WS may already be torn down */
+      });
+    };
+  }, [controller]);
 
   const active = media.local.screenShare === "active";
   // Visible gate: only the connected phase. The controller itself
