@@ -36,6 +36,8 @@ import { StoreProvider } from "../../../src/state";
 import { SignalingProvider } from "../../../src/signaling/provider";
 import { LocalMediaProvider } from "../../../src/webrtc/local-media-provider";
 import { PeerConnectionProvider } from "../../../src/webrtc/peer-connection-provider";
+import { ScreenShareProvider } from "../../../src/webrtc/screen-share-provider";
+import { CleanupProvider } from "../../../src/webrtc/cleanup";
 import type { AcquireLocalMediaOptions } from "../../../src/webrtc/media-acquisition";
 
 type MediaMode = "real" | "failOnce";
@@ -83,7 +85,11 @@ createRoot(rootElement).render(
         {...(acquireOptions ? { acquireOptions } : {})}
       >
         <PeerConnectionProvider>
-          <AppShell />
+          <ScreenShareProvider>
+            <CleanupProvider>
+              <AppShell />
+            </CleanupProvider>
+          </ScreenShareProvider>
         </PeerConnectionProvider>
       </LocalMediaProvider>
     </SignalingProvider>

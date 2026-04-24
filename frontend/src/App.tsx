@@ -13,6 +13,8 @@ import { StoreProvider } from "./state";
 import { SignalingProvider } from "./signaling/provider";
 import { LocalMediaProvider } from "./webrtc/local-media-provider";
 import { PeerConnectionProvider } from "./webrtc/peer-connection-provider";
+import { ScreenShareProvider } from "./webrtc/screen-share-provider";
+import { CleanupProvider } from "./webrtc/cleanup";
 
 export function App() {
   return (
@@ -20,7 +22,11 @@ export function App() {
       <SignalingProvider>
         <LocalMediaProvider>
           <PeerConnectionProvider>
-            <AppShell />
+            <ScreenShareProvider>
+              <CleanupProvider>
+                <AppShell />
+              </CleanupProvider>
+            </ScreenShareProvider>
           </PeerConnectionProvider>
         </LocalMediaProvider>
       </SignalingProvider>

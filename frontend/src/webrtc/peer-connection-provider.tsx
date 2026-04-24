@@ -114,7 +114,23 @@ export interface PeerConnectionContextValue {
    * `chat_message_appended` transcript entry.
    */
   sendChatMessage(text: string): ChatSendOutcome;
+  /**
+   * Phase 12 (§C.5) — tear down the RTCDataChannel + RTCPeerConnection
+   * + IceBuffer + remote media state. Idempotent. Does NOT stop local
+   * MediaStreamTracks and does NOT close the WebSocket — the caller
+   * (Path A / B / C orchestrator in `webrtc/cleanup.ts`) is responsible
+   * for those steps in the order §C.5 requires. `source` labels the
+   * cleanup path so future observability can distinguish the three
+   * entry points; the actual event-log "cleanup completed" line is
+   * emitted by the orchestrator, not here.
+   */
+  teardownPeerConnection(source: CleanupSource): void;
 }
+
+export type CleanupSource =
+  | "local_leave"
+  | "remote_peer_left"
+  | "local_failure";
 
 export type ChatSendOutcome =
   | { ok: true }
@@ -330,15 +346,41 @@ export function PeerConnectionProvider({
     chatChannelRef.current = wrapper;
   }
 
-  // Cleanup on unmount: close the PC + IceBuffer if still open.
-  //
-  // PHASE 12 HOOK — the body of this effect is the teardown sequence
-  // Phase 12 will need to invoke *mid-lifetime* (not just on unmount)
-  // when `peer_left` / ICE-failure / user-Leave drops us back to
-  // `waiting-for-peer` or `idle`. Candidate for extraction into a
-  // named `teardownPeerConnection()` function at that time. In
-  // Phase 8 the FSM cannot reach those transitions, so unmount-only
-  // is sufficient.
+  // Phase 12 (§C.5) — shared teardown body. Invoked from three places:
+  //   1. unmount effect below (HMR / StrictMode / route change).
+  //   2. leaveSession() in `webrtc/cleanup.ts` (Path A).
+  //   3. remotePeerLeft() in `webrtc/cleanup.ts` (Path B).
+  //   4. onConnectionStateChange="failed" in this provider (Path C).
+  // Does NOT touch local MediaStreamTracks or the WebSocket — the
+  // step order for each path lives in the orchestrator, not here.
+  // Idempotent: every ref / close() is guarded against double-invoke.
+  const teardownPeerConnection = useCallback((_source: CleanupSource): void => {
+    chatChannelRef.current?.close();
+    chatChannelRef.current = null;
+    handleRef.current?.close();
+    handleRef.current = null;
+    iceBufferRef.current?.close();
+    iceBufferRef.current = null;
+    activeRoomIdRef.current = null;
+    roleRef.current = null;
+    // Detach remote tracks; the browser owns their underlying
+    // lifetime. Also clears the RemoteMediaState indicator via the
+    // orchestrator's REMOTE_MEDIA_STATE_CLEARED dispatch (not done
+    // here — teardown is pure DOM/browser teardown).
+    const rs = remoteStreamRef.current;
+    if (rs) {
+      for (const t of rs.getTracks()) rs.removeTrack(t);
+    }
+    remoteStreamRef.current = null;
+    setRemoteStreamVersion((v) => v + 1);
+    setInspector(initialInspectorSnapshot);
+    dispatch({ type: "PEER_CONNECTION_CLOSED" });
+    dispatch({ type: "DATA_CHANNEL_RESET" });
+  }, [dispatch]);
+
+  // Unmount cleanup — final safety net. Mirrors the Phase-9 structure;
+  // mid-lifetime teardown paths call `teardownPeerConnection` directly
+  // via the context (Path A/B/C orchestrators).
   useEffect(() => {
     return () => {
       chatChannelRef.current?.close();
@@ -349,8 +391,6 @@ export function PeerConnectionProvider({
       iceBufferRef.current = null;
       activeRoomIdRef.current = null;
       roleRef.current = null;
-      // Detach remote tracks; the browser owns their underlying
-      // lifetime.
       const rs = remoteStreamRef.current;
       if (rs) {
         for (const t of rs.getTracks()) rs.removeTrack(t);
@@ -458,6 +498,37 @@ export function PeerConnectionProvider({
         // renegotiation/cleanup is harmless.
         if (next === "connected" && sessionRef.current.session === "connecting") {
           dispatch({ type: "CONNECTION_ESTABLISHED" });
+        }
+        // Phase-12 (§C.5 Path C) — terminal local PC failure. Enter
+        // `failed`, tear down the PC / DC / remote state, but keep
+        // local tracks + WS alive. The user picks Leave or Rejoin from
+        // the FailurePanel to complete Path A.
+        if (
+          next === "failed" &&
+          (sessionRef.current.session === "connecting" ||
+            sessionRef.current.session === "connected")
+        ) {
+          dispatch({ type: "CONNECTION_FAILED" });
+          dispatch({ type: "REMOTE_MEDIA_STATE_CLEARED" });
+          dispatch({
+            type: "EVENT_LOG_APPEND",
+            entry: makeEventLogEntry({
+              type: "error_occurred",
+              direction: "local",
+              summary: "connection failed — manual Leave or Rejoin",
+              code: "ice_failure",
+            }),
+          });
+          teardownPeerConnection("local_failure");
+          dispatch({
+            type: "EVENT_LOG_APPEND",
+            entry: makeEventLogEntry({
+              type: "cleanup_completed",
+              direction: "system",
+              summary: "cleanup completed (path=local_failure)",
+              code: "local_failure",
+            }),
+          });
         }
       },
       onIceConnectionStateChange: (next) => {
@@ -1098,6 +1169,7 @@ export function PeerConnectionProvider({
       remoteStreamVersion > 0 && remoteStreamRef.current !== null,
     inspector,
     sendChatMessage,
+    teardownPeerConnection,
   };
   // Keep `resetRemoteStream` referenced so tree-shaking doesn't elide
   // it in builds; not currently invoked in Phase-8 since PC cleanup

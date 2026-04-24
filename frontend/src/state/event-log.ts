@@ -57,6 +57,12 @@ export type EventLogEntryType =
   | "screen_share_stopped"
   | "screen_share_cancelled"
   | "track_replaced"
+  // Phase 12 — cleanup / failure lifecycle. `cleanup_completed` fires
+  // once per Path A/B/C teardown with `code: "local_leave" |
+  // "remote_peer_left" | "local_failure"`. Summaries are enum-only;
+  // raw error messages, WS close codes, and user-derived strings are
+  // never stored (NFR-006 / Principle VIII).
+  | "cleanup_completed"
   // future-phase canonical inbound message pass-throughs — the
   // dispatcher's fallback branch emits msg.type verbatim while the
   // phase-specific handler is still pending.

@@ -50,6 +50,7 @@ import {
   type PeerConnectionContextValue,
 } from "../../src/webrtc/peer-connection-provider";
 import type { PeerConnectionHandle } from "../../src/webrtc/peer-connection";
+import { ScreenShareProvider } from "../../src/webrtc/screen-share-provider";
 import { SignalingProvider } from "../../src/signaling/provider";
 import type { SignalingClient } from "../../src/signaling/client";
 import { initialInspectorSnapshot } from "../../src/webrtc/learning-inspector";
@@ -197,6 +198,7 @@ function renderButton(args: RenderArgs) {
     hasRemoteStream: false,
     inspector: initialInspectorSnapshot,
     sendChatMessage: () => ({ ok: false, reason: "not-open" }),
+    teardownPeerConnection: () => {},
   };
   const Wrapper = ({ children }: { children: ReactNode }) =>
     createElement(StoreProvider, {
@@ -207,7 +209,9 @@ function renderButton(args: RenderArgs) {
           value: localMediaValue,
           children: createElement(PeerConnectionContext.Provider, {
             value: pcValue,
-            children,
+            children: createElement(ScreenShareProvider, {
+              children,
+            }),
           }),
         }),
       }),

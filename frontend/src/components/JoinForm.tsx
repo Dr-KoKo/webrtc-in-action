@@ -26,6 +26,7 @@ import { useState, type FormEvent } from "react";
 import { CONTRACT_VERSION, ROOM_ID_REGEX } from "../types/contract";
 import { useDispatch, useRootState } from "../state";
 import { useSignalingClient } from "../signaling/provider";
+import { useCleanup } from "../webrtc/cleanup";
 import { makeEventLogEntry } from "../state/event-log";
 
 // Best-effort signaling URL. For docker-compose dev the signaling
@@ -43,13 +44,25 @@ export function JoinForm() {
   const client = useSignalingClient();
   const dispatch = useDispatch();
   const { session } = useRootState();
+  const { leaveSession } = useCleanup();
   const [roomId, setRoomId] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
 
   const isJoining = session.session === "joining";
   const isPendingMedia = session.session === "pending-media";
   const isMediaError = session.session === "media-error";
-  const showLeave = isPendingMedia || isMediaError;
+  const isWaitingForPeer = session.session === "waiting-for-peer";
+  const isConnecting = session.session === "connecting";
+  const isConnected = session.session === "connected";
+  // Phase 12 — Leave is available from every mid-call state. The
+  // FailurePanel handles Leave from `failed` separately, so we omit it
+  // here (one button per UI state).
+  const showLeave =
+    isPendingMedia ||
+    isMediaError ||
+    isWaitingForPeer ||
+    isConnecting ||
+    isConnected;
 
   async function runJoinFlow(targetRoomId: string) {
     try {
@@ -143,21 +156,11 @@ export function JoinForm() {
     await runJoinFlow(previousRoomId);
   }
 
-  function handleLeave() {
-    if (session.roomId) {
-      try {
-        client.send({
-          v: CONTRACT_VERSION,
-          type: "leave_room",
-          roomId: session.roomId,
-          payload: {},
-        });
-      } catch {
-        // Best-effort: WS may already be closed.
-      }
-    }
-    client.close();
-    dispatch({ type: "LEAVE_REQUESTED" });
+  async function handleLeave() {
+    // Phase 12 — Path A orchestration is centralized in
+    // `useCleanup().leaveSession()`; the button's job is just to fire
+    // the intent. The old inline leave_room send is now part of
+    // leaveSession's step 5 (data-model §C.5).
     dispatch({
       type: "EVENT_LOG_APPEND",
       entry: makeEventLogEntry({
@@ -167,10 +170,17 @@ export function JoinForm() {
         transport: "signaling",
       }),
     });
+    await leaveSession();
   }
 
   const serverError = session.joinError;
-  const formDisabled = isJoining || isPendingMedia || isMediaError;
+  const formDisabled =
+    isJoining ||
+    isPendingMedia ||
+    isMediaError ||
+    isWaitingForPeer ||
+    isConnecting ||
+    isConnected;
 
   return (
     <section aria-labelledby="join-form-heading" className="join-form">
@@ -197,7 +207,7 @@ export function JoinForm() {
           </button>
         )}
         {showLeave && (
-          <button type="button" onClick={handleLeave}>
+          <button type="button" onClick={() => void handleLeave()}>
             Leave
           </button>
         )}

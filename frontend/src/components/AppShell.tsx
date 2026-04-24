@@ -10,6 +10,7 @@
 
 import { JoinForm } from "./JoinForm";
 import { EventLogPanel } from "./EventLogPanel";
+import { FailurePanel } from "./FailurePanel";
 import { LocalVideo } from "./LocalVideo";
 import { MediaControls } from "./MediaControls";
 import { RemoteVideo } from "./RemoteVideo";
@@ -30,6 +31,7 @@ export function AppShell() {
       </header>
       <div className="app__grid">
         <JoinForm />
+        <FailurePanel />
         <LocalVideo />
         <RemoteVideo />
         <MediaControls />

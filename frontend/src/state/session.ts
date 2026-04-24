@@ -101,6 +101,8 @@ export type SessionAction =
   | { type: "CONNECTION_ESTABLISHED" }
   | { type: "RETRY_REQUESTED" }
   | { type: "LEAVE_REQUESTED" }
+  | { type: "PEER_LEFT" }
+  | { type: "CONNECTION_FAILED" }
   | { type: "TRANSPORT_CHANGED"; transport: SignalingTransportState };
 
 export class IllegalSessionTransitionError extends Error {
@@ -266,27 +268,55 @@ export function sessionReducer(
       };
 
     case "LEAVE_REQUESTED":
-      // "User abandons current attempt back to idle." Accepted from:
-      //   - idle (no-op).
-      //   - joining (JoinForm's WS connect/send error path — the
-      //     reducer is still "joining" because no server message
-      //     arrived).
-      //   - pending-media (Leave button while awaiting media).
-      //   - media-error (Leave button alongside Retry).
-      // Later states (waiting-for-peer / connecting / connected /
-      // etc.) belong to Phase 7+ and still throw.
-      if (
-        state.session !== "idle" &&
-        state.session !== "joining" &&
-        state.session !== "pending-media" &&
-        state.session !== "media-error"
-      ) {
-        throw new IllegalSessionTransitionError(state.session, action.type);
-      }
+      // Phase 12 (§C.5 Path A): Leave is accepted from every non-idle
+      // state the FSM can reach — idle (no-op), joining, pending-media,
+      // media-error, waiting-for-peer, connecting, connected, failed
+      // (user clicked Leave in the failure panel), and leaving (Leave
+      // is idempotent during cleanup). Returning to `idle` is the
+      // caller's responsibility for the surrounding teardown (stop
+      // local tracks, close DC/PC, close WS — see
+      // `frontend/src/webrtc/cleanup.ts`).
       return {
         ...initialSessionSlice,
         transport: state.transport,
       };
+
+    case "PEER_LEFT":
+      // Phase 12 (§C.5 Path B): remote peer departed mid-call. We stay
+      // in the room, keep local tracks live, and wait for a new peer.
+      // Legal only from `connecting | connected`. Any other state is a
+      // no-op (pending-media / waiting-for-peer never had a PC;
+      // dispatcher guards that at the boundary — see
+      // `frontend/src/webrtc/cleanup.ts` invariant).
+      if (state.session !== "connecting" && state.session !== "connected") {
+        return state;
+      }
+      return {
+        ...state,
+        session: "waiting-for-peer",
+        remoteParticipant: null,
+      };
+
+    case "CONNECTION_FAILED":
+      // Phase 12 (§C.5 Path C + §B.1.1 signaling-disconnect branch):
+      // terminal failure from either ICE / fatal PC state or from a
+      // signaling-transport drop while no stable P2P exists yet
+      // (`joining | pending-media | waiting-for-peer | connecting`).
+      // `connected` is ALSO a legal entry because ICE failure during a
+      // live call must go to terminal `failed` (§B.1 transition
+      // `connected → failed` on ICE). Signaling disconnect during
+      // `connected` is NOT a failure — it dispatches TRANSPORT_CHANGED
+      // alone, without CONNECTION_FAILED.
+      if (
+        state.session !== "joining" &&
+        state.session !== "pending-media" &&
+        state.session !== "waiting-for-peer" &&
+        state.session !== "connecting" &&
+        state.session !== "connected"
+      ) {
+        return state;
+      }
+      return { ...state, session: "failed" };
 
     default: {
       const exhaustive: never = action;
