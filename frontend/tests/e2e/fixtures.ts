@@ -119,9 +119,28 @@ export async function expectSessionAdvanced(page: Page): Promise<void> {
 // --- US5 AS1 base-lifecycle helper ---------------------------------
 
 // Asserts every Phase-6-reachable base lifecycle event appears in
-// this page's event log. Call from the happy path (two peers both
-// reaching media-ready) — a peer that never admits a remote will
-// not see the two `peer_presence_changed` rows.
+// this page's event log.
+//
+// PRECONDITION — the caller MUST have already awaited
+// `media_ready_sent` on BOTH the local page and the remote peer's
+// page before calling this helper. The `peer_presence_changed`
+// row with presence=ready only arrives after the SERVER observes
+// the remote peer's `media_ready` envelope and broadcasts the
+// presence update back. Without the remote gate, this helper will
+// block for the full `expect.timeout` (10 s) and then fail — or,
+// under a fast remote, pass flakily.
+//
+// Happy-path pattern (see scenario-5-base-lifecycle.spec.ts):
+//
+//   await joinRoom(pageA, roomId);
+//   await expectEventOfType(pageA, "room_joined", /room joined/);
+//   await joinRoom(pageB, roomId);
+//   for (const page of [pageA, pageB]) {
+//     await expectEventOfType(page, "media_ready_sent", …);
+//   }
+//   for (const page of [pageA, pageB]) {
+//     await expectBaseLifecycleEvents(page);
+//   }
 //
 // Phase-7+ extends this helper in place: add `offer_created/received`,
 // `answer_created/received`, `ice_candidate_*`, `*state_changed`,

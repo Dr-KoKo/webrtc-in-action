@@ -24,6 +24,10 @@ test("Leave from media-error returns the session to idle", async ({
     await page.goto(testAppUrl({ media: "failOnce" }));
 
     await joinRoom(page, roomId);
+    // Gate on admission before waiting on the terminal state — gives
+    // a sharper failure message if signaling is slow, and matches the
+    // pattern used in Scenarios 1/2/3/5/7.
+    await expectEventOfType(page, "room_joined", /room joined/);
     await expectIndicator(page, "session", "media-error");
 
     await page.getByRole("button", { name: /^Leave$/ }).click();
