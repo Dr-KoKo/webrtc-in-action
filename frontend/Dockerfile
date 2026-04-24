@@ -55,6 +55,13 @@ RUN npm run build
 # a devDependency — pruning with `npm prune --production` would
 # strip it, so we keep the install tree as-is. Spec Non-Goals rules
 # out prod image optimization beyond "runs locally".
+#
+# Note: frontend/.dockerignore excludes node_modules/ from the build
+# *context*, which is correct (we re-create it with `npm ci` in the
+# build stage). The COPY below reads from the prior stage's
+# filesystem, not from the host context, so the .dockerignore
+# exclusion does not apply here — do not "fix" the apparent
+# inconsistency.
 FROM node:22-alpine AS runtime
 
 WORKDIR /app

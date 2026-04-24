@@ -40,8 +40,11 @@ services:
     ports:
       - "${SIGNALING_PORT:-8080}:8080"
     environment:
-      LOG_FORMAT: ${LOG_FORMAT:-json}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Dev persona defaults — matches .env.dev.example even if a
+      # contributor runs this file without `--env-file .env.dev`.
+      # The prod persona (json / info) lives in docker-compose.yml.
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
       SIGNALING_PORT: "8080"
       PING_INTERVAL_MS: ${PING_INTERVAL_MS:-5000}
       PONG_TIMEOUT_MS: ${PONG_TIMEOUT_MS:-5000}
