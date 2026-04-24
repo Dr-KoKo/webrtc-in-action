@@ -2,9 +2,14 @@
 //
 // Intentional choices:
 // - No `webServer` block. The per-commit verify loop orchestrates
-//   `docker compose up -d --build --force-recreate` outside Playwright
-//   and gates both `:5173` and `:8080/healthz` with curl before
-//   invoking `npx playwright test`. Playwright's single-URL
+//   `docker compose -f docker-compose.dev.yml up -d --build
+//   --force-recreate` outside Playwright and gates both `:5173` and
+//   `:8080/healthz` with curl before invoking `npx playwright test`.
+//   The dev compose file is required (not the default prod one)
+//   because Playwright hits `/tests/e2e/test-app/`, which only
+//   Vite's dev server resolves on demand — the prod image bakes
+//   `vite build` output, which excludes the test-app entry
+//   (see vite.config.ts rollupOptions). Playwright's single-URL
 //   `webServer.url` would miss the signaling readiness gate, and
 //   `reuseExistingServer: true` would risk running tests against
 //   stale container images baked from a previous commit (the dev

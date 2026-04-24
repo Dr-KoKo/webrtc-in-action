@@ -1,0 +1,51 @@
+# Dev compose — fast-iteration bring-up using Dockerfile.dev for
+# both services. Use this file for:
+#
+#   - contributor inner loop (source edits → reload):
+#       docker compose -f docker-compose.dev.yml up --build
+#   - Playwright e2e (needs Vite dev to serve tests/e2e/test-app/
+#     on demand — the prod image only ships the main SPA):
+#       docker compose -f docker-compose.dev.yml up -d --build --force-recreate
+#       npx playwright test
+#
+# For the learner / quickstart flow (polished image, distroless
+# signaling, healthcheck-gated startup), use the default file:
+#
+#       docker compose up --build
+#
+# Env wiring mirrors docker-compose.yml — `.env.example` is the
+# single source of truth. No healthcheck here because the dev image
+# rebuilds `go build` on every container start and `vite dev` boots
+# in ~1 s; a `depends_on: service_started` is enough.
+#
+# Ports default to 5173 / 8080; override FRONTEND_PORT /
+# SIGNALING_PORT in `.env` as with the prod file.
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    environment:
+      VITE_SIGNALING_URL: ${VITE_SIGNALING_URL:-wss://localhost:5173/ws}
+    depends_on:
+      - signaling
+
+  signaling:
+    build:
+      context: ./signaling
+      dockerfile: Dockerfile.dev
+    ports:
+      - "${SIGNALING_PORT:-8080}:8080"
+    environment:
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SIGNALING_PORT: "8080"
+      PING_INTERVAL_MS: ${PING_INTERVAL_MS:-5000}
+      PONG_TIMEOUT_MS: ${PONG_TIMEOUT_MS:-5000}
+      VITE_STUN_URLS: ${VITE_STUN_URLS:-stun:stun.l.google.com:19302}
+      VITE_TURN_URL: ${VITE_TURN_URL:-}
+      VITE_TURN_USERNAME: ${VITE_TURN_USERNAME:-}
+      VITE_TURN_CREDENTIAL: ${VITE_TURN_CREDENTIAL:-}
