@@ -1864,7 +1864,7 @@ accurate.
 - [ ] T098 [P] Contract conformance audit: grep the codebase for every message type in contract §3; confirm each appears and each `payload.result` enum value is present — `scripts/check-contract-usage.sh` (or a checklist in PR description)
 - [ ] T099 [P] Stale-**message-type** audit (payload values are allowed; only the forbidden names as message types are illegal) — (no files)
 - [ ] T100 [P] Media-relay audit: signaling server must never import or call anything that touches SDP / ICE payload strings beyond `Decode` + forward; confirm by reading `internal/signaling/handler.go` + grep for `.SDP`, `.Candidate` outside `messages.go` validators — (no files)
-- [ ] T101 [P] NFR-003 log audit: run the server under load for 60 s and grep the logs for `sdp`, `candidate:`, `credential` substrings — must be zero hits — (no files)
+- [ ] T101 [P] NFR-003 log audit: run the server under load for ≥ 60 s and grep the logs with three content-pattern checks — (1) SDP body tokens (`v=0|m=audio|m=video|m=application|a=ice-ufrag|a=ice-pwd|a=setup:|a=fingerprint:|a=sctp-port|a=mid:`), (2) ICE candidate body (`candidate:[0-9]+ [0-9]+`), (3) TURN credentials (`"credential"\s*:|credential=|password=|turn[s]?://[^@/]+@`). All three must be zero hits. Replaces the earlier literal `sdp|candidate:|credential` substring grep, which false-positives on benign structured-log event tags (`event:"sdp_relay"`, etc.) — (no files)
 - [ ] T102 README + quickstart polish: every link resolves; every step executed in T095/T096 is still accurate — `README.md`, `specs/001-webrtc-1to1-call/quickstart.md`
 
 ### T095
@@ -1964,10 +1964,27 @@ accurate.
 - **Files**: none.
 - **Dependencies**: T019, T090.
 - **Parallelizable**: yes.
-- **Definition of Done**: `docker compose logs signaling | grep -Ei
-  'sdp|candidate:|credential'` returns zero hits after a full
-  quickstart §4 + §5 run.
-- **Verification**: grep output attached.
+- **Definition of Done**: after driving a full happy-path traffic
+  window of ≥ 60 s through `docker compose logs signaling >
+  /tmp/phase-14-logs.txt`, all three of the following content-pattern
+  greps return zero hits:
+  1. SDP body tokens — `rg -n -i
+     'v=0|m=audio|m=video|m=application|a=ice-ufrag|a=ice-pwd|a=setup:|a=fingerprint:|a=sctp-port|a=mid:'
+     /tmp/phase-14-logs.txt`.
+  2. ICE candidate body — `rg -n -i 'candidate:[0-9]+ [0-9]+'
+     /tmp/phase-14-logs.txt`.
+  3. TURN credentials — `rg -n -i
+     '"credential"\s*:|credential=|password=|turn[s]?://[^@/]+@'
+     /tmp/phase-14-logs.txt`.
+  The structured event tags `event:"sdp_relay"`,
+  `event:"ice_candidate_relay"`, `event:"media_state_relay"`, and
+  their `msg:"… relayed"` companions are expected observability
+  metadata and are **not** a violation — they announce THAT a relay
+  happened without logging the payload body. A pre-Phase-14 literal
+  `-i 'sdp|candidate:|credential'` grep false-positives on those
+  event tags; this content-pattern recipe replaces it.
+- **Verification**: three-grep output + total log-line count + observed
+  window duration attached to the verification log.
 
 ### T102
 - **Phase**: 14

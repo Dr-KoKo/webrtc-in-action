@@ -201,3 +201,109 @@ Exit `1` — zero hits.
 
 ---
 
+## T101 — NFR-003 log audit
+
+**Methodology note.** The original T101 recipe grepped the signaling
+logs case-insensitively for the three substrings `sdp`, `candidate:`,
+and `credential`. That substring grep false-positives on the server's
+structured event-name metadata — `event:"sdp_relay"` and the
+companion `msg:"sdp relayed"` log lines (introduced in Phase 4 /
+commit `730609b`, `handler.go:1009–1010`). Those tags announce
+*that* an SDP relay happened for operator debugging and carry only
+`type` (offer/answer), `from_peer_id`, and `to_peer_id` — no SDP body,
+no ICE candidate string, no credential. NFR-003's actual subject is
+payload *content* (SDP bodies, raw ICE candidate strings, TURN
+credentials), not observability-event tag names. The recipe was
+refined (see `tasks.md` T101 — this commit) to three
+content-pattern greps that match the categories NFR-003 names. The
+pre-refinement two hits are quoted verbatim below for transparency
+and are not a violation. See also the `tasks.md` `Notes` reminder
+that "Signaling logs must never contain SDP / ICE / TURN credentials
+(NFR-003) — guarded by T101" — the refined recipe makes that guard
+detect only the actual leakage shape rather than any occurrence of
+the substring `"sdp"`.
+
+### Traffic run
+
+- Stack: `docker compose up -d --build` against the prod compose
+  file (distroless signaling, `LOG_FORMAT=json`, `LOG_LEVEL=info`).
+  Signaling healthcheck reached `Healthy`.
+- Traffic generator: a throwaway Node 24 script at
+  `/tmp/phase14-traffic.mjs` (not committed) opens two WS peers
+  directly against `ws://localhost:8080/ws`, drives a full happy-
+  path protocol sequence (`join_room` × 2 → `media_ready` × 2 →
+  `ready_for_offer` × 2 → `offer` → `answer` → `ice_candidate` × 3
+  each + end-of-candidates × 2 → `media_state`), soaks for 65 s so
+  the heartbeat ping/pong cycle exercises (interval 5 s, timeout
+  5 s), then sends `leave_room` from each side and closes both
+  connections.
+- Observed window: **67 seconds** start-to-end.
+- Log capture: `docker compose logs signaling > /tmp/phase-14-logs.txt`
+  produced **21 log lines** total.
+
+Resume recipe (if this run needs to be repeated):
+
+```bash
+docker compose up -d --build
+# wait for `docker compose ps` to show signaling Healthy
+node /tmp/phase14-traffic.mjs        # or an equivalent WS client
+docker compose logs signaling > /tmp/phase-14-logs.txt
+docker compose down
+```
+
+### Refined content-pattern greps (all three MUST be zero hits)
+
+```
+# (1) SDP body tokens
+rg -n -i 'v=0|m=audio|m=video|m=application|a=ice-ufrag|a=ice-pwd|a=setup:|a=fingerprint:|a=sctp-port|a=mid:' /tmp/phase-14-logs.txt
+```
+
+Exit `1`. Zero hits.
+
+```
+# (2) ICE candidate body
+rg -n -i 'candidate:[0-9]+ [0-9]+' /tmp/phase-14-logs.txt
+```
+
+Exit `1`. Zero hits.
+
+```
+# (3) TURN credentials
+rg -n -i '"credential"\s*:|credential=|password=|turn[s]?://[^@/]+@' /tmp/phase-14-logs.txt
+```
+
+Exit `1`. Zero hits.
+
+**Result: T101 PASS.** NFR-003 holds — the signaling server does not
+log SDP bodies, ICE candidate strings, or TURN credentials during a
+full happy-path + heartbeat-soak window.
+
+### Pre-refinement hits, annotated (for the record)
+
+The original literal `rg -n -i 'sdp|candidate:|credential'` grep
+returned exit `0` with two hits, both on the same structured event
+tag. Both carry zero payload content — only event name, message type
+enum (`offer` / `answer`), and the two peer IDs:
+
+```
+9:signaling-1  | {"time":"…","level":"INFO","msg":"sdp relayed","event":"sdp_relay","type":"offer","from_peer_id":"e075d7b3-…","to_peer_id":"c681957a-…"}
+10:signaling-1 | {"time":"…","level":"INFO","msg":"sdp relayed","event":"sdp_relay","type":"answer","from_peer_id":"c681957a-…","to_peer_id":"e075d7b3-…"}
+```
+
+Verdict: **metadata, not content.** Pre-existing since Phase 4
+(`handler.go:1009–1010`, commit `730609b`). No rename of
+`sdp_relay` / `ice_candidate_relay` / `media_state_relay` is
+performed in Phase 14 — those tags are load-bearing for operator
+debugging, and the grep (not the runtime) was the defect.
+
+### Optional future hardening (not required, not a Phase 14 blocker)
+
+A Go-level test (e.g. `signaling/tests/nfr003_log_audit_test.go`)
+could install a capturing `slog.Handler` during a synthetic
+offer / answer / ice_candidate exchange and run the same three
+content-pattern greps programmatically, locking NFR-003 into CI
+without re-running compose. Deferred — file under a future feature
+spec if appetite arises.
+
+---
+
