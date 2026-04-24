@@ -269,6 +269,55 @@ describe("sessionReducer", () => {
     }
   });
 
+  it("CONNECTION_ESTABLISHED transitions connecting → connected (Phase 8)", () => {
+    const connecting = run(initialSessionSlice, [
+      { type: "JOIN_REQUESTED", roomId: ROOM },
+      { type: "JOIN_ACCEPTED", message: joinAccepted(1) },
+      { type: "MEDIA_READY_SENT" },
+      { type: "READY_FOR_OFFER" },
+    ]);
+    expect(connecting.session).toBe("connecting");
+    const next = sessionReducer(connecting, { type: "CONNECTION_ESTABLISHED" });
+    expect(next.session).toBe("connected");
+  });
+
+  it("CONNECTION_ESTABLISHED from any state other than connecting is a no-op", () => {
+    // Phase 8 contract: the PC's `connectionState === "connected"`
+    // event can fire transiently during renegotiation / cleanup.
+    // The reducer no-ops so a spurious event cannot mis-promote a
+    // pre-call state. Exhaustive list — once Phase 12 adds the
+    // `connected → waiting-for-peer` path on peer_left, this set
+    // grows; the no-op guarantee is forward-compatible.
+    const cases: Array<{ from: string; state: SessionSlice }> = [
+      { from: "idle", state: initialSessionSlice },
+      {
+        from: "joining",
+        state: run(initialSessionSlice, [
+          { type: "JOIN_REQUESTED", roomId: ROOM },
+        ]),
+      },
+      {
+        from: "pending-media",
+        state: run(initialSessionSlice, [
+          { type: "JOIN_REQUESTED", roomId: ROOM },
+          { type: "JOIN_ACCEPTED", message: joinAccepted(1) },
+        ]),
+      },
+      {
+        from: "waiting-for-peer",
+        state: run(initialSessionSlice, [
+          { type: "JOIN_REQUESTED", roomId: ROOM },
+          { type: "JOIN_ACCEPTED", message: joinAccepted(1) },
+          { type: "MEDIA_READY_SENT" },
+        ]),
+      },
+    ];
+    for (const c of cases) {
+      const next = sessionReducer(c.state, { type: "CONNECTION_ESTABLISHED" });
+      expect(next, `from=${c.from}`).toBe(c.state);
+    }
+  });
+
   it("TRANSPORT_CHANGED updates the transport slice independently", () => {
     const next = sessionReducer(initialSessionSlice, {
       type: "TRANSPORT_CHANGED",

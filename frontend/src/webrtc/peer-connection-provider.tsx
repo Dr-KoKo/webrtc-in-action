@@ -1,4 +1,4 @@
-// PeerConnectionProvider — Phase 7 (T051–T054).
+// PeerConnectionProvider — Phase 7 (T051–T054) + Phase 8 (T057–T062).
 //
 // Owns the `RTCPeerConnection` lifecycle + the offer/answer
 // negotiation flow. Lives between the SignalingProvider and the
@@ -7,32 +7,44 @@
 //
 // Registration model:
 //   The main `dispatcher.ts` no longer handles `ready_for_offer`,
-//   `offer`, or `answer` — those are reserved for this provider's
-//   own `client.onMessage` subscription. Each side parses the raw
-//   frame through the shared Zod schema (cheap; avoids coupling the
-//   two handlers). The dispatcher continues to handle join /
-//   presence / media-release / error / leave so the two listeners
-//   never overlap.
+//   `offer`, `answer`, or `ice_candidate` — those are reserved for
+//   this provider's own `client.onMessage` subscription. Each side
+//   parses the raw frame through the shared Zod schema (cheap;
+//   avoids coupling the two handlers). The dispatcher continues to
+//   handle join / presence / media-release / error / leave so the
+//   two listeners never overlap.
 //
 // Contract / data-model references:
 // - §3.7 `ready_for_offer` — PC construction trigger; role assigned
 //   by admissionOrder; exactly once per pairing attempt. Late
 //   duplicates log `unexpected_ready_for_offer` and are ignored.
 // - §3.8 `offer`, §3.9 `answer` — the only C→S→C negotiation
-//   relay messages this phase sends.
-// - data-model §B.1 — `waiting-for-peer → connecting` on receipt.
+//   relay messages Phase 7 sends.
+// - §3.10 `ice_candidate` — Phase 8 trickle ICE; `candidate: null`
+//   is end-of-candidates and is never passed to `addIceCandidate`.
+// - data-model §B.1 — session FSM transitions:
+//     waiting-for-peer → connecting (on ready_for_offer)
+//     connecting       → connected  (on RTCPeerConnectionState ===
+//                                    "connected").
 // - data-model §B.4 — four getters mirrored into the reducer slice
 //   so UI indicators stay in sync.
+// - data-model §B.6 — `IceBuffer` holds remote candidates that
+//   arrived before the local `setRemoteDescription` resolves.
 //
-// Phase-7 scope is strictly offer/answer. `onicecandidate` / ICE
-// buffering / `ontrack` remote-media rendering are Phase 8 work;
-// the DataChannel's `onopen/onmessage` wiring is Phase 9.
+// Phase 8 adds: local `onicecandidate` → send; inbound
+// `ice_candidate` buffered via `IceBuffer` until SRD; `ontrack` →
+// aggregated remote `MediaStream` exposed via a getter + version
+// counter (same DI shape as `LocalMediaProvider`); Learning
+// Inspector snapshot updated from the SDP / candidate summaries.
+// DataChannel `onopen/onmessage` wiring remains Phase 9 work.
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 import { useDispatch, useRootState } from "../state";
@@ -45,6 +57,7 @@ import { useSignalingClient } from "../signaling/provider";
 import {
   signalingMessageSchema,
   type AnswerMessage,
+  type IceCandidateMessage,
   type OfferMessage,
   type ReadyForOfferMessage,
 } from "../signaling/schema";
@@ -54,12 +67,34 @@ import {
   type CreatePeerConnectionOptions,
   type PeerConnectionHandle,
 } from "./peer-connection";
+import {
+  createIceBuffer,
+  type IceBuffer,
+} from "./ice-buffer";
+import {
+  initialInspectorSnapshot,
+  summarizeCandidate,
+  summarizeIceServers,
+  summarizeSdp,
+  type LearningInspectorSnapshot,
+} from "./learning-inspector";
 import { CONTRACT_VERSION } from "../types/contract";
 
 interface PeerConnectionContextValue {
   /** Read-only accessor. Browser objects live here; reducer state
    *  only mirrors getter snapshots (see PeerConnectionSlice). */
   getHandle(): PeerConnectionHandle | null;
+  /**
+   * Phase 8 — aggregated remote `MediaStream` (audio+video tracks
+   * collected from `ontrack`). Kept in a ref for the same reason as
+   * the local stream: streams are not React-state-safe. Consumers
+   * subscribe by reading `remoteStreamVersion` in their effect deps.
+   */
+  getRemoteStream(): MediaStream | null;
+  remoteStreamVersion: number;
+  hasRemoteStream: boolean;
+  /** Learning Inspector v1 snapshot (FR-030). Summaries only. */
+  inspector: LearningInspectorSnapshot;
 }
 
 const PeerConnectionContext = createContext<PeerConnectionContextValue | null>(
@@ -89,6 +124,21 @@ export function PeerConnectionProvider({
   // The PC itself and transient pairing context live in refs because
   // they are not serializable and must not live in React state.
   const handleRef = useRef<PeerConnectionHandle | null>(null);
+  const iceBufferRef = useRef<IceBuffer | null>(null);
+  // Aggregated remote stream — `ontrack` pushes every track here; the
+  // version counter bumps each time so consumers re-bind their
+  // `<video>` `srcObject`. This mirrors LocalMediaProvider's DI shape.
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const [remoteStreamVersion, setRemoteStreamVersion] = useState(0);
+  const [inspector, setInspector] = useState<LearningInspectorSnapshot>(
+    initialInspectorSnapshot,
+  );
+  // Cached room id for outbound `ice_candidate` relays — populated when
+  // `ready_for_offer` fires. Avoids a stale-state race in the onicecandidate
+  // callback, which is invoked from a browser task separate from the session
+  // update cycle.
+  const activeRoomIdRef = useRef<string | null>(null);
+  const roleRef = useRef<"offerer" | "answerer" | null>(null);
 
   // Mirror the latest session slice into a ref so the async WS
   // handler reads fresh values (the handler closure captures the
@@ -100,6 +150,24 @@ export function PeerConnectionProvider({
   // the live stream at acquire-time without re-subscribing.
   const getLocalStreamRef = useRef(localMedia.getStream);
   getLocalStreamRef.current = localMedia.getStream;
+
+  const bumpRemoteVersion = useCallback(() => {
+    setRemoteStreamVersion((v) => v + 1);
+  }, []);
+
+  const resetRemoteStream = useCallback(() => {
+    const current = remoteStreamRef.current;
+    if (current) {
+      for (const track of current.getTracks()) {
+        // We do NOT stop remote tracks here — they belong to the
+        // remote peer and the browser manages their lifecycle when
+        // the PC closes. Detaching is sufficient.
+        current.removeTrack(track);
+      }
+    }
+    remoteStreamRef.current = null;
+    bumpRemoteVersion();
+  }, [bumpRemoteVersion]);
 
   useEffect(() => {
     const unsubscribe = client.onMessage((raw) => {
@@ -125,6 +193,9 @@ export function PeerConnectionProvider({
         case "answer":
           void handleAnswer(msg);
           return;
+        case "ice_candidate":
+          void handleIceCandidate(msg);
+          return;
         default:
           return;
       }
@@ -137,17 +208,49 @@ export function PeerConnectionProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, dispatch]);
 
-  // Cleanup on unmount: close the PC if still open.
+  // Cleanup on unmount: close the PC + IceBuffer if still open.
+  //
+  // PHASE 12 HOOK — the body of this effect is the teardown sequence
+  // Phase 12 will need to invoke *mid-lifetime* (not just on unmount)
+  // when `peer_left` / ICE-failure / user-Leave drops us back to
+  // `waiting-for-peer` or `idle`. Candidate for extraction into a
+  // named `teardownPeerConnection()` function at that time. In
+  // Phase 8 the FSM cannot reach those transitions, so unmount-only
+  // is sufficient.
   useEffect(() => {
     return () => {
       handleRef.current?.close();
       handleRef.current = null;
+      iceBufferRef.current?.close();
+      iceBufferRef.current = null;
+      activeRoomIdRef.current = null;
+      roleRef.current = null;
+      // Detach remote tracks; the browser owns their underlying
+      // lifetime.
+      const rs = remoteStreamRef.current;
+      if (rs) {
+        for (const t of rs.getTracks()) rs.removeTrack(t);
+      }
+      remoteStreamRef.current = null;
     };
   }, []);
 
   async function handleReadyForOffer(msg: ReadyForOfferMessage): Promise<void> {
     // Contract §3.7 validation (client): handle exactly once per
     // pairing attempt; ignore if arriving in any other state.
+    //
+    // PHASE 12 HOOK — the `handleRef.current !== null` guard makes the
+    // provider single-use by design for Phase 8. The Phase-8 session
+    // reducer has no transition back to `waiting-for-peer` from
+    // `connecting`/`connected`, so this branch is unreachable through
+    // any shipped user path. Phase 12's cleanup work (T086+) will add
+    // `peer_left → waiting-for-peer` and with it the second-pairing
+    // flow; that phase MUST: (a) lift this guard, (b) call
+    // `teardownPeerConnection()` — see the unmount cleanup below —
+    // before re-creating the PC, and (c) reset `remoteStreamRef` +
+    // `inspector` so stale remote media / summaries don't survive the
+    // new pairing. Keep the guard noisy (log the unexpected receipt)
+    // rather than silently overwriting the PC ref.
     const currentSession = sessionRef.current.session;
     if (currentSession !== "waiting-for-peer" || handleRef.current !== null) {
       dispatch({
@@ -189,6 +292,17 @@ export function PeerConnectionProvider({
     // Reducer transitions waiting-for-peer → connecting.
     dispatch({ type: "READY_FOR_OFFER" });
 
+    // Cache role + room id for out-of-band callbacks (onicecandidate,
+    // ontrack) that fire outside the WS handler closure.
+    roleRef.current = role;
+    activeRoomIdRef.current = msg.roomId ?? sessionRef.current.roomId;
+
+    // Seed the inspector snapshot with the configured iceServers.
+    setInspector((prev) => ({
+      ...prev,
+      configured: summarizeIceServers(iceServers),
+    }));
+
     const handle = createPeerConnection({
       iceServers,
       role,
@@ -214,6 +328,13 @@ export function PeerConnectionProvider({
             summary: `connectionState → ${next}`,
           }),
         });
+        // Phase-8 FSM promotion: PC reached `connected` → session
+        // goes connecting → connected. The reducer ignores the action
+        // from any other state, so a spurious event during
+        // renegotiation/cleanup is harmless.
+        if (next === "connected" && sessionRef.current.session === "connecting") {
+          dispatch({ type: "CONNECTION_ESTABLISHED" });
+        }
       },
       onIceConnectionStateChange: (next) => {
         dispatchSnapshot(dispatch, { iceConnectionState: next });
@@ -237,6 +358,50 @@ export function PeerConnectionProvider({
           }),
         });
       },
+      onIceCandidate: (cand) => {
+        // T057 — forward every local candidate over signaling. `null`
+        // marks end-of-candidates and MUST be forwarded as
+        // `{candidate: null}` (contract §3.10). Event-log summary
+        // avoids the raw candidate body per NFR-006.
+        sendIceCandidate(cand);
+        if (cand === null) {
+          setInspector((prev) => ({
+            ...prev,
+            observed: { ...prev.observed, endOfLocalCandidates: true },
+          }));
+          return;
+        }
+        const summary = summarizeCandidate(cand);
+        setInspector((prev) => ({
+          ...prev,
+          observed: tallyCandidate(prev.observed, summary.type, "local"),
+        }));
+      },
+      onTrack: (ev) => {
+        // T060 — aggregate every remote track into a single shared
+        // MediaStream. Chromium emits one `track` event per track in
+        // the remote SDP, so we accumulate into `remoteStreamRef`.
+        // The browser-provided `ev.streams[0]` would also work but
+        // is unreliable when the remote peer split audio+video into
+        // separate m-sections (rare, but allowed).
+        let aggregate = remoteStreamRef.current;
+        if (!aggregate) {
+          aggregate = new MediaStream();
+          remoteStreamRef.current = aggregate;
+        }
+        if (!aggregate.getTracks().some((t) => t.id === ev.track.id)) {
+          aggregate.addTrack(ev.track);
+        }
+        bumpRemoteVersion();
+        dispatch({
+          type: "EVENT_LOG_APPEND",
+          entry: makeEventLogEntry({
+            type: "remote_track_received",
+            direction: "remote",
+            summary: `remote track received (kind=${ev.track.kind}, id=${shortenId(ev.track.id)})`,
+          }),
+        });
+      },
       ...(role === "answerer"
         ? {
             onDataChannel: (dc: RTCDataChannel) => {
@@ -257,6 +422,27 @@ export function PeerConnectionProvider({
         : {}),
     });
     handleRef.current = handle;
+
+    // Create a fresh IceBuffer for this pairing. It routes inbound
+    // remote candidates to `addIceCandidate`, applying immediately
+    // after the local `setRemoteDescription` resolves, or buffering
+    // them in arrival order until then.
+    iceBufferRef.current = createIceBuffer({
+      target: {
+        addIceCandidate: (c) => handle.addRemoteIceCandidate(c),
+      },
+      onError: (err, _c) => {
+        dispatch({
+          type: "EVENT_LOG_APPEND",
+          entry: makeEventLogEntry({
+            type: "error_occurred",
+            direction: "local",
+            summary: `addIceCandidate failed: ${(err as Error).message ?? "unknown"}`,
+            code: "add_ice_candidate_failed",
+          }),
+        });
+      },
+    });
 
     dispatch({
       type: "PEER_CONNECTION_CREATED",
@@ -315,6 +501,10 @@ export function PeerConnectionProvider({
             summary: `createOffer ok (sdpBytes=${offer.sdp?.length ?? 0}, ${mLineSummary(offer.sdp)})`,
           }),
         });
+        setInspector((prev) => ({
+          ...prev,
+          local: summarizeSdp({ type: "offer", sdp: offer.sdp ?? "" }),
+        }));
         sendOffer(msg.roomId, offer);
       } catch (err) {
         dispatch({
@@ -371,6 +561,17 @@ export function PeerConnectionProvider({
 
     try {
       const answer = await handle.applyOffer(msg.payload.sdp);
+      // T059 — remote description is now set. Flush any candidates
+      // that arrived before the answerer processed the offer.
+      await iceBufferRef.current?.markRemoteDescriptionSet();
+      setInspector((prev) => ({
+        ...prev,
+        remote: summarizeSdp({
+          type: "offer",
+          sdp: msg.payload.sdp.sdp,
+        }),
+        local: summarizeSdp({ type: "answer", sdp: answer.sdp ?? "" }),
+      }));
       dispatch({
         type: "EVENT_LOG_APPEND",
         entry: makeEventLogEntry({
@@ -434,6 +635,16 @@ export function PeerConnectionProvider({
 
     try {
       await handle.applyAnswer(msg.payload.sdp);
+      // T059 — offerer now has a remote description. Flush any
+      // candidates that trickled in before the answer arrived.
+      await iceBufferRef.current?.markRemoteDescriptionSet();
+      setInspector((prev) => ({
+        ...prev,
+        remote: summarizeSdp({
+          type: "answer",
+          sdp: msg.payload.sdp.sdp,
+        }),
+      }));
     } catch (err) {
       dispatch({
         type: "EVENT_LOG_APPEND",
@@ -444,6 +655,86 @@ export function PeerConnectionProvider({
           code: "apply_answer_failed",
         }),
       });
+    }
+  }
+
+  async function handleIceCandidate(msg: IceCandidateMessage): Promise<void> {
+    const buffer = iceBufferRef.current;
+    if (!buffer) {
+      // Candidate arrived before `ready_for_offer` — shouldn't happen
+      // under the contract (candidates only flow after both peers are
+      // role-assigned), but surface defensively so a server-side bug
+      // is visible in the log.
+      dispatch({
+        type: "EVENT_LOG_APPEND",
+        entry: makeEventLogEntry({
+          type: "error_occurred",
+          direction: "remote",
+          summary: "ice_candidate received without an active PC; ignoring",
+          code: "unexpected_ice_candidate",
+          transport: "signaling",
+        }),
+      });
+      return;
+    }
+    const payloadCandidate = msg.payload.candidate;
+    if (payloadCandidate === null) {
+      // End-of-candidates marker from the remote peer. Record for
+      // observability; never passed to addIceCandidate.
+      dispatch({
+        type: "EVENT_LOG_APPEND",
+        entry: makeEventLogEntry({
+          type: "ice_candidate_received",
+          direction: "remote",
+          summary: "remote ice_candidate: end-of-candidates",
+          transport: "signaling",
+        }),
+      });
+      setInspector((prev) => ({
+        ...prev,
+        observed: { ...prev.observed, endOfRemoteCandidates: true },
+      }));
+      buffer.add(null);
+      return;
+    }
+    // Zod has already validated the payload shape (non-empty candidate
+    // string, optional sdpMid / sdpMLineIndex / usernameFragment).
+    // Strip explicit-undefined keys to satisfy the browser's
+    // `RTCIceCandidateInit` shape under exactOptionalPropertyTypes.
+    const candInit: RTCIceCandidateInit = {
+      candidate: payloadCandidate.candidate,
+      ...(payloadCandidate.sdpMid !== undefined
+        ? { sdpMid: payloadCandidate.sdpMid }
+        : {}),
+      ...(payloadCandidate.sdpMLineIndex !== undefined
+        ? { sdpMLineIndex: payloadCandidate.sdpMLineIndex }
+        : {}),
+      ...(payloadCandidate.usernameFragment !== undefined
+        ? { usernameFragment: payloadCandidate.usernameFragment }
+        : {}),
+    };
+    const summary = summarizeCandidate(candInit);
+    dispatch({
+      type: "EVENT_LOG_APPEND",
+      entry: makeEventLogEntry({
+        type: "ice_candidate_received",
+        direction: "remote",
+        summary: `remote ice_candidate (${summary.type}/${summary.protocol}${buffer.remoteDescriptionSet ? "" : ", buffered"})`,
+        transport: "signaling",
+      }),
+    });
+    setInspector((prev) => ({
+      ...prev,
+      observed: tallyCandidate(prev.observed, summary.type, "remote"),
+    }));
+    const apply = buffer.add(candInit);
+    if (apply) {
+      try {
+        await apply;
+      } catch {
+        // `onError` on the buffer already logs. The buffer swallows
+        // the rejection so the provider doesn't need extra handling.
+      }
     }
   }
 
@@ -480,6 +771,78 @@ export function PeerConnectionProvider({
           direction: "local",
           summary: `send offer failed: ${(err as Error).message ?? "unknown"}`,
           code: "send_offer_failed",
+          transport: "signaling",
+        }),
+      });
+    }
+  }
+
+  function sendIceCandidate(
+    candidate: RTCIceCandidateInit | null,
+  ): void {
+    const target =
+      activeRoomIdRef.current ?? sessionRef.current.roomId ?? null;
+    if (!target) return;
+    try {
+      client.send({
+        v: CONTRACT_VERSION,
+        type: "ice_candidate",
+        roomId: target,
+        payload: {
+          candidate:
+            candidate === null
+              ? null
+              : {
+                  candidate: candidate.candidate ?? "",
+                  // Contract §3.10: these three optional fields are
+                  // forwarded as-is. Omit keys set to undefined so
+                  // the Zod schema accepts the body under
+                  // exactOptionalPropertyTypes.
+                  ...(candidate.sdpMid !== undefined &&
+                  candidate.sdpMid !== null
+                    ? { sdpMid: candidate.sdpMid }
+                    : {}),
+                  ...(candidate.sdpMLineIndex !== undefined &&
+                  candidate.sdpMLineIndex !== null
+                    ? { sdpMLineIndex: candidate.sdpMLineIndex }
+                    : {}),
+                  ...(candidate.usernameFragment !== undefined &&
+                  candidate.usernameFragment !== null
+                    ? { usernameFragment: candidate.usernameFragment }
+                    : {}),
+                },
+        },
+      });
+      if (candidate === null) {
+        dispatch({
+          type: "EVENT_LOG_APPEND",
+          entry: makeEventLogEntry({
+            type: "ice_candidate_sent",
+            direction: "local",
+            summary: "local ice_candidate: end-of-candidates",
+            transport: "signaling",
+          }),
+        });
+      } else {
+        const summary = summarizeCandidate(candidate);
+        dispatch({
+          type: "EVENT_LOG_APPEND",
+          entry: makeEventLogEntry({
+            type: "ice_candidate_sent",
+            direction: "local",
+            summary: `local ice_candidate (${summary.type}/${summary.protocol})`,
+            transport: "signaling",
+          }),
+        });
+      }
+    } catch (err) {
+      dispatch({
+        type: "EVENT_LOG_APPEND",
+        entry: makeEventLogEntry({
+          type: "error_occurred",
+          direction: "local",
+          summary: `send ice_candidate failed: ${(err as Error).message ?? "unknown"}`,
+          code: "send_ice_candidate_failed",
           transport: "signaling",
         }),
       });
@@ -525,9 +888,23 @@ export function PeerConnectionProvider({
     }
   }
 
+  const getRemoteStream = useCallback(
+    () => remoteStreamRef.current,
+    [],
+  );
+
   const value: PeerConnectionContextValue = {
     getHandle: () => handleRef.current,
+    getRemoteStream,
+    remoteStreamVersion,
+    hasRemoteStream:
+      remoteStreamVersion > 0 && remoteStreamRef.current !== null,
+    inspector,
   };
+  // Keep `resetRemoteStream` referenced so tree-shaking doesn't elide
+  // it in builds; not currently invoked in Phase-8 since PC cleanup
+  // alone handles teardown. Phase 12 will call it explicitly.
+  void resetRemoteStream;
 
   return (
     <PeerConnectionContext.Provider value={value}>
@@ -571,4 +948,27 @@ function mLineSummary(sdp: string | undefined): string {
   if (/^m=video /m.test(sdp)) kinds.push("video");
   if (/^m=application /m.test(sdp)) kinds.push("data");
   return kinds.length === 0 ? "no-m-lines" : `m=${kinds.join("+")}`;
+}
+
+// Tally a candidate type into the inspector's observed counters.
+// `direction` is unused in Phase 8 (observed counts are combined
+// local+remote for the didactic display), but kept in the signature
+// so Phase-11's per-side inspector can split them without a rename.
+function tallyCandidate(
+  prev: LearningInspectorSnapshot["observed"],
+  type: ReturnType<typeof summarizeCandidate>["type"],
+  _direction: "local" | "remote",
+): LearningInspectorSnapshot["observed"] {
+  switch (type) {
+    case "host":
+      return { ...prev, hostCandidates: prev.hostCandidates + 1 };
+    case "srflx":
+      return { ...prev, srflxCandidates: prev.srflxCandidates + 1 };
+    case "prflx":
+      return { ...prev, prflxCandidates: prev.prflxCandidates + 1 };
+    case "relay":
+      return { ...prev, relayCandidates: prev.relayCandidates + 1 };
+    default:
+      return prev;
+  }
 }

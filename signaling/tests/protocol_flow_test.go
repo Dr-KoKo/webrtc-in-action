@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -1031,6 +1032,190 @@ func TestOnlyOffererSendsOffer(t *testing.T) {
 	// - B must not have received a second `offer` relay (step 3).
 	a.expectNone(200 * time.Millisecond)
 	b.expectNone(200 * time.Millisecond)
+}
+
+// ---------------------------------------------------------------------
+// T063A — ice_candidate relay
+// ---------------------------------------------------------------------
+
+// iceCandidateMsg builds a §3.10 envelope carrying a populated
+// candidate. The candidate string is opaque to the contract layer —
+// tests use a distinctive marker so log-safety assertions can grep for
+// it.
+func iceCandidateMsg(roomID, candidateStr, sdpMid string, sdpMLineIndex int) any {
+	return map[string]any{
+		"v":      1,
+		"type":   "ice_candidate",
+		"roomId": roomID,
+		"payload": map[string]any{
+			"candidate": map[string]any{
+				"candidate":     candidateStr,
+				"sdpMid":        sdpMid,
+				"sdpMLineIndex": sdpMLineIndex,
+			},
+		},
+	}
+}
+
+func iceCandidateNullMsg(roomID string) any {
+	return map[string]any{
+		"v":      1,
+		"type":   "ice_candidate",
+		"roomId": roomID,
+		"payload": map[string]any{
+			"candidate": nil,
+		},
+	}
+}
+
+func iceCandidateEmptyMsg(roomID string) any {
+	return map[string]any{
+		"v":      1,
+		"type":   "ice_candidate",
+		"roomId": roomID,
+		"payload": map[string]any{
+			"candidate": map[string]any{
+				"candidate":     "",
+				"sdpMid":        "0",
+				"sdpMLineIndex": 0,
+			},
+		},
+	}
+}
+
+func TestIceCandidateRelayed(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	peerA, peerB := joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	const candStr = "candidate:1 1 UDP 2130706431 192.0.2.10 54321 typ host"
+	a.send(iceCandidateMsg("demo", candStr, "0", 0))
+
+	env, raw := b.expect(sig.TypeIceCandidate)
+	if env.From != peerA {
+		t.Fatalf("ice_candidate envelope.from=%s want %s", env.From, peerA)
+	}
+	if env.To != "" && env.To != peerB {
+		t.Fatalf("ice_candidate envelope.to=%s want '' or %s", env.To, peerB)
+	}
+	pc := parsePayload[sig.IceCandidatePayload](t, raw)
+	if pc.Candidate == nil {
+		t.Fatalf("relayed payload.candidate=nil, want populated candidate")
+	}
+	// Server must forward the body byte-for-byte — NFR-003.
+	if pc.Candidate.Candidate != candStr {
+		t.Fatalf("relayed candidate=%q, want %q", pc.Candidate.Candidate, candStr)
+	}
+	// Sender never sees an echo of its own candidate.
+	a.expectNone(200 * time.Millisecond)
+}
+
+func TestIceCandidateNullRelayed(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, _ = joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	// End-of-candidates marker — contract §3.10: relay identically.
+	a.send(iceCandidateNullMsg("demo"))
+	_, raw := b.expect(sig.TypeIceCandidate)
+	pc := parsePayload[sig.IceCandidatePayload](t, raw)
+	if pc.Candidate != nil {
+		t.Fatalf("end-of-candidates relay: Candidate=%+v, want nil", pc.Candidate)
+	}
+}
+
+func TestIceCandidateEmptyRejected(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, _ = joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	// `candidate: ""` is explicitly malformed per §3.10. `null` is the
+	// only valid end-of-candidates form. Decode-level validation fires
+	// before dispatch, so the sender gets `error{code:"malformed"}`
+	// and the remote peer sees nothing.
+	a.send(iceCandidateEmptyMsg("demo"))
+	_, rawErr := a.expect(sig.TypeError)
+	pe := parsePayload[sig.ErrorPayload](t, rawErr)
+	if pe.Code != sig.CodeMalformed {
+		t.Fatalf("empty candidate: code=%q want malformed", pe.Code)
+	}
+	b.expectNone(200 * time.Millisecond)
+}
+
+func TestIceCandidateFromWrongStateRejected(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	_ = a.joinAndAck("demo", newRequestID())
+
+	// A joined but has not sent media_ready yet, so callPhase is
+	// `idle` and mediaReadiness is `pending-media`. Per §3.10 +
+	// §C.2 the server MUST reject ice_candidate with `malformed`
+	// (via CanSendIceCandidate). No broadcast should occur — there's
+	// no remote peer to begin with, but the assertion is the error
+	// code + CanSendIceCandidate's rejection being exercised.
+	const candStr = "candidate:1 1 UDP 100 1.2.3.4 5678 typ host"
+	a.send(iceCandidateMsg("demo", candStr, "0", 0))
+	_, raw := a.expect(sig.TypeError)
+	pe := parsePayload[sig.ErrorPayload](t, raw)
+	if pe.Code != sig.CodeMalformed {
+		t.Fatalf("pre-ready candidate: code=%q want malformed", pe.Code)
+	}
+}
+
+// TestServerNeverLogsCandidate asserts the server never emits the raw
+// candidate string to any log handler. We send a candidate with a
+// distinctive marker, then read the captured structured logs and grep
+// for the marker. Missing = pass; present = NFR-003 violation.
+func TestServerNeverLogsCandidate(t *testing.T) {
+	log, buf := captureLogger()
+	h := sig.NewHandler(log)
+	h.Heartbeat = sig.HeartbeatConfig{
+		PingInterval: 10 * time.Second,
+		PongTimeout:  10 * time.Second,
+	}
+	ts := httptest.NewServer(h)
+	t.Cleanup(func() { ts.Close() })
+	// If the test fails, surface the buffer for debugging. We intentionally
+	// only log on failure to avoid false positives from the ctrl-c path.
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("server log:\n%s", buf.String())
+		}
+	})
+
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, _ = joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	// A deliberately unique marker — if this substring shows up in
+	// the server's log buffer the test fails and we've leaked the
+	// candidate payload.
+	const marker = "CAND-MARKER-9d5a7e2b1f0c4"
+	const candStr = "candidate:1 1 UDP 2130706431 10.0.0.1 12345 typ host " + marker
+	a.send(iceCandidateMsg("demo", candStr, "0", 0))
+	_, _ = b.expect(sig.TypeIceCandidate) // drain the relay so we know dispatch ran
+
+	// Give the server a beat to flush the "ice_candidate relayed"
+	// structured log. 50ms is plenty on loopback; we are not waiting
+	// on any async timer.
+	time.Sleep(50 * time.Millisecond)
+
+	logs := buf.String()
+	if strings.Contains(logs, marker) {
+		t.Fatalf("server logged the candidate string (NFR-003 violation). log:\n%s", logs)
+	}
+	// Sanity: the structured ice-relay log entry DID fire (so the
+	// grep above is meaningful).
+	if !strings.Contains(logs, `"event":"ice_candidate_relay"`) {
+		t.Fatalf("ice_candidate_relay log line missing; grep is meaningless. log:\n%s", logs)
+	}
 }
 
 // TestInCallLeaveEmitsPeerLeft verifies the in-call classification

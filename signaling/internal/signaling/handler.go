@@ -251,9 +251,11 @@ func (h *Handler) dispatch(ctx context.Context, cc *connCtx, d *Decoded) error {
 		return h.handleOffer(ctx, cc, d)
 	case TypeAnswer:
 		return h.handleAnswer(ctx, cc, d)
-	case TypeIceCandidate, TypeMediaState:
-		// Phase 8+ territory — helpers exist (T034A) but relay is not
-		// wired until ICE / media_state dispatch lands.
+	case TypeIceCandidate:
+		return h.handleIceCandidate(ctx, cc, d)
+	case TypeMediaState:
+		// Phase 10+ territory — helper exists (T034A) but relay is not
+		// wired until media_state dispatch lands.
 		h.writeError(ctx, cc, &DecodeError{
 			Code:    CodeMalformed,
 			Message: "message type not yet supported in this phase",
@@ -959,10 +961,20 @@ func (h *Handler) handleSDPRelay(ctx context.Context, cc *connCtx, d *Decoded, t
 		return nil
 	}
 	if err := remoteConn.SendJSON(outEnv); err != nil {
+		// Write failed — structured observability must NOT claim
+		// success. We surface the failure to the sender as
+		// `internal_error` (the best generic code for "your message
+		// could not be delivered to the remote peer"), log the
+		// failure, and stop without emitting the success line.
 		h.Log.Warn("sdp relay failed",
 			slog.String("type", string(t)),
 			slog.String("peer_id", remotePeerID),
 			slog.String("error", err.Error()))
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeInternalError,
+			Message: "remote peer unreachable",
+		}, d.Envelope.RequestID)
+		return nil
 	}
 
 	h.Log.Info("sdp relayed",
@@ -970,6 +982,122 @@ func (h *Handler) handleSDPRelay(ctx context.Context, cc *connCtx, d *Decoded, t
 		slog.String("type", string(t)),
 		slog.String("from_peer_id", cc.peerID),
 		slog.String("to_peer_id", remotePeerID),
+	)
+	return nil
+}
+
+// ---------------------------------------------------------------------
+// Phase 8 — ice_candidate relay (T063A)
+// ---------------------------------------------------------------------
+
+// handleIceCandidate validates the sender's state (contract §3.10 +
+// data-model §C.2) and relays the payload bytes verbatim to the remote
+// peer. Critically, the server NEVER parses `payload.candidate.candidate`
+// — NFR-003, Principle III. Structured logs record counters only:
+// `from_peer_id`, `to_peer_id`, `end_of_candidates`. Candidate strings,
+// sdpMid, and sdpMLineIndex are NOT logged.
+//
+// The `candidate: ""` / missing-key malformed cases are already caught
+// by IceCandidatePayload.Validate() (decoded before dispatch); a
+// DecodeError(Code: CodeMalformed) flows through `writeError` to the
+// sender without ever reaching this function.
+func (h *Handler) handleIceCandidate(ctx context.Context, cc *connCtx, d *Decoded) error {
+	if cc.peerID == "" {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "ice_candidate requires an admitted participant",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	rm := h.Rooms.Room(cc.roomID)
+	if rm == nil {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "room not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+
+	rm.Lock()
+	p := rm.FindByPeerID(cc.peerID)
+	if p == nil {
+		rm.Unlock()
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "participant not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	// §3.10 truth table: either peer may send trickle candidates while
+	// media-ready and in role-assigned / negotiating / connected.
+	role := rm.AssignedRole(cc.peerID)
+	if relayErr := p.CanSendIceCandidate(role); relayErr != nil {
+		rm.Unlock()
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    ErrorCode(relayErr.Code),
+			Message: relayErr.Message,
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	remote := rm.ResolveRemote(cc.peerID)
+	if remote == nil {
+		rm.Unlock()
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "remote peer not present",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	remoteConn := remote.Conn
+	remotePeerID := remote.PeerID
+	rm.Unlock()
+
+	// Relay payload bytes verbatim. `d.Envelope.Payload` is a
+	// `json.RawMessage` captured BEFORE decodePayload ran, so it still
+	// carries the original `candidate` / `candidate: null` body without
+	// any server-side parsing. NFR-003.
+	outEnv := Envelope{
+		V:       ContractVersion,
+		Type:    TypeIceCandidate,
+		RoomID:  cc.roomID,
+		From:    cc.peerID,
+		To:      remotePeerID,
+		TS:      time.Now().UnixMilli(),
+		Payload: d.Envelope.Payload,
+	}
+	if remoteConn == nil {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "remote peer not present",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	if err := remoteConn.SendJSON(outEnv); err != nil {
+		// Write failed — ICE is best-effort for protocol purposes but
+		// the structured log must still reflect reality. Emit the
+		// warning, do NOT fall through to the "relayed" success line.
+		// ICE loss shows up on the remote peer as "no candidate ever
+		// arrived" and is surfaced there via the Learning Inspector
+		// end-of-candidates signal.
+		h.Log.Warn("ice_candidate relay failed",
+			slog.String("peer_id", remotePeerID),
+			slog.String("error", err.Error()))
+		return nil
+	}
+
+	// `payload.Candidate == nil` here means end-of-candidates. Derive
+	// the boolean from the already-decoded payload so we do not re-parse
+	// the raw body. The decoded payload cannot be nil at this point —
+	// decodePayload has already populated it — but guard defensively.
+	endOfCandidates := false
+	if payload, ok := d.Message.(*IceCandidatePayload); ok && payload != nil {
+		endOfCandidates = payload.Candidate == nil
+	}
+	h.Log.Info("ice_candidate relayed",
+		slog.String("event", "ice_candidate_relay"),
+		slog.String("from_peer_id", cc.peerID),
+		slog.String("to_peer_id", remotePeerID),
+		slog.Bool("end_of_candidates", endOfCandidates),
 	)
 	return nil
 }

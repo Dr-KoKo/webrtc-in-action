@@ -11,7 +11,9 @@
 import { JoinForm } from "./JoinForm";
 import { EventLogPanel } from "./EventLogPanel";
 import { LocalVideo } from "./LocalVideo";
+import { RemoteVideo } from "./RemoteVideo";
 import { StateIndicators } from "./StateIndicators";
+import { LearningInspector } from "./LearningInspector";
 
 export function AppShell() {
   return (
@@ -19,14 +21,16 @@ export function AppShell() {
       <header>
         <h1>webrtc-lab</h1>
         <p>
-          1:1 WebRTC Learning Call — Phase 6: admission + local
-          media.
+          1:1 WebRTC Learning Call — Phase 8: trickle ICE + remote
+          media + Learning Inspector v1.
         </p>
       </header>
       <div className="app__grid">
         <JoinForm />
         <LocalVideo />
+        <RemoteVideo />
         <StateIndicators />
+        <LearningInspector />
         <EventLogPanel />
       </div>
     </main>

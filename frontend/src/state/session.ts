@@ -98,6 +98,7 @@ export type SessionAction =
       message: ParticipantReleasedMessage;
     }
   | { type: "READY_FOR_OFFER" }
+  | { type: "CONNECTION_ESTABLISHED" }
   | { type: "RETRY_REQUESTED" }
   | { type: "LEAVE_REQUESTED" }
   | { type: "TRANSPORT_CHANGED"; transport: SignalingTransportState };
@@ -218,6 +219,17 @@ export function sessionReducer(
         return state;
       }
       return { ...state, session: "connecting" };
+
+    case "CONNECTION_ESTABLISHED":
+      // Phase 8: RTCPeerConnection reached connectionState === "connected".
+      // Only promote from `connecting`; the action is a no-op in any
+      // other state so a spurious event during renegotiation or
+      // cleanup is harmless (future cleanup phases will layer on
+      // explicit transitions).
+      if (state.session !== "connecting") {
+        return state;
+      }
+      return { ...state, session: "connected" };
 
     case "PARTICIPANT_RELEASED": {
       // Server released our slot. Phase 6 only wires the media_failed

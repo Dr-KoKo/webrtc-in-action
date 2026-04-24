@@ -1172,14 +1172,14 @@ is ever created before `ready_for_offer`.
 reaches `connected` within 5 s on localhost (SC-002). Learning
 Inspector shows at least one `host` candidate pair.
 
-- [ ] T057 Wire `onicecandidate` → send `ice_candidate`; send `{candidate: null}` on end-of-candidates — `frontend/src/webrtc/peer-connection.ts`
-- [ ] T058 Implement `IceBuffer` (buffer remote candidates until remote description is set; drain on resolve; clear on cleanup) — `frontend/src/webrtc/ice-buffer.ts`
-- [ ] T059 On inbound `ice_candidate`: addIceCandidate OR buffer; handle `candidate: null` — `frontend/src/webrtc/peer-connection.ts`
-- [ ] T060 [P] Implement `RemoteVideo.tsx` from `ontrack`; add audio track autoplay — `frontend/src/components/RemoteVideo.tsx`
-- [ ] T061 [P] Log `iceconnectionstatechange`, `icegatheringstatechange`, `connectionstatechange` into event log — `frontend/src/state/peer-connection.ts`, `frontend/src/state/event-log.ts`
-- [ ] T062 Implement Learning Inspector v1 (FR-030): SDP m-lines, ICE candidate types (`host`/`srflx`/`prflx`/`relay`), STUN/TURN configured vs observed — `frontend/src/webrtc/learning-inspector.ts`, `frontend/src/components/LearningInspector.tsx`
-- [ ] T063 [P] Unit tests for `IceBuffer` (reordered candidates, early candidates buffered, late null drain) — `frontend/tests/unit/ice-buffer.spec.ts`
-- [ ] T063A Implement server-side `ice_candidate` relay (stateful validators; relay `candidate` object and `candidate: null`; reject `candidate: ""`; never parse / log candidate strings) — `signaling/internal/signaling/handler.go`, `signaling/tests/protocol_flow_test.go`
+- [X] T057 Wire `onicecandidate` → send `ice_candidate`; send `{candidate: null}` on end-of-candidates — `frontend/src/webrtc/peer-connection.ts`
+- [X] T058 Implement `IceBuffer` (buffer remote candidates until remote description is set; drain on resolve; clear on cleanup) — `frontend/src/webrtc/ice-buffer.ts`
+- [X] T059 On inbound `ice_candidate`: addIceCandidate OR buffer; handle `candidate: null` — `frontend/src/webrtc/peer-connection.ts`
+- [X] T060 [P] Implement `RemoteVideo.tsx` from `ontrack`; add audio track autoplay — `frontend/src/components/RemoteVideo.tsx`
+- [X] T061 [P] Log `iceconnectionstatechange`, `icegatheringstatechange`, `connectionstatechange` into event log — `frontend/src/state/peer-connection.ts`, `frontend/src/state/event-log.ts`
+- [X] T062 Implement Learning Inspector v1 (FR-030): SDP m-lines, ICE candidate types (`host`/`srflx`/`prflx`/`relay`), STUN/TURN configured vs observed — `frontend/src/webrtc/learning-inspector.ts`, `frontend/src/components/LearningInspector.tsx`
+- [X] T063 [P] Unit tests for `IceBuffer` (reordered candidates, early candidates buffered, late null drain) — `frontend/tests/unit/ice-buffer.spec.ts`
+- [X] T063A Implement server-side `ice_candidate` relay (stateful validators; relay `candidate` object and `candidate: null`; reject `candidate: ""`; never parse / log candidate strings) — `signaling/internal/signaling/handler.go`, `signaling/tests/protocol_flow_test.go`
 
 ### T057
 - **Phase**: 8 — ICE candidate exchange and remote media

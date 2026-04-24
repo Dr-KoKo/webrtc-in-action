@@ -1,4 +1,4 @@
-// RTCPeerConnection wrapper — Phase 7 (T050–T054).
+// RTCPeerConnection wrapper — Phase 7 (T050–T054) + Phase 8 (T057/T060).
 //
 // Centralizes construction + lifecycle of the browser's
 // `RTCPeerConnection` + the offerer's `RTCDataChannel("chat")`. Keeps
@@ -6,7 +6,7 @@
 // and data-model §B.4 / §B.5) — the handle below is held in a ref by
 // `PeerConnectionProvider`.
 //
-// Scope (Phase 7):
+// Scope (Phase 7 + Phase 8):
 // - Construct the PC with server-provided `iceServers`.
 // - `attachLocalTracks(stream)` — adds existing audio + video tracks.
 // - Offerer-only `createChatDataChannel()` — must run BEFORE
@@ -16,10 +16,11 @@
 //   setLocal), `applyAnswer` (offerer: setRemote).
 // - Wires the four getter-backing state listeners so the caller can
 //   mirror them into the PeerConnectionSlice.
+// - Phase 8 additions: `onIceCandidate` emits local candidates for
+//   relay (null for end-of-candidates); `onTrack` delivers remote
+//   tracks; `addRemoteIceCandidate` proxies `addIceCandidate` so the
+//   provider + IceBuffer share one code path.
 //
-// Deferred to Phase 8:
-// - `onicecandidate` trickle + `addIceCandidate` buffering (§B.6).
-// - `ontrack` remote-media rendering.
 // Deferred to Phase 9:
 // - DataChannel `onopen/onmessage` handling.
 
@@ -29,8 +30,9 @@ export type PeerConnectionRole = "offerer" | "answerer";
 
 export interface PeerConnectionEvents {
   // Each callback is optional; providers can wire only the slots they
-  // need. Phase 7 wires all four; Phase 8+ will add `onIceCandidate`
-  // and `onTrack` to this interface.
+  // need. Phase 7 wires the four state getters + optional DC hook;
+  // Phase 8 adds `onIceCandidate` (trickle ICE) and `onTrack`
+  // (remote media delivery).
   onSignalingStateChange?: (state: RTCSignalingState) => void;
   onConnectionStateChange?: (state: RTCPeerConnectionState) => void;
   onIceConnectionStateChange?: (state: RTCIceConnectionState) => void;
@@ -39,6 +41,15 @@ export interface PeerConnectionEvents {
   // arrives. Phase 7 logs it for observability; Phase 9 will wire
   // `onmessage`.
   onDataChannel?: (dc: RTCDataChannel) => void;
+  // Phase 8 (T057). Fired for every local candidate the browser
+  // gathers, plus one final call with `null` signalling end-of-
+  // candidates. Callers forward these verbatim over signaling per
+  // contract §3.10.
+  onIceCandidate?: (candidate: RTCIceCandidateInit | null) => void;
+  // Phase 8 (T060). Fired once per remote track delivered via
+  // `ontrack`. The caller aggregates audio+video into a single
+  // remote `MediaStream`.
+  onTrack?: (event: RTCTrackEvent) => void;
 }
 
 export interface CreatePeerConnectionOptions extends PeerConnectionEvents {
@@ -76,6 +87,12 @@ export interface PeerConnectionHandle {
   ): Promise<RTCSessionDescriptionInit>;
   /** Offerer: setRemoteDescription(answer). */
   applyAnswer(answer: RTCSessionDescriptionInit): Promise<void>;
+  /**
+   * Adds a remote ICE candidate (Phase 8). The caller is responsible
+   * for buffering vs. immediate apply (see `IceBuffer`); this method
+   * is a thin proxy so the IceBuffer can inject a test fake.
+   */
+  addRemoteIceCandidate(candidate: RTCIceCandidateInit): Promise<void>;
   /** Closes the PC, releases listeners, idempotent. */
   close(): void;
 }
@@ -144,6 +161,32 @@ export function createPeerConnection(
     const cb = options.onDataChannel;
     pc.addEventListener("datachannel", (ev) => {
       cb(ev.channel);
+    });
+  }
+  if (options.onIceCandidate) {
+    const cb = options.onIceCandidate;
+    pc.addEventListener("icecandidate", (ev) => {
+      // `event.candidate === null` signals end-of-candidates per the
+      // WebRTC spec. We forward that sentinel to the callback so the
+      // provider can relay it as `{candidate: null}` (contract §3.10).
+      // A candidate with `candidate === ""` is technically legal per
+      // the DOM type but is treated as malformed by our signaling
+      // layer; the provider converts it into the null marker.
+      if (ev.candidate === null) {
+        cb(null);
+        return;
+      }
+      // `RTCIceCandidate.toJSON` returns exactly the
+      // `RTCIceCandidateInit` shape the contract expects. We avoid
+      // hand-mapping fields so future spec additions (e.g.,
+      // `relayProtocol`) flow through unchanged.
+      cb(ev.candidate.toJSON());
+    });
+  }
+  if (options.onTrack) {
+    const cb = options.onTrack;
+    pc.addEventListener("track", (ev) => {
+      cb(ev);
     });
   }
 
@@ -217,6 +260,12 @@ export function createPeerConnection(
       requireOpen("applyAnswer");
       requireOfferer("applyAnswer");
       await pc.setRemoteDescription(answer);
+    },
+    async addRemoteIceCandidate(
+      candidate: RTCIceCandidateInit,
+    ): Promise<void> {
+      requireOpen("addRemoteIceCandidate");
+      await pc.addIceCandidate(candidate);
     },
     close(): void {
       if (closed) return;

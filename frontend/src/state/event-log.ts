@@ -36,12 +36,17 @@ export type EventLogEntryType =
   | "answer_received"
   | "signaling_state_changed"
   | "peer_connection_state_changed"
+  // Phase 8 — trickle ICE + remote media. Summaries include candidate
+  // type (host/srflx/prflx/relay) + protocol; raw candidate strings
+  // are never stored (NFR-006 / contract §4 / Principle VIII).
+  | "ice_candidate_sent"
+  | "ice_candidate_received"
+  | "remote_track_received"
   // future-phase canonical inbound message pass-throughs — the
   // dispatcher's fallback branch emits msg.type verbatim while the
   // phase-specific handler is still pending.
   | "media_ready"
   | "media_failed"
-  | "ice_candidate"
   | "media_state"
   | "peer_left"
   | "participant_released"
