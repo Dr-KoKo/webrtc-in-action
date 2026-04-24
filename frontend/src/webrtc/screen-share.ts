@@ -44,7 +44,15 @@ export type ScreenShareStopSource = "app" | "browser";
 
 export type ScreenShareStartOutcome =
   | { ok: true }
-  | { ok: false; reason: "cancelled" | "no-video-sender" | "no-display-media" | "error"; detail?: string };
+  | {
+      ok: false;
+      reason:
+        | "cancelled"
+        | "no-video-sender"
+        | "no-display-media"
+        | "no-video-track"
+        | "error";
+    };
 
 export interface ScreenShareController {
   /** Start screen share: getDisplayMedia({video:true}) → replaceTrack. */
@@ -136,7 +144,7 @@ export function createScreenShareController(
           ...(name !== undefined ? { code: name } : {}),
         }),
       );
-      return { ok: false, reason: "error", ...withDetail(err) };
+      return { ok: false, reason: "error" };
     }
 
     const [videoTrack] = stream.getVideoTracks();
@@ -145,7 +153,7 @@ export function createScreenShareController(
       // observed in practice but contract-wise we must not call
       // replaceTrack with `undefined`.
       stopStreamTracks(stream);
-      return { ok: false, reason: "error", detail: "no_video_track" };
+      return { ok: false, reason: "no-video-track" };
     }
 
     screenTrack = videoTrack;
@@ -165,7 +173,7 @@ export function createScreenShareController(
           code: "replace_track_failed",
         }),
       );
-      return { ok: false, reason: "error", ...withDetail(err) };
+      return { ok: false, reason: "error" };
     }
 
     // Browser-native stop: the "Stop sharing" banner ends the track.
@@ -200,66 +208,76 @@ export function createScreenShareController(
   async function stop(source: ScreenShareStopSource): Promise<void> {
     if (!screenTrack || stopping) return;
     stopping = true;
-    const sender = hooks.getVideoSender();
-    const cameraTrack = hooks.getCameraTrack();
-    const target = cameraTrack && cameraTrack.readyState === "live"
-      ? cameraTrack
-      : null;
+    // `finally` guarantees `stopping = false` even if a caller-supplied
+    // hook (e.g. `getCameraTrack`, `getVideoSender`, `log`,
+    // `emitMediaState`) throws. Without it, a throw before
+    // `screenTrack = null` would latch the flag `true` and every
+    // future `stop()` call would early-return on `stopping`, leaving
+    // the screen capture live.
     try {
-      if (sender) {
-        // replaceTrack(null) is legal and does NOT trigger renegotiation
-        // (research §4). The transceiver stays in the same SDP slot;
-        // only the payload stops flowing. Remote's existing camera-off
-        // indicator renders unchanged.
-        await sender.replaceTrack(target);
+      const sender = hooks.getVideoSender();
+      const cameraTrack = hooks.getCameraTrack();
+      const target = cameraTrack && cameraTrack.readyState === "live"
+        ? cameraTrack
+        : null;
+      try {
+        if (sender) {
+          // replaceTrack(null) is legal and does NOT trigger
+          // renegotiation (research §4). The transceiver stays in the
+          // same SDP slot; only the payload stops flowing. Remote's
+          // existing camera-off indicator renders unchanged.
+          await sender.replaceTrack(target);
+        }
+      } catch (err) {
+        hooks.log(
+          makeEventLogEntry({
+            type: "screen_share_stopped",
+            direction: "local",
+            summary: `replaceTrack(camera) failed (${errorName(err) ?? "unknown"})`,
+            code: "replace_track_failed",
+          }),
+        );
+        // Fall through: we still need to release the screen track +
+        // emit media_state so the remote indicator flips within
+        // SC-007.
       }
-    } catch (err) {
+
+      const endingTrack = screenTrack;
+      const endingStream = screenStream;
+      screenTrack = null;
+      screenStream = null;
+
+      // Release the screen capture so the browser clears the per-tab
+      // / OS "sharing" affordance. Safe on tracks already ended by
+      // the browser-native stop path.
+      try {
+        endingTrack.stop();
+      } catch {
+        // idempotent
+      }
+      if (endingStream) {
+        stopStreamTracks(endingStream);
+      }
+
+      hooks.log(
+        makeEventLogEntry({
+          type: "track_replaced",
+          direction: "local",
+          summary: target ? "video sender: screen → camera" : "video sender: screen → none",
+        }),
+      );
       hooks.log(
         makeEventLogEntry({
           type: "screen_share_stopped",
           direction: "local",
-          summary: `replaceTrack(camera) failed (${errorName(err) ?? "unknown"})`,
-          code: "replace_track_failed",
+          summary: `screen share stopped (source=${source})`,
+          code: source,
         }),
       );
-      // Fall through: we still need to release the screen track + emit
-      // media_state so the remote indicator flips within SC-007.
+      hooks.emitMediaState("inactive");
+    } finally {
+      stopping = false;
     }
-
-    const endingTrack = screenTrack;
-    const endingStream = screenStream;
-    screenTrack = null;
-    screenStream = null;
-
-    // Release the screen capture so the browser clears the per-tab /
-    // OS "sharing" affordance. Safe on tracks already ended by the
-    // browser-native stop path.
-    try {
-      endingTrack.stop();
-    } catch {
-      // idempotent
-    }
-    if (endingStream) {
-      stopStreamTracks(endingStream);
-    }
-
-    hooks.log(
-      makeEventLogEntry({
-        type: "track_replaced",
-        direction: "local",
-        summary: target ? "video sender: screen → camera" : "video sender: screen → none",
-      }),
-    );
-    hooks.log(
-      makeEventLogEntry({
-        type: "screen_share_stopped",
-        direction: "local",
-        summary: `screen share stopped (source=${source})`,
-        code: source,
-      }),
-    );
-    hooks.emitMediaState("inactive");
-    stopping = false;
   }
 
   return {
@@ -279,14 +297,6 @@ function errorName(err: unknown): string | undefined {
     if (typeof n === "string") return n;
   }
   return undefined;
-}
-
-function withDetail(err: unknown): { detail?: string } {
-  if (typeof err === "object" && err !== null && "message" in err) {
-    const m = (err as { message: unknown }).message;
-    if (typeof m === "string" && m.length > 0) return { detail: m };
-  }
-  return {};
 }
 
 function stopStreamTracks(stream: MediaStream): void {

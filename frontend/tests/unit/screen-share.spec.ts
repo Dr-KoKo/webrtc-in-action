@@ -298,3 +298,68 @@ describe("screen-share media_state emissions (§3.11)", () => {
     expect(h.emitted).toEqual(["active", "inactive"]);
   });
 });
+
+// ---------------------------------------------------------------------
+// stop() is idempotent when a hook throws between `stopping = true`
+// and `screenTrack = null`. Without the try/finally, the flag would
+// latch and every subsequent stop() would early-return.
+//
+// Note on the setup: the ambient `replaceTrack` try/catch inside
+// stop() already swallows sender errors AND clears `screenTrack`
+// before `stopping = false` runs, so a rejected replaceTrack alone
+// cannot distinguish "flag cleared via finally" from "flag latched
+// but hidden by the `!screenTrack` early-return." The throw must
+// happen BEFORE `screenTrack = null` — i.e., from getCameraTrack
+// or getVideoSender. We make `getCameraTrack` throw once to force
+// exactly that path.
+// ---------------------------------------------------------------------
+
+describe("screen-share.stop is idempotent under hook throws (T075)", () => {
+  it("re-entering stop() after a throw from getCameraTrack still proceeds", async () => {
+    const camera = makeVideoTrack();
+    const sender = makeVideoSender(camera);
+    const screen = makeVideoTrack();
+    const emitted: Array<"active" | "inactive"> = [];
+    const log: EventLogEntry[] = [];
+    // Mutable pointer so we can swap the behaviour between calls.
+    let cameraTrackImpl: () => MediaStreamTrack | null = () =>
+      camera as unknown as MediaStreamTrack;
+
+    const hooks: ScreenShareHooks = {
+      getVideoSender: () => sender as unknown as RTCRtpSender,
+      getCameraTrack: () => cameraTrackImpl(),
+      emitMediaState: (s) => {
+        emitted.push(s);
+      },
+      log: (entry) => {
+        log.push(entry);
+      },
+      getDisplayMedia: vi.fn(async () => makeScreenStream(screen)),
+    };
+    const ctrl = createScreenShareController(hooks);
+    await ctrl.start();
+    expect(ctrl.isActive()).toBe(true);
+
+    // First stop(): getCameraTrack throws. With the finally fix, the
+    // throw escapes but `stopping` is cleared; without it, `stopping`
+    // stays `true` and the second stop() below would early-return.
+    cameraTrackImpl = () => {
+      throw new Error("synthetic hook failure");
+    };
+    await expect(ctrl.stop("app")).rejects.toThrow("synthetic hook failure");
+    // screenTrack is NOT cleared when the throw escapes before
+    // `screenTrack = null` — the controller is still "active."
+    expect(ctrl.isActive()).toBe(true);
+
+    // Second stop(): reset getCameraTrack so the path runs clean.
+    sender.replaceTrack.mockClear();
+    cameraTrackImpl = () => camera as unknown as MediaStreamTrack;
+    await ctrl.stop("app");
+    // Proved: stopping was cleared via finally. If latched, this
+    // call would have early-returned and replaceTrack would not have
+    // been called.
+    expect(sender.replaceTrack).toHaveBeenCalledTimes(1);
+    expect(sender.replaceTrack.mock.calls[0][0]).toBe(camera);
+    expect(ctrl.isActive()).toBe(false);
+  });
+});
