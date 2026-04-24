@@ -307,6 +307,64 @@ spec if appetite arises.
 
 ---
 
+## T102 — README + quickstart polish
+
+### Relative-link resolution
+
+Enumerated via `rg -no '\]\(\.\/[^)]+\)' README.md
+specs/001-webrtc-1to1-call/quickstart.md`. `README.md` yielded 20
+relative links; `quickstart.md` yielded 0 (all its cross-refs are
+in-document heading anchors). Every `README.md` target was
+`ls -d`-checked and exists on disk. Heading-anchor links
+(`#4-walk-the-happy-path`, `#6-optional-enable-coturn-turn-relay`,
+`#7-cross-browser-notes`) map to the §4 / §6 / §7 level-2 headings
+in `quickstart.md`.
+
+### Quickstart §2 / §3 re-walk vs README §"Quick start"
+
+README §"Quick start" (authoritative for the fresh-clone flow)
+prescribes:
+
+1. `cp .env.example .env`
+2. `docker compose up --build`
+3. Open `https://localhost:5173/` and bypass the self-signed cert.
+
+Pre-Phase-14 `quickstart.md` §2/§3 had drifted: the env-file bootstrap
+was missing (§2 jumped straight to `docker compose up --build`), the
+expected-output block still mirrored the pre-Phase-13 Vite dev server
+format (`VITE v5.x ready in NNN ms`), and §3 pointed at
+`http://localhost:5173/` (plain HTTP, no mention of the self-signed
+cert warning from `@vitejs/plugin-basic-ssl`). Updated in this phase
+so that §2 opens with `cp .env.example .env`, points at the prod
+compose file's expected JSON structured-log first line, explains the
+healthcheck gating, and mentions the `.env.dev.example` dev-persona
+equivalent; §3 now uses `https://localhost:5173/` and cross-refs §7
+for the self-signed bypass.
+
+### Quickstart §6 vs Phase 13 env split
+
+Phase 13 split `.env.example` into `.env.example` (prod persona,
+default compose auto-loads `.env`) and `.env.dev.example` (dev
+persona, requires `--env-file .env.dev`). Pre-Phase-14 `quickstart.md`
+§6 instructed `export VITE_TURN_URL=…` shell variables directly,
+which predated the two-file split. Rewritten in this phase to place
+the five TURN variables (`VITE_TURN_URL`, `VITE_TURN_USERNAME`,
+`VITE_TURN_CREDENTIAL`, `TURN_USERNAME`, `TURN_PASSWORD`) in `.env`
+(copied from `.env.example` per §2) — matching the inline recipe in
+`docker-compose.yml`'s commented coturn block — with a closing pointer
+at the dev-persona path via `.env.dev` + `--env-file`.
+
+### NFR-005 language
+
+No changes in Phase 14 broaden NFR-005. The existing "MVP is
+**local-dev only** — there is no cloud deploy, no managed TURN, no
+auth, no persistence" disclaimer in `README.md` and the matching
+"Everything here assumes **local development**" in `quickstart.md` §0
+both remain in place. No "production-ready" / "end-to-end encrypted"
+/ "cloud-deployable" language was introduced.
+
+---
+
 ## T095 — Happy-path manual verification (SC-001..SC-009)
 
 **Status**: DEFERRED — human run required. No human two-browser run
@@ -389,4 +447,36 @@ tests and do not require a live two-browser run.
 | EC-013 | — (offer collision / glare) | Covered by `signaling/tests/messages_test.go` split-state validator tests + the deterministic-offerer rule (FR-010a) which makes glare unreachable by design. | covered by tests (protocol-flow) | No live run possible — by-construction unreachable. |
 
 ---
+
+## Phase 14 exit summary
+
+- T097: three gates green (185/185 vitest; `tsc --noEmit` exit 0;
+  `go test ./...` ok).
+- T098: every §3.1–§3.15 type + every `payload.result` / `reason` enum
+  present in `schema.ts`, `envelope.go` + `messages.go`, `handler.go`,
+  `dispatcher.ts`. Zero missing rows.
+- T099: zero forbidden-name hits as message types; all bare-word hits
+  are either comments or legitimate payload enum values per §3.3 /
+  §3.13.
+- T100: pure-relay confirmed — `offer`/`answer`/`ice_candidate`/
+  `media_state` forward `d.Envelope.Payload` (raw bytes captured
+  pre-decode) verbatim; `.SDP`/`.Candidate` accesses outside
+  `messages.go` validators are one nil-check on `payload.Candidate` for
+  the `end_of_candidates` log-field derivation (justified); no
+  `json.Unmarshal` in `handler.go`; no `pion`-style WebRTC library
+  import.
+- T101: all three refined content-pattern greps return zero hits over
+  a 67 s observed window (21 log lines). The original literal
+  substring grep's two hits are structured event-name metadata, not
+  payload content (methodology note above).
+- T102: every `README.md` relative link resolves; quickstart §2 / §3
+  updated to match README's `cp .env.example .env` + HTTPS flow;
+  quickstart §6 rewritten onto the Phase 13 two-env-file model.
+- T095 / T096: templates filled in with DEFERRED rows (human run
+  required) and exact resume recipes. No rows fabricated.
+
+Branch state: ready for merge review. No NFR-003 violations, no
+missing contract types, no forbidden types in runtime code. Human
+exit gate (T095 / T096 live walkthroughs) remains the reviewer's
+step; its absence is flagged honestly rather than glossed.
 

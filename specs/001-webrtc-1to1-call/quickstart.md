@@ -35,20 +35,31 @@ Docker Compose handles both.
 From the repository root:
 
 ```bash
+cp .env.example .env
 docker compose up --build
 ```
 
-Expected output (abbreviated):
+`.env.example` is the prod-persona source of truth (ports, STUN URL,
+`LOG_FORMAT=json`, heartbeat timings); copying it to `.env` lets
+docker-compose auto-load it. For contributor inner-loop work against
+the dev persona (`docker-compose.dev.yml` + `Dockerfile.dev`), use
+`cp .env.dev.example .env.dev` and pass `--env-file .env.dev` —
+`.env.dev` is not auto-loaded.
+
+Expected output (abbreviated — prod compose, distroless signaling +
+`vite preview`):
 
 ```
-signaling-1  | {"level":"info","msg":"listening","addr":":8080"}
-frontend-1   | VITE v5.x ready in NNN ms
-frontend-1   |   ➜ Local:   http://localhost:5173/
+signaling-1  | {"time":"…","level":"INFO","msg":"signaling server starting","event":"server_start","addr":":8080"}
+frontend-1   | ➜ Local:   http://localhost:5173/
 ```
 
-If port 5173 or 8080 is already in use, either free it or override via
-the `.env` file (see `docker-compose.yml` comments). TURN is
-**disabled by default**; see §6 to enable it.
+Signaling passes its `/healthz` before the frontend container starts
+(`depends_on: service_healthy` in `docker-compose.yml`).
+
+If port 5173 or 8080 is already in use, either free it or override
+`FRONTEND_PORT` / `SIGNALING_PORT` in `.env` (see `docker-compose.yml`
+comments). TURN is **disabled by default**; see §6 to enable it.
 
 ---
 
@@ -57,8 +68,13 @@ the `.env` file (see `docker-compose.yml` comments). TURN is
 Open two separate browser windows or profiles at:
 
 ```
-http://localhost:5173/
+https://localhost:5173/
 ```
+
+Both windows will show a self-signed-certificate warning. That is
+expected — the cert is generated at build time by
+`@vitejs/plugin-basic-ssl` and is dev-only. Per-browser bypass is
+documented in §7.
 
 Two tabs of the same profile usually work, but two **different**
 profiles (or two different browsers) is the recommended test matrix
@@ -262,15 +278,26 @@ in the log.
 
 ## 6. Optional: enable coturn (TURN relay)
 
-Uncomment the `coturn` service in `docker-compose.yml` and set the
-env-provided credentials:
+Uncomment the `coturn` service block in `docker-compose.yml` and
+fill the five TURN variables into `.env` (copied from `.env.example`
+per §2) — the `VITE_TURN_*` trio goes to the browser, the
+`TURN_USERNAME` / `TURN_PASSWORD` pair matches them on the coturn
+side:
 
 ```bash
-export VITE_TURN_URL="turn:localhost:3478"
-export VITE_TURN_USERNAME="webrtc"
-export VITE_TURN_CREDENTIAL="supersecret"      # dev only, not a real cred
+# edit .env — defaults in .env.example are commented out; uncomment + fill:
+VITE_TURN_URL=turn:localhost:3478
+VITE_TURN_USERNAME=webrtc
+VITE_TURN_CREDENTIAL=replace-me-dev-only
+TURN_USERNAME=webrtc
+TURN_PASSWORD=replace-me-dev-only
+
 docker compose up --build
 ```
+
+For the dev persona (`docker-compose.dev.yml`), do the same in
+`.env.dev` (copied from `.env.dev.example`) and launch with
+`docker compose -f docker-compose.dev.yml --env-file .env.dev up --build`.
 
 To exercise the "when TURN becomes necessary" learning outcome,
 either:
