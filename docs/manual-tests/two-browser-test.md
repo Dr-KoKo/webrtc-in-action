@@ -1,12 +1,13 @@
 # Manual Two-Browser Test Plan — `001-webrtc-1to1-call`
 
-**Scope**: current branch state (Phases 0–11 merged — Phase 10 adds
+**Scope**: current branch state (Phases 0–12 merged — Phase 10 adds
 the mic/camera toggle covered in T-13; Phase 11 adds screen sharing
-covered in T-14). Phase 12 (polished cleanup / failure UX) is **out
-of scope** — see §8. For the full-feature checklist, see
+covered in T-14; Phase 12 adds the three-path cleanup orchestrator,
+FailurePanel with Leave/Rejoin, and signaling-disconnect UX — covered
+across T-09, T-10, and new T-15). For the full-feature checklist, see
 [`../../specs/001-webrtc-1to1-call/quickstart.md`](../../specs/001-webrtc-1to1-call/quickstart.md).
 
-**Date of last review**: 2026-04-24.
+**Date of last review**: 2026-04-25.
 
 ---
 
@@ -491,11 +492,10 @@ From a clean state:
 - Re-grant on M (OS-level for iOS: Settings → Safari → Camera /
   Microphone → Ask) and retry — full happy path resumes.
 
-### T-09 · Ungraceful disconnect (partial EC-009)
+### T-09 · Ungraceful disconnect (EC-009 + §5.4)
 
-> Phase 12 polish not yet landed — expectations looser than
-> [`../../specs/001-webrtc-1to1-call/quickstart.md`](../../specs/001-webrtc-1to1-call/quickstart.md)
-> §5.4.
+Phase 12 has shipped: the surviving peer runs **Path B** and
+returns cleanly to `waiting-for-peer` with local tracks still live.
 
 Pick one of:
 
@@ -503,30 +503,70 @@ Pick one of:
 - Toggle **airplane mode** on the mobile for ~5 s.
 - Pull the laptop's Ethernet cable or turn Wi-Fi off briefly.
 
-**Pass (on the surviving peer, within ~10 s):**
+**Pass (on the surviving peer, within ~10 s — SC-009):**
 
-- Log records `peer_presence_changed` with `presence: "left",
-  reason: "disconnect"` **and** (because the departing peer had
-  reached `callPhase ∈ {role-assigned, negotiating, connected}`) a
-  `peer_left` with `reason: "disconnect"` — contract §3.4 / §3.12.
-  The valid `presence` enum is `pending-media | ready | in-call |
-  left | released`; `absent` is **not** a contract value.
-- `RemoteVideo` clears or freezes (either acceptable pre-Phase-12;
-  record which).
-- `pc.connectionState` transitions toward `disconnected` / `failed`.
+- Event log records a `peer_presence_changed` row with
+  `presence: "left", reason: "disconnect"` and a `peer_left` row
+  with `reason: "disconnect"` (contract §3.4 / §3.12 — pending-
+  media releases would ride `peer_presence_changed` alone).
+- A `cleanup_completed` row appears with `code=remote_peer_left`
+  (Phase 12 narration — the single source of truth for which
+  cleanup path ran).
+- Session indicator flips to `waiting-for-peer` (NOT `failed` —
+  FR-005 split: remote departure is not a local failure).
+- **Local camera/mic in-use indicator stays on** (the surviving
+  user is still media-ready; the Path B invariant that T087's
+  `Path B — remote peer_left` test locks down).
+- `RemoteVideo` clears (remote tracks detached; the local
+  `<video>` for the surviving peer stays visible).
+- Learning Inspector retains the local SDP / candidate summary but
+  the remote half clears.
+- `pc.connectionState` goes to `closed` (the PC was torn down by
+  Path B; a fresh pairing will build a new one when a new peer
+  joins).
 - No uncaught exceptions in devtools.
 
-### T-10 · Signaling WS drop (partial EC-010)
+### T-10 · Signaling WS drop (EC-010 + §5.5)
+
+Phase 12 has shipped the teachable-moment branch: a WS drop while
+`connected` is a **warning, not a failure** — media keeps flowing
+P2P.
 
 1. With L+M connected, on PC: `docker compose stop signaling`.
 
+**Pass (within ~5 s):**
+
+- Both windows show a `SignalingTransportState = error` indicator
+  and a visible warning ("signaling disconnected — media continues
+  P2P" or equivalent).
+- Session indicator **stays at `connected`** (data-model §B.1.1
+  separation of signaling and media).
+- Audio/video keeps flowing P2P in both directions — the teachable
+  moment.
+- Outgoing `media_state` / `leave_room` / screen-share renegotiation
+  is disabled (mic/camera toggle clicks are accepted locally but
+  produce no `media_state` send; the event log reflects this).
+- Event log carries one `error_occurred` row with
+  `code=transport_error_during_connected`.
+
+2. `docker compose start signaling`, then on each window click
+   Leave in the UI.
+
 **Pass:**
 
-- Both windows show a signaling-error / disconnected indicator.
-- Audio/video keeps flowing P2P — the teachable moment.
-- `docker compose start signaling`; record whether a fresh Join
-  succeeds without a page reload (pre-Phase-12, a reload may be
-  required).
+- Leave runs Path A cleanly on both peers (local tracks stop, WS
+  closes, `cleanup_completed` row with `code=local_leave`).
+- A fresh Join (after both are back at `idle`) succeeds without a
+  page reload — the signaling client reconnects on click.
+
+**Variant — WS dropped before `connected`:**
+
+With L+M in `waiting-for-peer` (one has media-ready, the other
+hasn't): `docker compose stop signaling`. Expected: both sessions
+go **terminal `failed`** with the FailurePanel visible (Leave /
+Rejoin), because no stable P2P exists yet (§B.1.1 pre-connected
+branch). Rejoin after restarting signaling should re-enter the
+normal Join flow.
 
 ### T-11 · Rejoin cycle
 
@@ -622,6 +662,73 @@ With L+M connected (post-T-01):
 - Camera indicator on L (OS-level) stays red after step 4 — picker
   cancel must not even invoke `getUserMedia`.
 
+### T-15 · ICE failure → Path C Leave / Rejoin (EC-006 / EC-007, §5.3)
+
+Phase 12 has shipped the terminal-failure UX. Mirrors T-14's shape
+(four-step flow with explicit pass observables).
+
+With L+M connected (post-T-01):
+
+1. On L's router (or OS firewall), **block all UDP** for 10-15 s.
+   The easiest way: on the PC running compose, disable the
+   gateway's UDP outbound for L's IP briefly, or on the laptop
+   itself run a temporary iptables rule. Alternatively set a
+   Chromium flag `--force-webrtc-ice-candidates-policy=relay`
+   against a non-existent TURN to force failure.
+2. Wait for L's `pc.connectionState` to transition to `failed`.
+3. On L, click **Leave** in the FailurePanel.
+4. (Fresh run) trigger the same failure, then on L click **Rejoin**.
+
+**Pass on L (step 2):**
+
+- Session indicator flips to `failed` — a dedicated terminal
+  state, distinct from `disconnected` or `waiting-for-peer`.
+- The FailurePanel appears with **Leave** and **Rejoin** buttons
+  (no automatic retry — MVP is manual-recovery per FR-005 / EC-006).
+- **Local camera / mic in-use indicator stays on** (tracks remain
+  live until the user clicks a button — §C.5 Path C step 5).
+- Event log includes an `error_occurred` row with
+  `code=ice_failure` and a `cleanup_completed` row with
+  `code=local_failure`.
+- `pc.connectionState` reads `closed` (PC torn down immediately
+  on Path C entry); `iceConnectionState` reads `failed`
+  historically in the log.
+
+**Pass on M (step 2 — the surviving peer):**
+
+- Within ~10 s (SC-009) M observes `peer_presence_changed(left,
+  disconnect)` + `peer_left(disconnect)` + a `cleanup_completed`
+  row with `code=remote_peer_left`.
+- M's session flips to `waiting-for-peer` (Path B — same as T-09).
+
+**Pass on L (step 3 — Leave click):**
+
+- Runs Path A in full — tracks stop, WS closes, session → `idle`.
+- Event log carries a `cleanup_completed` row with
+  `code=local_leave`.
+
+**Pass on L (step 4 — Rejoin click):**
+
+- Runs Path A in full (tracks stop, WS closes, `code=local_leave`
+  event), then **immediately re-enters the normal Join flow** on
+  the previously-used room id. No new contract message is sent —
+  Rejoin is a convenience alias for Leave + fresh Join (§C.5
+  Path C step 7).
+- Browser does NOT re-prompt for camera/mic permission if it was
+  previously granted — expected per-browser behaviour.
+- Session indicator walks `idle → joining → pending-media →
+  waiting-for-peer` as usual.
+
+**Fail signals:**
+
+- Session enters `failed` but FailurePanel has no Leave / Rejoin
+  — regression to the Phase-11 placeholder.
+- Local camera indicator goes off BEFORE the user clicks Leave
+  or Rejoin — §C.5 Path C step 5 violated.
+- Rejoin introduces a new `release_slot` / `restart_join` envelope
+  on the WS — contract violation; tasks.md T082 / review-pass-5
+  pins Rejoin as "Leave + fresh Join" explicitly.
+
 ### T-12 · Server-log hygiene (NFR-003)
 
 During T-01..T-04, on PC in a separate terminal:
@@ -657,7 +764,9 @@ flowchart TD
     R2 --> T09[T-09 ungraceful disconnect]
     T09 --> R3((clean restart))
     R3 --> T10[T-10 signaling WS drop]
-    T10 --> T11[T-11 rejoin cycle]
+    T10 --> R4((clean restart))
+    R4 --> T15[T-15 ICE failure<br/>Leave / Rejoin]
+    T15 --> T11[T-11 rejoin cycle]
     T11 --> DONE[Remove port-forward rules<br/>docker compose down]
 ```
 
@@ -700,6 +809,7 @@ Results
   T-12 server-log hygiene        : PASS / FAIL — <notes>
   T-13 mic/camera toggle         : PASS / FAIL — <notes>
   T-14 screen sharing            : PASS / FAIL — <notes>
+  T-15 ICE failure Leave/Rejoin  : PASS / FAIL — <notes>
 ```
 
 ---
@@ -708,7 +818,4 @@ Results
 
 Do **not** file bugs for these yet — they belong to unmerged phases:
 
-- Leave button, three-path cleanup, ICE-failure terminal state with
-  Leave/Rejoin, signaling-disconnect UX polish (Phase 12 /
-  T080–T087).
 - Coturn TURN-relay happy path (Phase 13 / T092–T093).

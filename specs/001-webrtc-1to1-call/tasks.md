@@ -1599,14 +1599,14 @@ browser-stop; picker cancellation logs; SC-007 met.
 correctly; every failure case in spec Edge Cases (EC-001..EC-013)
 behaves as specified.
 
-- [ ] T080 Implement cleanup **Path A** (local Leave): stop local tracks → close DC → close PC → `leave_room` → close WS → reset reducer → event log `path: "local_leave"` — `frontend/src/webrtc/peer-connection.ts`, `frontend/src/state/session.ts`
-- [ ] T081 Implement cleanup **Path B** (remote `peer_left`): close DC + PC + clear remote state + clear ICE buffer + **keep** local tracks + `connected → waiting-for-peer` — `frontend/src/signaling/dispatcher.ts`, `frontend/src/state/session.ts`
-- [ ] T082 Implement cleanup **Path C** (ICE/fatal PC failure): close DC + PC + clear remote state + `SessionState → failed` + Leave/Rejoin UI; **Rejoin = Path A + fresh Join** (no `release_slot` message) — `frontend/src/state/session.ts`, `frontend/src/components/App.tsx` (or equivalent failure panel)
-- [ ] T083 [P] Wire pending-media release cleanup on the client (no `peer_left` processing; remote indicator returns to `absent`) — `frontend/src/signaling/dispatcher.ts`, `frontend/src/state/session.ts`
-- [ ] T084 Implement signaling-disconnect handling: during `joining|pending-media|waiting-for-peer|connecting` → `SessionState=failed`; during `connected` → `SignalingTransportState=error` with warning + media continues — `frontend/src/signaling/client.ts`, `frontend/src/state/session.ts`
-- [ ] T085 Server-side ungraceful-disconnect detection: WS close OR Pong timeout routes through the same §C.6 classifier as T026 (pending-media → `peer_presence_changed` only; in-call → also `peer_left`) — `signaling/internal/signaling/handler.go`, `signaling/internal/signaling/heartbeat.go`
-- [ ] T086 [P] Server protocol-flow tests: `TestRoomFullRejectsWhilePending`, `TestWSPongTimeoutReleasesSlot`, `TestLeaveDuringNegotiation`, `TestInCallDisconnectEmitsPeerLeft`, `TestPendingMediaDisconnectDoesNotEmitPeerLeft` — `signaling/tests/protocol_flow_test.go`
-- [ ] T087 [P] Client reducer / PC event tests for all three cleanup paths + both signaling-disconnect branches + `TestIceFailureEntersFailed` (PC `connectionState === "failed"` → `SessionState = failed`) — `frontend/tests/unit/cleanup.spec.ts`
+- [X] T080 Implement cleanup **Path A** (local Leave): stop local tracks → close DC → close PC → `leave_room` → close WS → reset reducer → event log `path: "local_leave"` — `frontend/src/webrtc/peer-connection.ts`, `frontend/src/state/session.ts`
+- [X] T081 Implement cleanup **Path B** (remote `peer_left`): close DC + PC + clear remote state + clear ICE buffer + **keep** local tracks + `connected → waiting-for-peer` — `frontend/src/signaling/dispatcher.ts`, `frontend/src/state/session.ts`
+- [X] T082 Implement cleanup **Path C** (ICE/fatal PC failure): close DC + PC + clear remote state + `SessionState → failed` + Leave/Rejoin UI; **Rejoin = Path A + fresh Join** (no `release_slot` message) — `frontend/src/state/session.ts`, `frontend/src/components/App.tsx` (or equivalent failure panel)
+- [X] T083 [P] Wire pending-media release cleanup on the client (no `peer_left` processing; remote indicator returns to `absent`) — `frontend/src/signaling/dispatcher.ts`, `frontend/src/state/session.ts`
+- [X] T084 Implement signaling-disconnect handling: during `joining|pending-media|waiting-for-peer|connecting` → `SessionState=failed`; during `connected` → `SignalingTransportState=error` with warning + media continues — `frontend/src/signaling/client.ts`, `frontend/src/state/session.ts`
+- [X] T085 Server-side ungraceful-disconnect detection: WS close OR Pong timeout routes through the same §C.6 classifier as T026 (pending-media → `peer_presence_changed` only; in-call → also `peer_left`) — `signaling/internal/signaling/handler.go`, `signaling/internal/signaling/heartbeat.go`
+- [X] T086 [P] Server protocol-flow tests: `TestRoomFullRejectsWhilePending`, `TestWSPongTimeoutReleasesSlot`, `TestLeaveDuringNegotiation`, `TestInCallDisconnectEmitsPeerLeft`, `TestPendingMediaDisconnectDoesNotEmitPeerLeft` — `signaling/tests/protocol_flow_test.go`
+- [X] T087 [P] Client reducer / PC event tests for all three cleanup paths + both signaling-disconnect branches + `TestIceFailureEntersFailed` (PC `connectionState === "failed"` → `SessionState = failed`) — `frontend/tests/unit/cleanup.spec.ts`
 
 ### T080
 - **Phase**: 12 — Cleanup and failure handling
