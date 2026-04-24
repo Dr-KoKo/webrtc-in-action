@@ -1,0 +1,98 @@
+# coturn — example config for the 1:1 WebRTC Learning Call.
+#
+# DISABLED by default. Phase 13 of the spec keeps TURN optional so
+# the happy-path localhost flow works with zero configuration; this
+# file exists only for the "understand when TURN is necessary"
+# learning outcome (spec FR-012, quickstart.md §6).
+#
+# To enable:
+#   1. Uncomment the `coturn` service block in docker-compose.yml.
+#   2. Copy .env.example to .env, set:
+#        VITE_TURN_URL=turn:localhost:3478
+#        VITE_TURN_USERNAME=webrtc
+#        VITE_TURN_CREDENTIAL=<a-real-secret>
+#        TURN_USERNAME=webrtc
+#        TURN_PASSWORD=<same-secret-as-VITE_TURN_CREDENTIAL>
+#   3. `docker compose up --build`
+#
+# Credentials are NEVER baked into this file. The coturn container
+# receives them via its CLI `--user=${TURN_USERNAME}:${TURN_PASSWORD}`
+# flag in docker-compose.yml (NFR-002 / NFR-005 — no secrets in git).
+
+# ---------------------------------------------------------------------
+# Listening ports
+# ---------------------------------------------------------------------
+# Standard TURN/STUN UDP port. The compose block publishes this port
+# on the host so the browser in a second window can reach it via
+# `turn:localhost:3478`.
+listening-port=3478
+
+# Uncomment to also accept TCP relays — useful when UDP is blocked
+# on restrictive networks. The example compose block does not publish
+# TCP; uncomment the matching ports line there too.
+# listening-port-tcp=3478
+
+# ---------------------------------------------------------------------
+# Network identity
+# ---------------------------------------------------------------------
+# Realm shown to clients during the long-term credential handshake.
+# Any short string that identifies this learning setup is fine — it
+# is not a DNS name and does not need to resolve.
+realm=webrtc-lab.local
+
+# If you run the stack on a host reachable from the public internet
+# or across NATed networks, you MUST set `external-ip` to the
+# routable IP of the coturn host. Without it, coturn advertises its
+# container-private IP in TURN allocations and remote peers will
+# fail to reach the relay. Uncomment and fill in your host's IP to
+# exercise the WAN-relay path.
+# external-ip=203.0.113.42
+
+# ---------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------
+# Long-term credential mechanism (RFC 5389). The browser and coturn
+# agree on a shared username + password. For anything beyond a
+# throwaway local test, swap this for `use-auth-secret` + a rotating
+# shared secret — but the MVP only needs lt-cred-mech to demonstrate
+# the TURN handshake.
+lt-cred-mech
+
+# No per-user line here on purpose — `--user=...` comes in from the
+# compose CLI so this file never contains a secret.
+
+# ---------------------------------------------------------------------
+# Relay safety (defaults that keep the learning setup sane)
+# ---------------------------------------------------------------------
+# Refuse to relay to RFC 1918 / link-local / loopback addresses — a
+# coturn instance that relays back into your LAN can become a
+# "TURN-as-a-proxy" surprise. Comment these lines out only if you
+# have a specific reason.
+no-multicast-peers
+no-loopback-peers
+
+# Drop CLI telnet admin interface. It would bind on 5766 by default;
+# for a learning tool there is no one to log in.
+no-cli
+
+# ---------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------
+# Send logs to stdout so `docker compose logs coturn` works. `-v`
+# in the compose command (or `verbose` here) adds per-session
+# allocation traces — useful while you are learning the protocol.
+log-file=stdout
+simple-log
+
+# Uncomment to see per-session detail (more noise than you usually
+# want once the setup is working).
+# verbose
+
+# ---------------------------------------------------------------------
+# TLS (commented — the example does not ship certs)
+# ---------------------------------------------------------------------
+# To enable TURN-over-TLS (turns://), provision a cert/key pair,
+# mount them into the container, and uncomment:
+# tls-listening-port=5349
+# cert=/etc/turn-certs/cert.pem
+# pkey=/etc/turn-certs/privkey.pem
