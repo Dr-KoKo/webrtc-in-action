@@ -1,8 +1,9 @@
 # Manual Two-Browser Test Plan — `001-webrtc-1to1-call`
 
-**Scope**: current branch state (Phases 0–9 merged). Phases 10–12
-(mic/camera toggle, screen share, polished cleanup/failure UX) are
-**out of scope** — see §8. For the full-feature checklist, see
+**Scope**: current branch state (Phases 0–10 merged — Phase 10 adds
+the mic/camera toggle covered in T-13). Phases 11–12 (screen share,
+polished cleanup/failure UX) are **out of scope** — see §8. For the
+full-feature checklist, see
 [`../../specs/001-webrtc-1to1-call/quickstart.md`](../../specs/001-webrtc-1to1-call/quickstart.md).
 
 **Date of last review**: 2026-04-24.
@@ -536,6 +537,44 @@ Pick one of:
 - No stale remote video or chat transcript.
 - Event log resets; a fresh Base lifecycle plays out.
 
+### T-13 · Mic / camera toggle (Phase 10, FR-014a, [quickstart §4.2](../../specs/001-webrtc-1to1-call/quickstart.md))
+
+With L+M connected (post-T-01):
+
+1. On L, click **Mute mic**.
+2. On L, click **Turn camera off**.
+3. On L, click **Unmute mic**.
+4. On L, click **Turn camera on**.
+
+**Pass on M (remote view of L):**
+
+- The Media controls "Remote" summary updates within ~1 s of each
+  click: `mic on → off → off → on → on`; `camera on → on → off → on`.
+- Audio from L is silent while muted; L's video is blanked / frozen
+  while its camera is off.
+- Each step produces **exactly one** `media_state` event-log entry
+  on M with `direction: remote` (four entries total across the
+  sequence).
+
+**Pass on L (local echo):**
+
+- Each click produces **exactly one** `media_state` event-log entry
+  with `direction: local`.
+- `pc.signalingState` stays `stable` across all four clicks — no
+  renegotiation (research §4 + plan Phase 10 DoD).
+
+**Fail signals:**
+
+- M's remote indicator stays stale after L clicks → check that the
+  server relayed `media_state` (the Go structured log on PC should
+  show `"event":"media_state_relay"` lines with `from_peer_id` /
+  `to_peer_id` only — never the mic/camera values; the latter would
+  violate §3.11's log-safety rule).
+- `signalingState` flips to `have-local-offer` or similar during a
+  toggle → a regression has wired `createOffer` into the toggle
+  path; this is the exact failure that `tests/unit/media-controls.spec.ts`
+  is supposed to catch.
+
 ### T-12 · Server-log hygiene (NFR-003)
 
 During T-01..T-04, on PC in a separate terminal:
@@ -561,7 +600,8 @@ flowchart TD
     T03 --> T04[T-04 DataChannel chat]
     T04 --> T05[T-05 event-log lifecycle]
     T05 --> T06[T-06 state indicators]
-    T06 --> T12[T-12 server-log hygiene]
+    T06 --> T13[T-13 mic/camera toggle]
+    T13 --> T12[T-12 server-log hygiene]
     T12 --> T07[T-07 third-peer rejection]
     T07 --> R1((clean restart))
     R1 --> T08[T-08 permission denied]
@@ -610,6 +650,7 @@ Results
   T-10 signaling WS drop         : PASS / FAIL — <notes>
   T-11 rejoin cycle              : PASS / FAIL — <notes>
   T-12 server-log hygiene        : PASS / FAIL — <notes>
+  T-13 mic/camera toggle         : PASS / FAIL — <notes>
 ```
 
 ---
@@ -618,8 +659,6 @@ Results
 
 Do **not** file bugs for these yet — they belong to unmerged phases:
 
-- Mic / camera toggle + remote media-state indicator (Phase 10 /
-  T071–T074A).
 - Screen sharing + `replaceTrack` + browser-native stop (Phase 11 /
   T075–T079).
 - Leave button, three-path cleanup, ICE-failure terminal state with
