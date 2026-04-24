@@ -1,9 +1,9 @@
 # Manual Two-Browser Test Plan — `001-webrtc-1to1-call`
 
-**Scope**: current branch state (Phases 0–10 merged — Phase 10 adds
-the mic/camera toggle covered in T-13). Phases 11–12 (screen share,
-polished cleanup/failure UX) are **out of scope** — see §8. For the
-full-feature checklist, see
+**Scope**: current branch state (Phases 0–11 merged — Phase 10 adds
+the mic/camera toggle covered in T-13; Phase 11 adds screen sharing
+covered in T-14). Phase 12 (polished cleanup / failure UX) is **out
+of scope** — see §8. For the full-feature checklist, see
 [`../../specs/001-webrtc-1to1-call/quickstart.md`](../../specs/001-webrtc-1to1-call/quickstart.md).
 
 **Date of last review**: 2026-04-24.
@@ -575,6 +575,53 @@ With L+M connected (post-T-01):
   path; this is the exact failure that `tests/unit/media-controls.spec.ts`
   is supposed to catch.
 
+### T-14 · Screen sharing (Phase 11, FR-017, SC-007, EC-011, [quickstart §4.4](../../specs/001-webrtc-1to1-call/quickstart.md))
+
+With L+M connected (post-T-01):
+
+1. On L, click **Share screen**; pick a window or tab in the picker.
+2. On L, click **Stop sharing** (in-app button).
+3. On L, click **Share screen** again; this time stop via the
+   browser's own "Stop sharing" banner at the top of the window.
+4. On L, click **Share screen** one more time, then **cancel** the
+   picker (Escape / Cancel button in the OS dialog).
+
+**Pass on M (remote view of L):**
+
+- Step 1: `RemoteVideo` swaps to L's shared content within ~1 s;
+  Media controls "Remote" summary shows `screen active`.
+- Step 2: remote video reverts to L's camera; summary shows
+  `screen inactive` within SC-007 (≤ 2 s).
+- Step 3: same revert behaviour as step 2.
+- Step 4: no change at all — L never started sharing.
+
+**Pass on L (local echo):**
+
+- Each of steps 1, 2, 3 produces **exactly one** `media_state`
+  event-log entry with `direction: local` carrying the new
+  `screen=active` / `screen=inactive` value.
+- Step 1 additionally logs `screen_share_started` and one
+  `track_replaced` with summary `video sender: camera → screen`.
+- Step 2 logs `screen_share_stopped` with `code: app` and one
+  `track_replaced` `video sender: screen → camera`.
+- Step 3 logs `screen_share_stopped` with `code: browser` and one
+  `track_replaced` `video sender: screen → camera`.
+- Step 4 logs exactly one `screen_share_cancelled` entry — no
+  `track_replaced`, no `media_state` send, no state mutation.
+- `pc.signalingState` stays `stable` across all four steps — single
+  outgoing video slot invariant (FR-017).
+
+**Fail signals:**
+
+- `signalingState` flips to `have-local-offer` during start or stop
+  → a regression wired `createOffer` into the screen-share path;
+  `tests/unit/screen-share.spec.ts` is the regression guard.
+- M shows a second remote video tile → someone added a track
+  (`addTrack`) instead of replacing it; `replaceTrack` is the only
+  permitted swap.
+- Camera indicator on L (OS-level) stays red after step 4 — picker
+  cancel must not even invoke `getUserMedia`.
+
 ### T-12 · Server-log hygiene (NFR-003)
 
 During T-01..T-04, on PC in a separate terminal:
@@ -601,7 +648,8 @@ flowchart TD
     T04 --> T05[T-05 event-log lifecycle]
     T05 --> T06[T-06 state indicators]
     T06 --> T13[T-13 mic/camera toggle]
-    T13 --> T12[T-12 server-log hygiene]
+    T13 --> T14[T-14 screen sharing]
+    T14 --> T12[T-12 server-log hygiene]
     T12 --> T07[T-07 third-peer rejection]
     T07 --> R1((clean restart))
     R1 --> T08[T-08 permission denied]
@@ -651,6 +699,7 @@ Results
   T-11 rejoin cycle              : PASS / FAIL — <notes>
   T-12 server-log hygiene        : PASS / FAIL — <notes>
   T-13 mic/camera toggle         : PASS / FAIL — <notes>
+  T-14 screen sharing            : PASS / FAIL — <notes>
 ```
 
 ---
@@ -659,8 +708,6 @@ Results
 
 Do **not** file bugs for these yet — they belong to unmerged phases:
 
-- Screen sharing + `replaceTrack` + browser-native stop (Phase 11 /
-  T075–T079).
 - Leave button, three-path cleanup, ICE-failure terminal state with
   Leave/Rejoin, signaling-disconnect UX polish (Phase 12 /
   T080–T087).
