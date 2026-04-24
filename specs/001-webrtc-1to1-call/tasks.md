@@ -1426,11 +1426,11 @@ validation rejects empty and oversized messages.
 explicit `media_state` signaling (FR-014a), never inferred from packet
 flow. No renegotiation triggered by a toggle.
 
-- [ ] T071 Implement `MediaControls.tsx` (mic button, camera button) — `frontend/src/components/MediaControls.tsx`
-- [ ] T072 On toggle: flip `track.enabled` + emit `media_state` (always full triplet: microphone, camera, screenShare) — `frontend/src/state/media.ts`, `frontend/src/webrtc/media-acquisition.ts`
-- [ ] T073 Handle inbound `media_state` → update `RemoteMediaState` slice + event log `media toggled` — `frontend/src/state/media.ts`, `frontend/src/signaling/dispatcher.ts`
-- [ ] T074 [P] Tests that toggling mic/camera does NOT trigger renegotiation (signalingState stays `stable`) — `frontend/tests/unit/media-controls.spec.ts`
-- [ ] T074A Implement server-side `media_state` relay (full triplet required; `mediaReadiness == ready`; relayed to remote peer only; not accepted from pending-media / idle) — `signaling/internal/signaling/handler.go`, `signaling/tests/protocol_flow_test.go`
+- [X] T071 Implement `MediaControls.tsx` (mic button, camera button) — `frontend/src/components/MediaControls.tsx`
+- [X] T072 On toggle: flip `track.enabled` + emit `media_state` (always full triplet: microphone, camera, screenShare) — `frontend/src/state/media.ts`, `frontend/src/webrtc/media-acquisition.ts`
+- [X] T073 Handle inbound `media_state` → update `RemoteMediaState` slice + event log `media toggled` — `frontend/src/state/media.ts`, `frontend/src/signaling/dispatcher.ts`
+- [X] T074 [P] Tests that toggling mic/camera does NOT trigger renegotiation (signalingState stays `stable`) — `frontend/tests/unit/media-controls.spec.ts`
+- [X] T074A Implement server-side `media_state` relay (full triplet required; `mediaReadiness == ready`; relayed to remote peer only; not accepted from pending-media / idle) — `signaling/internal/signaling/handler.go`, `signaling/tests/protocol_flow_test.go`
 
 ### T071
 - **Phase**: 10 — Media controls

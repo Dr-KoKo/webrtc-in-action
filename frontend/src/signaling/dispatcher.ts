@@ -25,6 +25,7 @@ import {
   type ErrorMessage,
   type JoinAcceptedMessage,
   type JoinRejectedMessage,
+  type MediaStateMessage,
   type ParticipantReleasedMessage,
   type PeerPresenceChangedMessage,
   type SignalingMessage,
@@ -168,12 +169,32 @@ function dispatchValidated(
     case "answer":
     case "ice_candidate":
       return;
+    case "media_state": {
+      const remote = msg as MediaStateMessage;
+      const triplet = remote.payload;
+      dispatch({
+        type: "REMOTE_MEDIA_STATE_RECEIVED",
+        triplet,
+      });
+      // One event-log entry per inbound message (T073 DoD). Direction
+      // is "remote" because the message originated on the peer; the
+      // summary is safe (enum values only — no PII).
+      dispatch({
+        type: "EVENT_LOG_APPEND",
+        entry: makeEventLogEntry({
+          type: "media_state",
+          direction: "remote",
+          summary: `media_state received (mic=${triplet.microphone}, camera=${triplet.camera}, screen=${triplet.screenShare})`,
+          transport: "signaling",
+        }),
+      });
+      return;
+    }
     // Canonical messages handled in later phases. We log them so we
     // never "silently swallow" a known type; state mutation belongs to
     // future phases.
     case "media_ready":
     case "media_failed":
-    case "media_state":
     case "peer_left":
     case "leave_room":
       dispatch({

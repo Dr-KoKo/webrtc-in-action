@@ -33,6 +33,12 @@ import {
   type EventLogSlice,
 } from "./event-log";
 import {
+  initialMediaSlice,
+  mediaReducer,
+  type MediaAction,
+  type MediaSlice,
+} from "./media";
+import {
   initialPeerConnectionSlice,
   peerConnectionReducer,
   type PeerConnectionAction,
@@ -51,6 +57,7 @@ export interface RootState {
   peerConnection: PeerConnectionSlice;
   dataChannel: DataChannelSlice;
   chat: ChatSlice;
+  media: MediaSlice;
 }
 
 export type RootAction =
@@ -58,7 +65,8 @@ export type RootAction =
   | EventLogAction
   | PeerConnectionAction
   | DataChannelAction
-  | ChatAction;
+  | ChatAction
+  | MediaAction;
 
 export const initialRootState: RootState = {
   session: initialSessionSlice,
@@ -66,6 +74,7 @@ export const initialRootState: RootState = {
   peerConnection: initialPeerConnectionSlice,
   dataChannel: initialDataChannelSlice,
   chat: initialChatSlice,
+  media: initialMediaSlice,
 };
 
 function isEventLogAction(action: RootAction): action is EventLogAction {
@@ -97,6 +106,14 @@ function isChatAction(action: RootAction): action is ChatAction {
   );
 }
 
+function isMediaAction(action: RootAction): action is MediaAction {
+  return (
+    action.type === "LOCAL_MEDIA_STATE_SET" ||
+    action.type === "REMOTE_MEDIA_STATE_RECEIVED" ||
+    action.type === "MEDIA_STATE_RESET"
+  );
+}
+
 export function rootReducer(state: RootState, action: RootAction): RootState {
   if (isEventLogAction(action)) {
     return {
@@ -120,6 +137,12 @@ export function rootReducer(state: RootState, action: RootAction): RootState {
     return {
       ...state,
       chat: chatReducer(state.chat, action),
+    };
+  }
+  if (isMediaAction(action)) {
+    return {
+      ...state,
+      media: mediaReducer(state.media, action),
     };
   }
   return {

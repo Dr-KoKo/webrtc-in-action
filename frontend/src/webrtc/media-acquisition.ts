@@ -123,3 +123,49 @@ export function stopTracks(stream: MediaStream | null | undefined): void {
     }
   }
 }
+
+// Phase 10 (T072) — flip `track.enabled` on every track of the requested
+// kind. Flipping `enabled` is the canonical WebRTC runtime-mute — it
+// does NOT trigger SDP renegotiation (the track continues to exist in
+// the transceiver; only the payload is silenced / blacked out). Safe on
+// a null stream so the caller can share one code path with the
+// no-local-stream case.
+export function setLocalTrackEnabled(
+  stream: MediaStream | null,
+  kind: "microphone" | "camera",
+  enabled: boolean,
+): void {
+  if (!stream) return;
+  const tracks =
+    kind === "microphone" ? stream.getAudioTracks() : stream.getVideoTracks();
+  for (const track of tracks) {
+    if (track.enabled !== enabled) {
+      track.enabled = enabled;
+    }
+  }
+}
+
+// Derive the contract §3.11 triplet from a live MediaStream. The caller
+// supplies the screen-share status explicitly because Phase 10 only
+// owns mic / camera; Phase 11 (T075+) will wire screen share into this
+// same triplet. A null / empty-of-tracks stream reads as "off" for
+// that kind so the UI renders consistently while media is still being
+// acquired.
+export function readLocalMediaTriplet(
+  stream: MediaStream | null,
+  screenShare: "active" | "inactive",
+): {
+  microphone: "on" | "off";
+  camera: "on" | "off";
+  screenShare: "active" | "inactive";
+} {
+  const audio = stream ? stream.getAudioTracks() : [];
+  const video = stream ? stream.getVideoTracks() : [];
+  const micOn = audio.length > 0 && audio.some((t) => t.enabled);
+  const camOn = video.length > 0 && video.some((t) => t.enabled);
+  return {
+    microphone: micOn ? "on" : "off",
+    camera: camOn ? "on" : "off",
+    screenShare,
+  };
+}

@@ -11,6 +11,7 @@
 import { JoinForm } from "./JoinForm";
 import { EventLogPanel } from "./EventLogPanel";
 import { LocalVideo } from "./LocalVideo";
+import { MediaControls } from "./MediaControls";
 import { RemoteVideo } from "./RemoteVideo";
 import { StateIndicators } from "./StateIndicators";
 import { LearningInspector } from "./LearningInspector";
@@ -30,6 +31,7 @@ export function AppShell() {
         <JoinForm />
         <LocalVideo />
         <RemoteVideo />
+        <MediaControls />
         <StateIndicators />
         <LearningInspector />
         <Chat />

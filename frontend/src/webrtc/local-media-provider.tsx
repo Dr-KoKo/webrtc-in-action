@@ -38,7 +38,7 @@ import {
   type MediaFailedReason,
 } from "./media-acquisition";
 
-interface LocalMediaContextValue {
+export interface LocalMediaContextValue {
   // Stable getter for the live stream. Consumers attach this to a
   // `<video>` via an effect keyed on `streamVersion`.
   getStream: () => MediaStream | null;
@@ -52,7 +52,13 @@ interface LocalMediaContextValue {
   release: () => void;
 }
 
-const LocalMediaContext = createContext<LocalMediaContextValue | null>(null);
+// Exported so tests may provide a custom value (see
+// `tests/unit/media-controls.spec.ts`). Production code MUST go through
+// `<LocalMediaProvider>` + `useLocalMedia()` — the export is a test
+// seam, not a public API.
+export const LocalMediaContext = createContext<LocalMediaContextValue | null>(
+  null,
+);
 
 export interface LocalMediaProviderProps {
   children: ReactNode;
