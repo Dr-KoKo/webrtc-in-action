@@ -42,6 +42,13 @@ export type EventLogEntryType =
   | "ice_candidate_sent"
   | "ice_candidate_received"
   | "remote_track_received"
+  // Phase 9 — DataChannel chat. `chat_message_*` entries carry the
+  // plain text (already validated ≤500 chars); `data_channel_*`
+  // entries narrate the RTCDataChannel readyState machine.
+  | "chat_message_sent"
+  | "chat_message_received"
+  | "data_channel_state_changed"
+  | "data_channel_error"
   // future-phase canonical inbound message pass-throughs — the
   // dispatcher's fallback branch emits msg.type verbatim while the
   // phase-specific handler is still pending.

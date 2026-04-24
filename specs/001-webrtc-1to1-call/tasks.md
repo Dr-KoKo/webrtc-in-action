@@ -1315,13 +1315,13 @@ see and hear each other; Learning Inspector lists at least one
 channel is consumed by the answerer via `ondatachannel`. Event-log
 entries are tagged `transport: "datachannel"`.
 
-- [ ] T064 Implement `data-channel.ts` (open/close/send, `onmessage`, backpressure via `bufferedAmount`) — `frontend/src/webrtc/data-channel.ts`
-- [ ] T065 Wire offerer's `createDataChannel("chat")` into the reducer (T052 already creates it — this wires the `open`/`close`/`message` lifecycle) — `frontend/src/state/data-channel.ts` (or extend `peer-connection.ts`)
-- [ ] T066 Wire answerer's `ondatachannel` handler — `frontend/src/webrtc/peer-connection.ts`
-- [ ] T067 [P] Implement `Chat.tsx` (input, send button, scrollable transcript, safe text rendering per NFR-006) — `frontend/src/components/Chat.tsx`
-- [ ] T068 [P] Implement chat message validation (FR-015a: trimmed non-empty, ≤500 chars) — `frontend/src/state/chat.ts`
-- [ ] T069 [P] Wire chat-channel state indicator (connecting → open → closed) — `frontend/src/components/StateIndicators.tsx`
-- [ ] T070 [P] Tag all chat event-log entries with `transport: "datachannel"` — `frontend/src/state/event-log.ts`
+- [X] T064 Implement `data-channel.ts` (open/close/send, `onmessage`, backpressure via `bufferedAmount`) — `frontend/src/webrtc/data-channel.ts`
+- [X] T065 Wire offerer's `createDataChannel("chat")` into the reducer (T052 already creates it — this wires the `open`/`close`/`message` lifecycle) — `frontend/src/state/data-channel.ts` (or extend `peer-connection.ts`)
+- [X] T066 Wire answerer's `ondatachannel` handler — `frontend/src/webrtc/peer-connection.ts`
+- [X] T067 [P] Implement `Chat.tsx` (input, send button, scrollable transcript, safe text rendering per NFR-006) — `frontend/src/components/Chat.tsx`
+- [X] T068 [P] Implement chat message validation (FR-015a: trimmed non-empty, ≤500 chars) — `frontend/src/state/chat.ts`
+- [X] T069 [P] Wire chat-channel state indicator (connecting → open → closed) — `frontend/src/components/StateIndicators.tsx`
+- [X] T070 [P] Tag all chat event-log entries with `transport: "datachannel"` — `frontend/src/state/event-log.ts`
 
 ### T064
 - **Phase**: 9 — DataChannel chat

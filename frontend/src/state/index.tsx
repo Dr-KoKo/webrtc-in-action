@@ -1,8 +1,10 @@
 // Root reducer + React context.
 //
 // `RootState` composes the shipped slices: `session` (Phase 5/6),
-// `eventLog` (Phase 5), and `peerConnection` (Phase 7 — mirrors the
-// four `RTCPeerConnection` getters from data-model §B.4).
+// `eventLog` (Phase 5), `peerConnection` (Phase 7 — mirrors the
+// four `RTCPeerConnection` getters from data-model §B.4), plus
+// Phase 9's `dataChannel` (B.5 — `absent | connecting | open |
+// closing | closed`) and `chat` (B.8 — transcript entries).
 
 import {
   createContext,
@@ -12,6 +14,18 @@ import {
   type Dispatch,
   type ReactNode,
 } from "react";
+import {
+  chatReducer,
+  initialChatSlice,
+  type ChatAction,
+  type ChatSlice,
+} from "./chat";
+import {
+  dataChannelReducer,
+  initialDataChannelSlice,
+  type DataChannelAction,
+  type DataChannelSlice,
+} from "./data-channel";
 import {
   eventLogReducer,
   initialEventLogSlice,
@@ -35,14 +49,23 @@ export interface RootState {
   session: SessionSlice;
   eventLog: EventLogSlice;
   peerConnection: PeerConnectionSlice;
+  dataChannel: DataChannelSlice;
+  chat: ChatSlice;
 }
 
-export type RootAction = SessionAction | EventLogAction | PeerConnectionAction;
+export type RootAction =
+  | SessionAction
+  | EventLogAction
+  | PeerConnectionAction
+  | DataChannelAction
+  | ChatAction;
 
 export const initialRootState: RootState = {
   session: initialSessionSlice,
   eventLog: initialEventLogSlice,
   peerConnection: initialPeerConnectionSlice,
+  dataChannel: initialDataChannelSlice,
+  chat: initialChatSlice,
 };
 
 function isEventLogAction(action: RootAction): action is EventLogAction {
@@ -59,6 +82,21 @@ function isPeerConnectionAction(
   );
 }
 
+function isDataChannelAction(
+  action: RootAction,
+): action is DataChannelAction {
+  return (
+    action.type === "DATA_CHANNEL_STATE_CHANGED" ||
+    action.type === "DATA_CHANNEL_RESET"
+  );
+}
+
+function isChatAction(action: RootAction): action is ChatAction {
+  return (
+    action.type === "CHAT_MESSAGE_APPENDED" || action.type === "CHAT_CLEARED"
+  );
+}
+
 export function rootReducer(state: RootState, action: RootAction): RootState {
   if (isEventLogAction(action)) {
     return {
@@ -70,6 +108,18 @@ export function rootReducer(state: RootState, action: RootAction): RootState {
     return {
       ...state,
       peerConnection: peerConnectionReducer(state.peerConnection, action),
+    };
+  }
+  if (isDataChannelAction(action)) {
+    return {
+      ...state,
+      dataChannel: dataChannelReducer(state.dataChannel, action),
+    };
+  }
+  if (isChatAction(action)) {
+    return {
+      ...state,
+      chat: chatReducer(state.chat, action),
     };
   }
   return {

@@ -1,16 +1,16 @@
 // Persistent state indicators (FR-022a / FR-022b).
 //
 // Phases active now: session + transport + room / peer identity (5-6),
-// RTCPeerConnection getters (8). Remaining slots (local/remote media
-// detail, screen share, chat channel) stay as placeholders until
-// their phases land.
+// RTCPeerConnection getters (8), DataChannel chat (9). Remaining slots
+// (local/remote media detail, screen share) stay as placeholders
+// until their phases land.
 
 import { useRootState } from "../state";
 
 const UNKNOWN = "—";
 
 export function StateIndicators() {
-  const { session, peerConnection } = useRootState();
+  const { session, peerConnection, dataChannel } = useRootState();
   const remotePresence = session.remoteParticipant
     ? `${session.remoteParticipant.presence} (order ${session.remoteParticipant.admissionOrder})`
     : "none";
@@ -53,7 +53,10 @@ export function StateIndicators() {
         <Indicator label="local media" value={UNKNOWN} />
         <Indicator label="remote media" value={UNKNOWN} />
         <Indicator label="screen share" value={UNKNOWN} />
-        <Indicator label="chat channel" value={UNKNOWN} />
+        <Indicator
+          label="chat channel state"
+          value={dataChannel.state}
+        />
       </dl>
     </section>
   );

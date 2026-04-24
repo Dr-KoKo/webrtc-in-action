@@ -36,3 +36,5 @@ signaling/cmd/signaling/signaling
 # Docker / compose local volumes
 docker-compose.override.yml
 .data/
+
+.playwright-mcp/

@@ -14,6 +14,7 @@ import { LocalVideo } from "./LocalVideo";
 import { RemoteVideo } from "./RemoteVideo";
 import { StateIndicators } from "./StateIndicators";
 import { LearningInspector } from "./LearningInspector";
+import { Chat } from "./Chat";
 
 export function AppShell() {
   return (
@@ -21,8 +22,8 @@ export function AppShell() {
       <header>
         <h1>webrtc-lab</h1>
         <p>
-          1:1 WebRTC Learning Call — Phase 8: trickle ICE + remote
-          media + Learning Inspector v1.
+          1:1 WebRTC Learning Call — Phase 9: RTCDataChannel chat on
+          top of the Phase 8 peer connection.
         </p>
       </header>
       <div className="app__grid">
@@ -31,6 +32,7 @@ export function AppShell() {
         <RemoteVideo />
         <StateIndicators />
         <LearningInspector />
+        <Chat />
         <EventLogPanel />
       </div>
     </main>

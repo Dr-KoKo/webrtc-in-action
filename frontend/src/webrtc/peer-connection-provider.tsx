@@ -72,6 +72,17 @@ import {
   type IceBuffer,
 } from "./ice-buffer";
 import {
+  wrapDataChannel,
+  type ChatSendResult,
+  type DataChannelStateValue,
+  type DataChannelWrapper,
+} from "./data-channel";
+import {
+  makeChatMessage,
+  validateChatMessage,
+  type ChatValidationError,
+} from "../state/chat";
+import {
   initialInspectorSnapshot,
   summarizeCandidate,
   summarizeIceServers,
@@ -95,7 +106,25 @@ interface PeerConnectionContextValue {
   hasRemoteStream: boolean;
   /** Learning Inspector v1 snapshot (FR-030). Summaries only. */
   inspector: LearningInspectorSnapshot;
+  /**
+   * Phase 9 — send a chat message over the DataChannel. Returns a
+   * structured result so callers (Chat.tsx) can decide how to render
+   * a validation / not-open / backpressure failure. Appends a
+   * `chat_message_sent` event-log entry on success and a
+   * `chat_message_appended` transcript entry.
+   */
+  sendChatMessage(text: string): ChatSendOutcome;
 }
+
+export type ChatSendOutcome =
+  | { ok: true }
+  | { ok: false; reason: ChatSendError };
+
+export type ChatSendError =
+  | ChatValidationError
+  | "not-open"
+  | "backpressure"
+  | "invalid";
 
 const PeerConnectionContext = createContext<PeerConnectionContextValue | null>(
   null,
@@ -125,6 +154,10 @@ export function PeerConnectionProvider({
   // they are not serializable and must not live in React state.
   const handleRef = useRef<PeerConnectionHandle | null>(null);
   const iceBufferRef = useRef<IceBuffer | null>(null);
+  // Phase 9 — live chat DataChannel wrapper. Provider-owned; never
+  // placed in reducer state. Reducer mirrors only the scalar
+  // `DataChannelState` value via the dataChannel slice.
+  const chatChannelRef = useRef<DataChannelWrapper | null>(null);
   // Aggregated remote stream — `ontrack` pushes every track here; the
   // version counter bumps each time so consumers re-bind their
   // `<video>` `srcObject`. This mirrors LocalMediaProvider's DI shape.
@@ -208,6 +241,90 @@ export function PeerConnectionProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client, dispatch]);
 
+  // ------------------------------------------------------------------
+  // DataChannel wiring (Phase 9). Wraps the browser RTCDataChannel
+  // (offerer-created or answerer-received) and routes its lifecycle +
+  // inbound messages into the reducer. Called twice in the lifetime of
+  // a pairing at most: once from the offerer's `createChatDataChannel`
+  // result, once from the answerer's `ondatachannel` event. The
+  // `origin` label just narrates whether this side created or received
+  // the channel — it does NOT split the code path.
+  // ------------------------------------------------------------------
+  function attachChatDataChannel(
+    channel: RTCDataChannel,
+    origin: "offerer" | "answerer",
+  ): void {
+    // Idempotence guard: if a wrapper already exists (e.g., duplicate
+    // ondatachannel or a post-Phase-12 second pairing that hasn't
+    // cleaned up yet), log and replace defensively. Phase 9 does not
+    // exercise this path but the guard avoids silent leaks.
+    const existing = chatChannelRef.current;
+    if (existing) {
+      existing.close();
+      chatChannelRef.current = null;
+    }
+    const wrapper = wrapDataChannel({
+      channel,
+      onStateChange: (next: DataChannelStateValue) => {
+        dispatch({ type: "DATA_CHANNEL_STATE_CHANGED", state: next });
+        dispatch({
+          type: "EVENT_LOG_APPEND",
+          entry: makeEventLogEntry({
+            type: "data_channel_state_changed",
+            direction: origin === "offerer" ? "local" : "remote",
+            summary: `dataChannel("${channel.label}") → ${next}`,
+            transport: "datachannel",
+          }),
+        });
+      },
+      onMessage: (data: unknown) => {
+        const result = validateChatMessage(data);
+        if (!result.ok) {
+          dispatch({
+            type: "EVENT_LOG_APPEND",
+            entry: makeEventLogEntry({
+              type: "data_channel_error",
+              direction: "remote",
+              summary: `chat message rejected (${result.reason})`,
+              code: `chat_invalid_${result.reason}`,
+              transport: "datachannel",
+            }),
+          });
+          return;
+        }
+        const message = makeChatMessage({ from: "peer", text: result.text });
+        dispatch({ type: "CHAT_MESSAGE_APPENDED", message });
+        dispatch({
+          type: "EVENT_LOG_APPEND",
+          entry: makeEventLogEntry({
+            type: "chat_message_received",
+            direction: "remote",
+            summary: `chat received: ${summarizeChatText(result.text)}`,
+            transport: "datachannel",
+          }),
+        });
+      },
+      onError: (ev: Event) => {
+        const errorEv = ev as RTCErrorEvent;
+        const detail =
+          errorEv && errorEv.error && errorEv.error.message
+            ? errorEv.error.message
+            : "unknown";
+        dispatch({
+          type: "EVENT_LOG_APPEND",
+          entry: makeEventLogEntry({
+            type: "data_channel_error",
+            direction: "system",
+            summary: `dataChannel error: ${detail}`,
+            code: "data_channel_error",
+            transport: "datachannel",
+          }),
+        });
+      },
+    });
+    chatChannelRef.current = wrapper;
+  }
+
   // Cleanup on unmount: close the PC + IceBuffer if still open.
   //
   // PHASE 12 HOOK — the body of this effect is the teardown sequence
@@ -219,6 +336,8 @@ export function PeerConnectionProvider({
   // is sufficient.
   useEffect(() => {
     return () => {
+      chatChannelRef.current?.close();
+      chatChannelRef.current = null;
       handleRef.current?.close();
       handleRef.current = null;
       iceBufferRef.current?.close();
@@ -405,18 +524,22 @@ export function PeerConnectionProvider({
       ...(role === "answerer"
         ? {
             onDataChannel: (dc: RTCDataChannel) => {
-              // Answerer: the offerer's pre-offer DataChannel has
-              // arrived. Phase 7 only logs receipt; Phase 9 will
-              // wire `onmessage` / `onopen` without another
-              // negotiation round.
+              // T066 — answerer side: the offerer's pre-offer
+              // DataChannel has arrived. Log receipt AND wire the
+              // full lifecycle through `attachChatDataChannel` so
+              // readyState transitions flow into the dataChannel
+              // slice and inbound `message` events append chat
+              // entries.
               dispatch({
                 type: "EVENT_LOG_APPEND",
                 entry: makeEventLogEntry({
                   type: "data_channel_created",
                   direction: "remote",
                   summary: `ondatachannel fired (label="${dc.label}", ordered=${dc.ordered})`,
+                  transport: "datachannel",
                 }),
               });
+              attachChatDataChannel(dc, "answerer");
             },
           }
         : {}),
@@ -486,8 +609,14 @@ export function PeerConnectionProvider({
           type: "data_channel_created",
           direction: "local",
           summary: `createDataChannel("chat") (ordered=${dc.ordered})`,
+          transport: "datachannel",
         }),
       });
+      // T065 — wire offerer-created channel into the reducer
+      // lifecycle. The wrapper emits an initial `connecting` state
+      // synchronously; subsequent `open` / `closing` / `close`
+      // events drive the dataChannel slice.
+      attachChatDataChannel(dc, "offerer");
       try {
         const offer = await handle.createOffer();
         dispatch({
@@ -893,6 +1022,69 @@ export function PeerConnectionProvider({
     [],
   );
 
+  const sendChatMessage = useCallback(
+    (rawInput: string): ChatSendOutcome => {
+      // Pure validation first (T068) — same rule used at receive time,
+      // so the local user sees the same errors the peer would be
+      // protected from. Validation errors never touch the channel.
+      const validation = validateChatMessage(rawInput);
+      if (!validation.ok) {
+        dispatch({
+          type: "EVENT_LOG_APPEND",
+          entry: makeEventLogEntry({
+            type: "data_channel_error",
+            direction: "local",
+            summary: `chat send rejected (${validation.reason})`,
+            code: `chat_invalid_${validation.reason}`,
+            transport: "datachannel",
+          }),
+        });
+        return { ok: false, reason: validation.reason };
+      }
+      const wrapper = chatChannelRef.current;
+      if (!wrapper) {
+        dispatch({
+          type: "EVENT_LOG_APPEND",
+          entry: makeEventLogEntry({
+            type: "data_channel_error",
+            direction: "local",
+            summary: "chat send rejected (no active DataChannel)",
+            code: "chat_send_no_channel",
+            transport: "datachannel",
+          }),
+        });
+        return { ok: false, reason: "not-open" };
+      }
+      const sendResult: ChatSendResult = wrapper.send(validation.text);
+      if (!sendResult.ok) {
+        dispatch({
+          type: "EVENT_LOG_APPEND",
+          entry: makeEventLogEntry({
+            type: "data_channel_error",
+            direction: "local",
+            summary: `chat send failed (${sendResult.reason})`,
+            code: `chat_send_${sendResult.reason}`,
+            transport: "datachannel",
+          }),
+        });
+        return { ok: false, reason: sendResult.reason };
+      }
+      const message = makeChatMessage({ from: "self", text: validation.text });
+      dispatch({ type: "CHAT_MESSAGE_APPENDED", message });
+      dispatch({
+        type: "EVENT_LOG_APPEND",
+        entry: makeEventLogEntry({
+          type: "chat_message_sent",
+          direction: "local",
+          summary: `chat sent: ${summarizeChatText(validation.text)}`,
+          transport: "datachannel",
+        }),
+      });
+      return { ok: true };
+    },
+    [dispatch],
+  );
+
   const value: PeerConnectionContextValue = {
     getHandle: () => handleRef.current,
     getRemoteStream,
@@ -900,6 +1092,7 @@ export function PeerConnectionProvider({
     hasRemoteStream:
       remoteStreamVersion > 0 && remoteStreamRef.current !== null,
     inspector,
+    sendChatMessage,
   };
   // Keep `resetRemoteStream` referenced so tree-shaking doesn't elide
   // it in builds; not currently invoked in Phase-8 since PC cleanup
@@ -936,6 +1129,15 @@ function dispatchSnapshot(
 
 function shortenId(id: string): string {
   return id.length > 8 ? `${id.slice(0, 8)}…` : id;
+}
+
+// Truncate chat text for event-log summaries. The transcript itself
+// stores the full text; the event log is a narration, not a log of
+// raw message bodies. Keeps the UI panel readable when messages are
+// near the 500-char limit.
+function summarizeChatText(text: string): string {
+  const limit = 80;
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 
 // Cheap SDP summary for the event log. Counts `m=` lines by kind
