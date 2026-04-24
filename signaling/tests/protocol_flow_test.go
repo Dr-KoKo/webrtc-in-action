@@ -1218,6 +1218,111 @@ func TestServerNeverLogsCandidate(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------
+// T074A — media_state relay (Phase 10)
+// ---------------------------------------------------------------------
+
+// mediaStateMsg builds a §3.11 envelope with the full triplet.
+func mediaStateMsg(roomID, mic, cam, screen string) any {
+	return map[string]any{
+		"v":      1,
+		"type":   "media_state",
+		"roomId": roomID,
+		"payload": map[string]any{
+			"microphone":  mic,
+			"camera":      cam,
+			"screenShare": screen,
+		},
+	}
+}
+
+// TestMediaStateRelayedToRemoteOnly asserts a valid media_state from a
+// media-ready, role-assigned sender is relayed verbatim to the remote
+// peer with envelope.from = sender.peerID, and that the sender does
+// NOT receive an echo.
+func TestMediaStateRelayedToRemoteOnly(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	peerA, peerB := joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	a.send(mediaStateMsg("demo", "off", "on", "inactive"))
+
+	env, raw := b.expect(sig.TypeMediaState)
+	if env.From != peerA {
+		t.Fatalf("media_state envelope.from=%s want %s", env.From, peerA)
+	}
+	if env.To != "" && env.To != peerB {
+		t.Fatalf("media_state envelope.to=%s want '' or %s", env.To, peerB)
+	}
+	ms := parsePayload[sig.MediaStatePayload](t, raw)
+	if ms.Microphone != "off" || ms.Camera != "on" || ms.ScreenShare != "inactive" {
+		t.Fatalf("relayed payload=%+v want {off,on,inactive}", ms)
+	}
+	// Sender never receives its own echo.
+	a.expectNone(200 * time.Millisecond)
+}
+
+// TestMediaStateRejectedFromPendingMedia asserts a sender that has not
+// yet reached mediaReadiness=ready cannot emit media_state — the
+// server rejects with `error{code:"malformed"}` and MUST NOT relay.
+func TestMediaStateRejectedFromPendingMedia(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, _ = joinBoth(t, a, b, "demo")
+
+	// Neither peer has sent media_ready yet; both are pending-media /
+	// idle. A's attempt to send media_state must be rejected.
+	a.send(mediaStateMsg("demo", "on", "on", "inactive"))
+
+	_, raw := a.expect(sig.TypeError)
+	pe := parsePayload[sig.ErrorPayload](t, raw)
+	if pe.Code != sig.CodeMalformed {
+		t.Fatalf("pending-media media_state: code=%q want malformed", pe.Code)
+	}
+	// B MUST NOT receive any relayed media_state.
+	b.expectNone(200 * time.Millisecond)
+}
+
+// TestMediaStateRequiresFullTriplet asserts that payloads missing any
+// of the three fields are rejected by envelope-level validation with
+// `error{code:"malformed"}` (§3.11: "All three fields are required in
+// every media_state message").
+func TestMediaStateRequiresFullTriplet(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	_, _ = joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo")
+
+	cases := []struct {
+		name    string
+		payload map[string]any
+	}{
+		{"missing screenShare", map[string]any{"microphone": "on", "camera": "on"}},
+		{"missing camera", map[string]any{"microphone": "on", "screenShare": "inactive"}},
+		{"missing microphone", map[string]any{"camera": "on", "screenShare": "inactive"}},
+	}
+	for _, tc := range cases {
+		a.send(map[string]any{
+			"v":       1,
+			"type":    "media_state",
+			"roomId":  "demo",
+			"payload": tc.payload,
+		})
+		_, raw := a.expect(sig.TypeError)
+		pe := parsePayload[sig.ErrorPayload](t, raw)
+		if pe.Code != sig.CodeMalformed {
+			t.Fatalf("%s: code=%q want malformed", tc.name, pe.Code)
+		}
+	}
+	// The remote peer must NOT have received any of the partial
+	// messages as a relay.
+	b.expectNone(200 * time.Millisecond)
+}
+
 // TestInCallLeaveEmitsPeerLeft verifies the in-call classification
 // branch of §C.6 step 5: a departing peer that reached callPhase ∈
 // {role-assigned, negotiating, connected} MUST produce peer_left to

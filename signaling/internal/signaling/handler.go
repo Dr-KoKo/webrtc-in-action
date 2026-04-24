@@ -254,13 +254,7 @@ func (h *Handler) dispatch(ctx context.Context, cc *connCtx, d *Decoded) error {
 	case TypeIceCandidate:
 		return h.handleIceCandidate(ctx, cc, d)
 	case TypeMediaState:
-		// Phase 10+ territory — helper exists (T034A) but relay is not
-		// wired until media_state dispatch lands.
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeMalformed,
-			Message: "message type not yet supported in this phase",
-		}, d.Envelope.RequestID)
-		return nil
+		return h.handleMediaState(ctx, cc, d)
 	case TypeReadyForOffer, TypeJoinAccepted, TypeJoinRejected,
 		TypePeerPresenceChanged, TypePeerLeft, TypeParticipantReleased:
 		// These are server-originated; a client sending them is a bug.
@@ -1098,6 +1092,106 @@ func (h *Handler) handleIceCandidate(ctx context.Context, cc *connCtx, d *Decode
 		slog.String("from_peer_id", cc.peerID),
 		slog.String("to_peer_id", remotePeerID),
 		slog.Bool("end_of_candidates", endOfCandidates),
+	)
+	return nil
+}
+
+// ---------------------------------------------------------------------
+// Phase 10 — media_state relay (T074A)
+// ---------------------------------------------------------------------
+
+// handleMediaState validates the sender's state per contract §3.11
+// (mediaReadiness == ready; callPhase ∈ {role-assigned, negotiating,
+// connected}) via room.CanSendMediaState and relays the payload bytes
+// verbatim to the remote peer only. envelope.from is stamped with the
+// sender's peerID. The server MUST NOT log the mic / camera /
+// screenShare values themselves — only the sender / receiver peer IDs.
+//
+// Full-triplet validation (microphone, camera, screenShare all
+// required) is enforced at decode time by MediaStatePayload.Validate():
+// a missing field decodes to "" which fails the enum switch.
+func (h *Handler) handleMediaState(ctx context.Context, cc *connCtx, d *Decoded) error {
+	if cc.peerID == "" {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "media_state requires an admitted participant",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	rm := h.Rooms.Room(cc.roomID)
+	if rm == nil {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "room not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+
+	rm.Lock()
+	p := rm.FindByPeerID(cc.peerID)
+	if p == nil {
+		rm.Unlock()
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "participant not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	role := rm.AssignedRole(cc.peerID)
+	if relayErr := p.CanSendMediaState(role); relayErr != nil {
+		rm.Unlock()
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    ErrorCode(relayErr.Code),
+			Message: relayErr.Message,
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	remote := rm.ResolveRemote(cc.peerID)
+	if remote == nil {
+		rm.Unlock()
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "remote peer not present",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	remoteConn := remote.Conn
+	remotePeerID := remote.PeerID
+	rm.Unlock()
+
+	// Relay payload bytes verbatim — the server never needs to parse
+	// the on/off values to route the message. Only envelope metadata
+	// is rewritten.
+	outEnv := Envelope{
+		V:       ContractVersion,
+		Type:    TypeMediaState,
+		RoomID:  cc.roomID,
+		From:    cc.peerID,
+		To:      remotePeerID,
+		TS:      time.Now().UnixMilli(),
+		Payload: d.Envelope.Payload,
+	}
+	if remoteConn == nil {
+		h.writeError(ctx, cc, &DecodeError{
+			Code:    CodeNotInRoom,
+			Message: "remote peer not present",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	if err := remoteConn.SendJSON(outEnv); err != nil {
+		h.Log.Warn("media_state relay failed",
+			slog.String("peer_id", remotePeerID),
+			slog.String("error", err.Error()))
+		return nil
+	}
+
+	// Structured log — peer IDs only. MUST NOT log microphone / camera
+	// / screenShare values (contract §3.11 confidentiality; on/off
+	// state is user-observable signal, not server telemetry).
+	h.Log.Info("media_state relayed",
+		slog.String("event", "media_state_relay"),
+		slog.String("from_peer_id", cc.peerID),
+		slog.String("to_peer_id", remotePeerID),
 	)
 	return nil
 }
