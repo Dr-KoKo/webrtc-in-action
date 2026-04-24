@@ -15,5 +15,10 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     include: ["tests/**/*.{spec,test}.{ts,tsx}"],
+    // Playwright owns the browser layer. Vitest must not pick up
+    // `tests/e2e/**` or it will try to run Playwright's `test()` in
+    // a jsdom context and fail at import (`node:crypto`,
+    // `@playwright/test` runner-only APIs).
+    exclude: ["node_modules/**", "dist/**", "tests/e2e/**"],
   },
 });

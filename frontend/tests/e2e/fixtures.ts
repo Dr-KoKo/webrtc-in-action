@@ -116,6 +116,31 @@ export async function expectSessionAdvanced(page: Page): Promise<void> {
   );
 }
 
+// --- US5 AS1 base-lifecycle helper ---------------------------------
+
+// Asserts every Phase-6-reachable base lifecycle event appears in
+// this page's event log. Call from the happy path (two peers both
+// reaching media-ready) — a peer that never admits a remote will
+// not see the two `peer_presence_changed` rows.
+//
+// Phase-7+ extends this helper in place: add `offer_created/received`,
+// `answer_created/received`, `ice_candidate_*`, `*state_changed`,
+// `cleanup_completed`. Scenarios that call the helper automatically
+// pick up the new coverage without edit.
+export async function expectBaseLifecycleEvents(page: Page): Promise<void> {
+  await expectEventOfType(page, "transport_changed", /connected/);
+  await expectEventOfType(page, "join_room_sent", /join_room sent/);
+  await expectEventOfType(page, "room_joined", /room joined/);
+  await expectEventOfType(page, "media_acquire_started", /getUserMedia/);
+  await expectEventOfType(
+    page,
+    "media_ready_sent",
+    /media_ready sent \(audio\+video ready\)/,
+  );
+  await expectEventOfType(page, "peer_presence_changed", /pending-media/);
+  await expectEventOfType(page, "peer_presence_changed", /ready/);
+}
+
 // --- JoinForm helpers ----------------------------------------------
 
 export async function joinRoom(page: Page, roomId: string): Promise<void> {
