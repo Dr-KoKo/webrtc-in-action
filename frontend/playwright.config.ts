@@ -31,7 +31,15 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    baseURL: "http://localhost:5173",
+    // Vite dev serves HTTPS via @vitejs/plugin-basic-ssl (commit
+    // 87607e4) so getUserMedia works on non-localhost LAN hosts
+    // without per-browser insecure-origin flags. The self-signed
+    // cert requires `ignoreHTTPSErrors` — Chromium would otherwise
+    // fail the initial `page.goto` with `net::ERR_CERT_AUTHORITY_
+    // INVALID`. Plain `http://localhost:5173` returns
+    // `net::ERR_EMPTY_RESPONSE` because Vite only answers HTTPS.
+    baseURL: "https://localhost:5173",
+    ignoreHTTPSErrors: true,
     trace: "retain-on-failure",
     video: "off",
     screenshot: "only-on-failure",
