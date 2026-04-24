@@ -2,6 +2,9 @@
 .env
 .env.local
 .env.*.local
+# Dev persona uses `--env-file .env.dev` (see docker-compose.dev.yml);
+# only `.env.dev.example` should be committed.
+.env.dev
 
 # Logs
 *.log
@@ -32,6 +35,7 @@ frontend/.turbo/
 *.out
 signaling/signaling
 signaling/cmd/signaling/signaling
+signaling/cmd/healthprobe/healthprobe
 
 # Docker / compose local volumes
 docker-compose.override.yml

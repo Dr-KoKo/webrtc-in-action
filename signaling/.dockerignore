@@ -1,0 +1,21 @@
+# Keep the build context small. Tests are not compiled into the
+# runtime binary (`go build ./cmd/signaling` / `./cmd/healthprobe`).
+tests/
+*.out
+*.test
+*.exe
+*.log
+
+# Pre-built binaries that might be left by host `go build`.
+signaling
+cmd/signaling/signaling
+cmd/healthprobe/healthprobe
+
+# Editor / OS cruft.
+.DS_Store
+.vscode/
+.idea/
+
+# Docker self-reference.
+Dockerfile*
+.dockerignore
