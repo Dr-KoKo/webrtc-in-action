@@ -3,7 +3,7 @@
 **Scope**: current branch state (Phases 0–9 merged). Phases 10–12
 (mic/camera toggle, screen share, polished cleanup/failure UX) are
 **out of scope** — see §8. For the full-feature checklist, see
-[`../specs/001-webrtc-1to1-call/quickstart.md`](../specs/001-webrtc-1to1-call/quickstart.md).
+[`../../specs/001-webrtc-1to1-call/quickstart.md`](../../specs/001-webrtc-1to1-call/quickstart.md).
 
 **Date of last review**: 2026-04-24.
 
@@ -401,7 +401,7 @@ Open the Inspector panel on L and M:
 Pairing should complete on `host` candidates alone, without needing
 `srflx`. If it doesn't, the LAN may have client-isolation (see §2.2).
 
-### T-04 · DataChannel chat round-trip (FR-015a; see [quickstart §4.3](../specs/001-webrtc-1to1-call/quickstart.md))
+### T-04 · DataChannel chat round-trip (FR-015a; see [quickstart §4.3](../../specs/001-webrtc-1to1-call/quickstart.md))
 
 1. L: send `hello from laptop`.
 2. M: send `hi from mobile`.
@@ -422,7 +422,7 @@ Pairing should complete on `host` candidates alone, without needing
 
 Scroll L's log end-to-end. Combined with M's, every US5 Base
 lifecycle event from
-[`../specs/001-webrtc-1to1-call/quickstart.md`](../specs/001-webrtc-1to1-call/quickstart.md)
+[`../../specs/001-webrtc-1to1-call/quickstart.md`](../../specs/001-webrtc-1to1-call/quickstart.md)
 §4.1 must be present. Record gaps, if any.
 
 ### T-06 · Persistent state indicators (FR-022a/b)
@@ -493,7 +493,7 @@ From a clean state:
 ### T-09 · Ungraceful disconnect (partial EC-009)
 
 > Phase 12 polish not yet landed — expectations looser than
-> [`../specs/001-webrtc-1to1-call/quickstart.md`](../specs/001-webrtc-1to1-call/quickstart.md)
+> [`../../specs/001-webrtc-1to1-call/quickstart.md`](../../specs/001-webrtc-1to1-call/quickstart.md)
 > §5.4.
 
 Pick one of:
