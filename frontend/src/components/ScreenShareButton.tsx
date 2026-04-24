@@ -72,9 +72,18 @@ export function ScreenShareButton() {
       getCameraTrack: () => {
         const stream = getStreamRef.current();
         if (!stream) return null;
-        const video = stream.getVideoTracks();
-        for (const t of video) {
-          if (t.enabled && t.readyState === "live") return t;
+        // Return the first live video track regardless of `enabled`.
+        // MediaControls mutes by flipping `track.enabled = false`, but
+        // the track stays live. `replaceTrack(liveMutedTrack)` is valid
+        // WebRTC — the sender carries the track forward and frames are
+        // blacked out while `enabled` is false. If we filtered on
+        // `enabled` here, stop-after-mute would pass `null` to
+        // `replaceTrack` and the sender would be permanently
+        // track-less; a subsequent `MediaControls` unmute would only
+        // flip a detached track's flag and the camera would stay dead
+        // to the remote until leave/rejoin.
+        for (const t of stream.getVideoTracks()) {
+          if (t.readyState === "live") return t;
         }
         return null;
       },
