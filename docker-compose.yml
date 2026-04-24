@@ -19,6 +19,11 @@ services:
       VITE_TURN_URL: ${VITE_TURN_URL:-}
       VITE_TURN_USERNAME: ${VITE_TURN_USERNAME:-}
       VITE_TURN_CREDENTIAL: ${VITE_TURN_CREDENTIAL:-}
+      # Vite serves HTTPS via @vitejs/plugin-basic-ssl, so the browser
+      # must reach the signaling WS from the same (secure) origin.
+      # Override per host/LAN IP with `export VITE_SIGNALING_URL=...`
+      # before `docker compose up`.
+      VITE_SIGNALING_URL: ${VITE_SIGNALING_URL:-wss://localhost:5173/ws}
 
   signaling:
     build:
