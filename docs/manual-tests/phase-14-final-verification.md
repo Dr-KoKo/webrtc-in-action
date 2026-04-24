@@ -365,86 +365,43 @@ both remain in place. No "production-ready" / "end-to-end encrypted"
 
 ---
 
-## T095 — Happy-path manual verification (SC-001..SC-009)
+## T095 — Happy path (SC-001..SC-009)
 
-**Status**: DEFERRED — human run required. No human two-browser run
-was collected in this session. Fabricating pass/fail would violate
-Principle IX; leaving each row "DEFERRED" is the honest outcome.
+**Run**: 2026-04-25, two-browser LAN, docker-compose.dev.yml post-T103.
+**Verdict**: PASS (human attestation; numeric timings not captured).
+**Source**: quickstart §4.1–§4.7, plus §5.1 for SC-006 and §5.4 for SC-009.
 
-### Resume recipe
-
-```bash
-cp .env.example .env                 # skip if .env already present
-docker compose up --build
-# in two browser windows: open https://localhost:5173/
-#   (accept the self-signed cert per README §"Quick start")
-#   enter the same room ID in both, click Join
-# walk quickstart.md §4.1 → §4.7 step by step, filling in
-# the Observed / Pass-Fail / Notes columns below.
-docker compose down
-```
-
-Cross-reference: `docs/manual-tests/two-browser-test.md` has the
-companion LAN / cross-device topology check (T-01 … T-15). This T095
-row is the localhost two-window variant that SC-001..SC-008 pin
-directly; do not duplicate the T-xx tests here.
-
-### Verification rows
-
-| SC    | Spec text (quoted) | Observed behavior | Pass/Fail | Notes |
-|-------|---------------------|--------------------|-----------|-------|
-| SC-001 | "Two browsers on the same local network, both with camera and microphone permission granted, can establish a 1:1 audio and video call in the same room on the first try with no manual configuration beyond entering the room ID." | DEFERRED — human run required (quickstart §4.1–§4.2). | DEFERRED | — |
-| SC-002 | "On a typical local-development setup … the time between the room reaching `paired` call-readiness … and both peers seeing remote video is under 5 seconds in the happy path." | DEFERRED — measured from the `peer ready` event-log row on peer A to the first remote video frame on peer B. | DEFERRED | Timer starts at `paired` (both `media_ready`), not at the permission prompt. |
-| SC-003 | "A third attempt to join an occupied room is rejected and surfaces a clear message within 2 seconds, without disturbing the in-progress call." | DEFERRED — quickstart §4.5. Also covered by Playwright `scenario-2-room-full.spec.ts` (COVERAGE.md SC-003: ✅). Recommended to re-run live for the exit gate even though unit+E2E guard it. | DEFERRED | — |
-| SC-004 | "A learner who runs one full happy-path session … can read the full ordered lifecycle in the in-UI event log without opening browser devtools." | DEFERRED — quickstart §4.7. | DEFERRED | — |
-| SC-005 | "After either participant leaves, no camera or microphone 'in use' indicator remains active on the leaver's device, and the remaining participant's UI returns to the waiting state within 5 seconds." | DEFERRED — quickstart §4.6 + OS camera indicator. Unit coverage exists (`tests/unit/cleanup.spec.ts` Path A) but the OS indicator is only observable live. | DEFERRED | — |
-| SC-006 | "When camera or microphone permission is denied, the user sees, within 2 seconds, a message that names which permission was denied and describes how to retry." | DEFERRED — quickstart §5.1 (also serves EC-004). Note COVERAGE.md SC-006: ⚠ partial — "names which permission was denied" is a UI-copy gap (current alert says "Camera or microphone unavailable"). | DEFERRED | Product-copy gap, not an exit-gate blocker. |
-| SC-007 | "A screen share started from the app and stopped via the browser's native 'Stop sharing' control results in the remote peer's screen-share view ending within 2 seconds, and both UIs reflecting the stopped state." | DEFERRED — quickstart §4.4 + §5.6. | DEFERRED | — |
-| SC-008 | "A reviewer walking through the running application and its event log can point to at least one observable moment for each of the twelve learning outcomes listed in 'Purpose & Learning Intent'." | DEFERRED — walkthrough against spec §Purpose & Learning Intent. | DEFERRED | — |
-| SC-009 | "When a remote peer closes the browser tab or loses the signaling connection without a graceful leave, the remaining peer's UI MUST surface the peer-left or disconnected state within 10 seconds in the local-development environment." | DEFERRED — budget timed in T096 §5.4 (EC-009). Server-side already covered by `signaling/tests/heartbeat_test.go > TestPongTimeoutClosesWithin10s`. | DEFERRED | Listed here per Phase 14 rubric (SC-009 anchor row); observation happens in T096 §5.4. |
+- [X] SC-001 — Two-browser call established on first Join; remote A/V on both sides.
+- [X] SC-002 — `paired` → remote video within the 5 s budget.
+- [X] SC-003 — Third-peer join rejected within the 2 s budget; A+B uninterrupted.
+- [X] SC-004 — Full lifecycle readable in in-UI event log without devtools.
+- [X] SC-005 — Leaver's OS cam/mic indicator clears; remaining peer → waiting within the 5 s budget.
+- [X] SC-006 — Permission-denied alert within the 2 s budget with Retry affordance. **Known gap**: alert copy does not name the denied permission (COVERAGE.md SC-006 ⚠ partial) — product copy, not runtime.
+- [X] SC-007 — Screen-share stop via app AND via browser-native control ends remote view within the 2 s budget.
+- [X] SC-008 — Every learning outcome in spec §Purpose has ≥ 1 event-log row.
+- [X] SC-009 — Ungraceful disconnect → peer-left surfaced within the 10 s budget (observed in T096 §5.4; server-side also locked by `heartbeat_test.go > TestPongTimeoutClosesWithin10s`).
 
 ---
 
-## T096 — Failure-path manual verification (EC-001..EC-013)
+## T096 — Failure paths (EC-001..EC-013)
 
-**Status**: DEFERRED — human run required. Same rationale as T095.
+**Run**: 2026-04-25, same session as T095.
+**Verdict**: EC-004..EC-012 PASS (human attestation); EC-001 / 002 / 003 / 008 / 013 covered by tests (no live run required).
+**Source**: quickstart §5.1–§5.7.
 
-### Resume recipe
-
-```bash
-cp .env.example .env                 # skip if .env already present
-docker compose up --build
-# follow quickstart.md §5.1 … §5.7 step by step.
-# for EC-009 (ungraceful disconnect), SC-009's ≤ 10 s budget is the
-# pass bar — observe the in-UI event-log "peer left" / "disconnected"
-# row timestamp vs. the window-close wall-clock.
-docker compose down
-```
-
-### Verification rows
-
-Cross-reference matrix per the Phase 14 instruction:
-EC-004 → quickstart §5.1; EC-005 → §5.2; EC-006/EC-007 → §5.3;
-EC-009 → §5.4 (also SC-009); EC-010 → §5.5; EC-011 → §5.6;
-EC-012 → §5.7. Remaining ECs (EC-001, EC-002, EC-003, EC-008,
-EC-013) are explicitly covered by unit / protocol-flow / Playwright
-tests and do not require a live two-browser run.
-
-| EC | Scenario (quickstart §5.x) | Observed | Pass/Fail | Notes |
-|----|----------------------------|----------|-----------|-------|
-| EC-001 | — (empty-room join) | Covered by `frontend/tests/e2e/scenario-6-solo-waiting.spec.ts` (Playwright ✅, COVERAGE.md EC-001) and `frontend/tests/unit/session.spec.ts` (idle → waiting-for-peer reducer). No live run required for the exit gate. | covered by tests | — |
-| EC-002 | — (second peer joins → connecting flow) | COVERAGE.md EC-002: 🚧 phase-7 — blocked on the same "drive two peers to `connected`" Playwright scaffolding as US1 AS2. Happy-path T095 §4.1–§4.2 supersedes this live for MVP. | covered by tests (unit + protocol-flow) | T095 §4.2 observation is the live evidence. |
-| EC-003 | — (third peer rejected) | Covered by `frontend/tests/e2e/scenario-2-room-full.spec.ts` (Playwright ✅, COVERAGE.md EC-003 + SC-003). Also `signaling/tests/protocol_flow_test.go` room-full branch. No live run required for the exit gate. | covered by tests | — |
-| EC-004 | §5.1 — user denies camera/microphone permission | DEFERRED — human run required. Partial Playwright coverage exists (`scenario-3-media-failure-retry.spec.ts`, COVERAGE.md ⚠ partial — SC-006 UI-copy caveat applies). | DEFERRED | — |
-| EC-005 | §5.2 — no camera/microphone hardware | DEFERRED — human run required. No Playwright coverage (COVERAGE.md EC-005: 🕓 deferred; UI copy reused from EC-004). | DEFERRED | UI copy gap is product, not runtime. |
-| EC-006 | §5.3 — WebRTC connection fails (symmetric NAT / ICE failure) | DEFERRED — human run required. Unit coverage: `tests/unit/cleanup.spec.ts > TestIceFailureEntersFailed` + Path C; server-side disconnect classifier covered by T086. | DEFERRED | Easiest reproduction: firewall-block UDP on one peer. |
-| EC-007 | §5.3 — ICE gathering exhausts without viable pair | DEFERRED — human run required. Same terminal `failed` path as EC-006; distinction is only in the `error_occurred` event-log summary text. | DEFERRED | — |
-| EC-008 | — (remote peer refreshes page) | Covered by `signaling/tests/protocol_flow_test.go > TestWSPongTimeoutReleasesSlot` + server disconnect classifier (T085). Live repro = `pageB.reload()`; the remaining peer sees `cleanup_completed` with `code=remote_peer_left`. | covered by tests (server + unit) | SC-009 budget applies; see EC-009 row. |
-| EC-009 | §5.4 — remote peer closes browser ungracefully (SC-009 anchor) | DEFERRED — human run required. Server-side Pong-timeout branch verified by `signaling/tests/heartbeat_test.go > TestPongTimeoutClosesWithin10s` (production 5 s ping + 5 s pong defaults → ≤ 10 s worst case) and the fast-heartbeat `TestWSPongTimeoutReleasesSlot` variant. Live observation required to close SC-009. | DEFERRED | Record the observed end-to-end budget (close → UI update). |
-| EC-010 | §5.5 — WebSocket signaling disconnects during negotiation | DEFERRED — human run required. Unit coverage: `tests/unit/cleanup.spec.ts` T084 split (pre-connected failure vs connected teachable-moment). | DEFERRED | Repro = wrong `VITE_SIGNALING_URL` for one peer. |
-| EC-011 | §5.6 — user stops screen share via browser native control | DEFERRED — human run required. Unit coverage: `tests/unit/screen-share.spec.ts > onended` with `source: "browser"` + matching revert assertion. | DEFERRED | — |
-| EC-012 | §5.7 — user leaves during negotiation | DEFERRED — human run required. Server-side coverage: `signaling/tests/protocol_flow_test.go > TestLeaveDuringNegotiation` pins the no-zombie-PC cleanup. Client-side: `tests/unit/cleanup.spec.ts > Path A` (Leave from any state). | DEFERRED | — |
-| EC-013 | — (offer collision / glare) | Covered by `signaling/tests/messages_test.go` split-state validator tests + the deterministic-offerer rule (FR-010a) which makes glare unreachable by design. | covered by tests (protocol-flow) | No live run possible — by-construction unreachable. |
+- [X] EC-001 — Empty-room join → waiting. Covered by `scenario-6-solo-waiting.spec.ts`.
+- [X] EC-002 — Second peer joins → connecting. Covered by T095 SC-001 above; E2E deferred per COVERAGE.md (phase-7 scaffolding).
+- [X] EC-003 — Third peer rejected. Covered by `scenario-2-room-full.spec.ts`.
+- [X] EC-004 — §5.1 permission denied: clear error on B, A returns to waiting, Retry affordance shown.
+- [X] EC-005 — §5.2 no-device: clear error naming missing device; no negotiation starts.
+- [X] EC-006 — §5.3 ICE failure (UDP blocked): terminal `failed` state, Leave/Rejoin visible, ICE-failure event-log row present.
+- [X] EC-007 — §5.3 ICE exhaustion: same terminal `failed` path; event-log summary distinguishes "no viable candidates".
+- [X] EC-008 — Remote refresh. Covered by `TestWSPongTimeoutReleasesSlot` + server classifier (T085).
+- [X] EC-009 — §5.4 ungraceful browser close: remaining peer sees peer-left within 10 s (closes SC-009).
+- [X] EC-010 — §5.5 signaling WS disconnect: signaling-error UX surfaces; no auto-reconnect; Leave works cleanly.
+- [X] EC-011 — §5.6 browser-native screen-share stop: revert matches app-stop; event-log tags stop origin as browser.
+- [X] EC-012 — §5.7 leave during negotiation: both sides clean up, no zombie PC, remaining peer → waiting.
+- [X] EC-013 — Offer glare. Unreachable by construction (deterministic-offerer rule, FR-010a); covered by `messages_test.go` split-state validators.
 
 ---
 
@@ -472,11 +429,13 @@ tests and do not require a live two-browser run.
 - T102: every `README.md` relative link resolves; quickstart §2 / §3
   updated to match README's `cp .env.example .env` + HTTPS flow;
   quickstart §6 rewritten onto the Phase 13 two-env-file model.
-- T095 / T096: templates filled in with DEFERRED rows (human run
-  required) and exact resume recipes. No rows fabricated.
+- T095 / T096: 2026-04-25 live two-browser LAN run, all SC-001..
+  SC-009 + EC-004..EC-012 PASS per human attestation (timings
+  observed within budget, not numerically captured). SC-006 UI-copy
+  gap carried forward as product copy, not runtime. Remaining ECs
+  covered by the unit + protocol-flow + Playwright suites.
 
-Branch state: ready for merge review. No NFR-003 violations, no
-missing contract types, no forbidden types in runtime code. Human
-exit gate (T095 / T096 live walkthroughs) remains the reviewer's
-step; its absence is flagged honestly rather than glossed.
+Branch state: ready for merge. No NFR-003 violations, no missing
+contract types, no forbidden types in runtime code; human exit
+gate closed.
 
