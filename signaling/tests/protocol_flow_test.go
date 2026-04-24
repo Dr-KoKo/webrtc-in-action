@@ -1359,3 +1359,255 @@ func TestInCallLeaveEmitsPeerLeft(t *testing.T) {
 		t.Fatalf("peer_left.reason=%q want graceful_leave", pl.Reason)
 	}
 }
+
+// ---------------------------------------------------------------------
+// Phase 12 — T086 server-side failure-path coverage
+// ---------------------------------------------------------------------
+
+// TestRoomFullRejectsWhilePending covers EC-003 for the pre-pairing
+// case: a third peer attempting to join a room whose two slots are
+// reserved but still pending-media MUST see join_rejected_room_full,
+// and neither reserved peer observes any disruption (§3.3 + FR-002).
+// Sibling of TestThirdJoinRejectedRoomFull (which uses already-ready
+// peers); the pending-media variant locks down the room-full check
+// running on slot reservation, not on media readiness.
+func TestRoomFullRejectsWhilePending(t *testing.T) {
+	ts := flowServer(t)
+
+	a := dialClient(t, ts)
+	a.joinAndAck("demo", newRequestID())
+
+	b := dialClient(t, ts)
+	b.joinAndAck("demo", newRequestID())
+	// A sees B's admission event. Both slots now reserved; both peers
+	// still pending-media (no media_ready sent).
+	_, _ = a.expect(sig.TypePeerPresenceChanged)
+
+	c := dialClient(t, ts)
+	c.send(joinRoomMsg("demo", newRequestID()))
+
+	_, raw := c.expect(sig.TypeJoinRejected)
+	rej := parsePayload[sig.JoinRejectedPayload](t, raw)
+	if rej.Result != sig.JoinRejectedRoomFull {
+		t.Fatalf("third (pending-media) join result=%q, want join_rejected_room_full", rej.Result)
+	}
+	if rej.Reason != sig.ReasonRoomFull {
+		t.Fatalf("reason=%q want room_full", rej.Reason)
+	}
+
+	// A and B MUST NOT observe any event as a result of C's rejected
+	// join — no slot was reserved.
+	a.expectNone(200 * time.Millisecond)
+	b.expectNone(200 * time.Millisecond)
+}
+
+// TestWSPongTimeoutReleasesSlot covers SC-009 (≤ 10 s ungraceful-
+// disconnect detection) at the protocol level with a paired, in-call
+// sender. Uses a fast-heartbeat handler so the suite doesn't wait
+// 10 s; production defaults (5 s + 5 s) stay untouched.
+//
+// The scenario: A and B both media-ready → paired → role-assigned.
+// B stops reading (and therefore stops auto-ponging). The server
+// Pongs time out → the WS is closed → deferred cleanup routes
+// through classifyDeparture with reason="disconnect" and B's
+// CallPhase = role-assigned (in-call) → A sees both
+// peer_presence_changed(left, disconnect) AND peer_left(disconnect).
+//
+// Harness note: coder/websocket auto-replies to Pings only while a
+// Read() is active. A needs a background reader to stay healthy
+// while B idles. We run one for A and consume its frames via a
+// channel; for B we simply never Read, which is enough to make
+// B's pong window time out.
+func TestWSPongTimeoutReleasesSlot(t *testing.T) {
+	log, buf := captureLogger()
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("server log:\n%s", buf.String())
+		}
+	})
+	h := sig.NewHandler(log)
+	h.Heartbeat = sig.HeartbeatConfig{
+		PingInterval: 50 * time.Millisecond,
+		PongTimeout:  100 * time.Millisecond,
+	}
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	peerA, peerB := joinBoth(t, a, b, "demo")
+	_ = peerA
+	_, _ = bothReady(t, a, b, "demo") // both → callPhase role-assigned
+
+	// Drain helper: read frames off A in a background goroutine so
+	// the auto-pong stays alive. Forward each decoded frame into a
+	// channel; test-thread asserts by consuming from the channel.
+	type aFrame struct {
+		env sig.Envelope
+		raw json.RawMessage
+	}
+	aInbox := make(chan aFrame, 16)
+	aReadErr := make(chan error, 1)
+	go func() {
+		for {
+			_, raw, err := a.conn.Read(a.ctx)
+			if err != nil {
+				aReadErr <- err
+				return
+			}
+			var env sig.Envelope
+			if uerr := json.Unmarshal(raw, &env); uerr != nil {
+				aReadErr <- uerr
+				return
+			}
+			aInbox <- aFrame{env: env, raw: env.Payload}
+		}
+	}()
+
+	expectOn := func(want sig.Type) aFrame {
+		t.Helper()
+		select {
+		case f := <-aInbox:
+			if f.env.Type != want {
+				t.Fatalf("got type=%q want %q", f.env.Type, want)
+			}
+			return f
+		case err := <-aReadErr:
+			t.Fatalf("A read failed: %v", err)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timeout waiting for %q", want)
+		}
+		return aFrame{}
+	}
+
+	// B is already idle (no ongoing Read after bothReady returned).
+	// The server's next Ping to B will get no Pong within 100 ms →
+	// Close(PolicyViolation, "pong_timeout") → deferred cleanup →
+	// releaseAndNotify(_, ccB, "disconnect").
+
+	f := expectOn(sig.TypePeerPresenceChanged)
+	pres := parsePayload[sig.PeerPresenceChangedPayload](t, f.raw)
+	if pres.Presence != sig.PresenceLeft {
+		t.Fatalf("presence=%q want left (in-call pong-timeout)", pres.Presence)
+	}
+	if pres.Reason != sig.PresenceReasonDisconnect {
+		t.Fatalf("reason=%q want disconnect", pres.Reason)
+	}
+	if pres.SubjectPeerID != peerB {
+		t.Fatalf("subject=%s want %s", pres.SubjectPeerID, peerB)
+	}
+
+	f = expectOn(sig.TypePeerLeft)
+	pl := parsePayload[sig.PeerLeftPayload](t, f.raw)
+	if pl.PeerID != peerB {
+		t.Fatalf("peer_left.peerId=%s want %s", pl.PeerID, peerB)
+	}
+	if pl.Reason != sig.PeerLeftDisconnect {
+		t.Fatalf("peer_left.reason=%q want disconnect", pl.Reason)
+	}
+
+	// The server should also log the pong_timeout reason line so
+	// operators can distinguish clean WS-close from heartbeat failure.
+	if !strings.Contains(buf.String(), "pong_timeout") {
+		t.Errorf("expected pong_timeout log line; got:\n%s", buf.String())
+	}
+}
+
+// TestLeaveDuringNegotiation covers EC-012: the offerer hangs up
+// mid-handshake after sending its offer. The remaining peer MUST
+// observe a clean graceful-leave (peer_presence_changed(left,
+// graceful_leave) + peer_left(graceful_leave)) — B's callPhase
+// advanced to `negotiating` on the offer relay, so the departure is
+// still classified as in-call, not pre-pairing. No zombie
+// RTCPeerConnection on B's side, no wedged slot on the server.
+func TestLeaveDuringNegotiation(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	peerA, peerB := joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo") // both → role-assigned
+	_ = peerA
+
+	// A sends an offer; B receives it. A's callPhase advances
+	// role-assigned → negotiating at the relay.
+	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
+	_, _ = b.expect(sig.TypeOffer)
+
+	// Now A hangs up without waiting for B's answer.
+	a.send(leaveRoomMsg("demo"))
+
+	// B observes peer_presence_changed(left, graceful_leave).
+	_, rawPres := b.expect(sig.TypePeerPresenceChanged)
+	pres := parsePayload[sig.PeerPresenceChangedPayload](t, rawPres)
+	if pres.Presence != sig.PresenceLeft {
+		t.Fatalf("presence=%q want left (leave-during-negotiation is in-call)", pres.Presence)
+	}
+	if pres.Reason != sig.PresenceReasonGracefulLeave {
+		t.Fatalf("reason=%q want graceful_leave", pres.Reason)
+	}
+	if pres.SubjectPeerID != peerA {
+		t.Fatalf("subject=%s want %s (the leaver)", pres.SubjectPeerID, peerA)
+	}
+
+	// … followed by peer_left(graceful_leave) — the convenience
+	// cleanup trigger for Path B on the client side.
+	_, rawLeft := b.expect(sig.TypePeerLeft)
+	pl := parsePayload[sig.PeerLeftPayload](t, rawLeft)
+	if pl.PeerID != peerA {
+		t.Fatalf("peer_left.peerId=%s want %s", pl.PeerID, peerA)
+	}
+	if pl.Reason != sig.PeerLeftGracefulLeave {
+		t.Fatalf("peer_left.reason=%q want graceful_leave", pl.Reason)
+	}
+
+	// Receiver-side invariant: B's next frame (if any) is not an
+	// answer relay. The test does not drive B to send an answer, so
+	// `expectNone` simply confirms no trailing protocol noise from
+	// A's departure.
+	_ = peerB
+	b.expectNone(200 * time.Millisecond)
+}
+
+// TestInCallDisconnectEmitsPeerLeft — deferred from T028 per
+// tasks.md; now reachable because Phase 4 wired media_ready + role
+// assignment and Phase 12 factored the classifier into
+// classifyDeparture. A paired, role-assigned peer ungracefully
+// closes its WS; the remaining peer MUST observe both
+// peer_presence_changed(left, disconnect) AND peer_left(disconnect).
+// Complements TestInCallLeaveEmitsPeerLeft (the graceful-leave twin
+// already in this file) so the in-call branch is covered for both
+// departure reasons.
+func TestInCallDisconnectEmitsPeerLeft(t *testing.T) {
+	ts := flowServer(t)
+	a := dialClient(t, ts)
+	b := dialClient(t, ts)
+	peerA, peerB := joinBoth(t, a, b, "demo")
+	_, _ = bothReady(t, a, b, "demo") // both → role-assigned
+	_ = peerA
+
+	// B disconnects ungracefully from role-assigned. The server's
+	// deferred cleanup runs classifyDeparture(reason="disconnect")
+	// with B's CallPhase = role-assigned → in-call.
+	_ = b.conn.Close(websocket.StatusAbnormalClosure, "test disconnect")
+
+	_, rawPres := a.expect(sig.TypePeerPresenceChanged)
+	pres := parsePayload[sig.PeerPresenceChangedPayload](t, rawPres)
+	if pres.Presence != sig.PresenceLeft {
+		t.Fatalf("presence=%q want left (in-call disconnect)", pres.Presence)
+	}
+	if pres.Reason != sig.PresenceReasonDisconnect {
+		t.Fatalf("reason=%q want disconnect", pres.Reason)
+	}
+	if pres.SubjectPeerID != peerB {
+		t.Fatalf("subject=%s want %s", pres.SubjectPeerID, peerB)
+	}
+
+	_, rawLeft := a.expect(sig.TypePeerLeft)
+	pl := parsePayload[sig.PeerLeftPayload](t, rawLeft)
+	if pl.PeerID != peerB {
+		t.Fatalf("peer_left.peerId=%s want %s", pl.PeerID, peerB)
+	}
+	if pl.Reason != sig.PeerLeftDisconnect {
+		t.Fatalf("peer_left.reason=%q want disconnect", pl.Reason)
+	}
+}
