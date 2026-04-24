@@ -12,114 +12,114 @@ measurability, and coverage for this WebRTC learning feature.
 
 ## Requirement Completeness
 
-- [ ] CHK001 — Are the feature's purpose and required learning outcomes
+- [X] CHK001 — Are the feature's purpose and required learning outcomes
       documented so a planner can verify that later phases preserve them?
       [Completeness, Spec §Purpose & Learning Intent]
-- [ ] CHK002 — Are all nine MVP capability areas (room entry, peer presence,
+- [X] CHK002 — Are all nine MVP capability areas (room entry, peer presence,
       local media, 1:1 WebRTC call, media controls, text chat, screen sharing,
       connection/event visibility, leaving/cleanup) represented as functional
       requirements with stable IDs? [Completeness]
-- [ ] CHK003 — Are cleanup behaviors (stop local tracks, close peer
+- [X] CHK003 — Are cleanup behaviors (stop local tracks, close peer
       connection, release chat transport, notify remote, UI reset) each
       specified as distinct requirements? [Completeness, Spec §FR-023..FR-027]
-- [ ] CHK004 — Are requirements defined for every constitution-mandated
+- [X] CHK004 — Are requirements defined for every constitution-mandated
       failure case (permission denial, no input devices, ICE failure,
       ungraceful disconnect, WS disconnect, browser-native screen-share stop,
       refresh, leave-during-negotiation)? [Completeness, Spec §Edge Cases]
-- [ ] CHK005 — Is the two-phase join model fully specified — admission,
+- [X] CHK005 — Is the two-phase join model fully specified — admission,
       pending-media, `media_ready`, pairing, and role assignment
       transitions? [Completeness, Spec §FR-010c]
-- [ ] CHK006 — Are cleanup requirements defined for pending-media participant
+- [X] CHK006 — Are cleanup requirements defined for pending-media participant
       disconnects that occur **without** an explicit media-failure signal?
       [Completeness, Spec §FR-010d]
-- [ ] CHK007 — Are Non-Goals listed explicitly so out-of-scope capabilities
+- [X] CHK007 — Are Non-Goals listed explicitly so out-of-scope capabilities
       cannot leak into MVP requirements? [Completeness, Spec §Non-Goals]
 
 ## Requirement Clarity
 
-- [ ] CHK008 — Is the "1:1 only" room constraint unambiguous — does the spec
+- [X] CHK008 — Is the "1:1 only" room constraint unambiguous — does the spec
       explicitly reject a third joiner regardless of call-readiness state?
       [Clarity, Spec §FR-002, US1 AC-3, US1 AC-7]
-- [ ] CHK009 — Is there a single canonical statement of the offerer-selection
+- [X] CHK009 — Is there a single canonical statement of the offerer-selection
       rule, and is it deterministic (decidable from server state alone)?
       [Clarity, Spec §FR-010a]
-- [ ] CHK010 — Is room capacity (slot occupancy) clearly distinguished from
+- [X] CHK010 — Is room capacity (slot occupancy) clearly distinguished from
       call-readiness so the terms cannot be confused under two-phase join?
       [Clarity, Spec §Key Entities]
-- [ ] CHK011 — Is the screen-share track model unambiguous — exactly one
+- [X] CHK011 — Is the screen-share track model unambiguous — exactly one
       outgoing video track per peer, "replacement" not "add"?
       [Clarity, Spec §FR-017, §Assumptions]
-- [ ] CHK012 — Is "media flows peer-to-peer" phrased in a way that admits
+- [X] CHK012 — Is "media flows peer-to-peer" phrased in a way that admits
       TURN relay (for the learning outcome) without contradicting "never
       through the signaling server"? [Clarity, Spec §FR-011]
-- [ ] CHK013 — Are event-log semantics clear — each client's log is its own
+- [X] CHK013 — Are event-log semantics clear — each client's log is its own
       perspective, and the two clients' logs are not expected to be
       identical? [Clarity, Spec §US5 Independent Test]
-- [ ] CHK014 — Are vague adjectives absent from user-facing requirements
+- [X] CHK014 — Are vague adjectives absent from user-facing requirements
       (e.g., no unquantified "fast", "robust", "intuitive")? [Ambiguity]
 
 ## Acceptance Criteria Quality
 
-- [ ] CHK015 — Does each user story (US1–US5) carry acceptance scenarios
+- [X] CHK015 — Does each user story (US1–US5) carry acceptance scenarios
       that cover the FRs it claims to cover? [Acceptance Criteria]
-- [ ] CHK016 — Are all success criteria (SC-001..SC-009) expressed with
+- [X] CHK016 — Are all success criteria (SC-001..SC-009) expressed with
       metrics or observable signals that can be objectively verified without
       referring to implementation details? [Measurability]
-- [ ] CHK017 — Is the chat-ordering guarantee stated in testable terms
+- [X] CHK017 — Is the chat-ordering guarantee stated in testable terms
       (per-sender ordering; no global total order across simultaneous sends)?
       [Measurability, Spec §US3]
-- [ ] CHK018 — Does SC-002's time window have an unambiguous start point
+- [X] CHK018 — Does SC-002's time window have an unambiguous start point
       that excludes human reaction time on the permission prompt?
       [Measurability, Spec §SC-002]
-- [ ] CHK019 — Are screen-sharing behaviors (start, app-stop, browser-native
+- [X] CHK019 — Are screen-sharing behaviors (start, app-stop, browser-native
       stop, picker-cancel, revert-to-camera, single-slot rule) each covered
       by a testable acceptance scenario? [Acceptance Criteria, Spec §US4]
 
 ## Scenario Coverage
 
-- [ ] CHK020 — Is third-peer rejection documented for **both** an already-
+- [X] CHK020 — Is third-peer rejection documented for **both** an already-
       connected room AND a room where both slots are reserved but one is
       still pending-media? [Coverage, Spec §US1 AC-3, AC-7]
-- [ ] CHK021 — Does the spec distinguish remote-peer-departure (→ waiting)
+- [X] CHK021 — Does the spec distinguish remote-peer-departure (→ waiting)
       from local connection failure (→ terminal `failed`) with separate
       requirements? [Coverage / Consistency, Spec §FR-005, §Edge Cases]
-- [ ] CHK022 — Is offer collision (glare) covered — with its impossibility
+- [X] CHK022 — Is offer collision (glare) covered — with its impossibility
       under the deterministic offerer rule explicitly documented? [Coverage,
       Spec §Edge Cases]
-- [ ] CHK023 — Is each of the twelve WebRTC learning outcomes traceable to
+- [X] CHK023 — Is each of the twelve WebRTC learning outcomes traceable to
       at least one visible user-observable behavior in the spec?
       [Coverage, Spec §SC-008]
-- [ ] CHK024 — Does the spec document observable behavior for both signaling-
+- [X] CHK024 — Does the spec document observable behavior for both signaling-
       relayed chat and DataChannel chat transports, so the learning goal is
       preserved regardless of the plan's transport choice? [Coverage, Spec
       §FR-016, §FR-016a, §US5 Conditional events]
 
 ## Failure-State Visibility
 
-- [ ] CHK025 — Does every failure mode in Edge Cases carry a requirement
+- [X] CHK025 — Does every failure mode in Edge Cases carry a requirement
       that makes the failure user-visible (UI message AND event-log entry)?
       [Completeness, Spec §FR-022, §FR-020]
-- [ ] CHK026 — Is the permission-denied flow required to surface feedback
+- [X] CHK026 — Is the permission-denied flow required to surface feedback
       to the user **before** any signaling negotiation begins?
       [Clarity, Spec §FR-010b, §US1 AC-6]
-- [ ] CHK027 — Are persistent state indicators (room, peer presence, local/
+- [X] CHK027 — Are persistent state indicators (room, peer presence, local/
       remote media, `connectionState`, `iceConnectionState`, `signalingState`,
       screen-share, chat-channel) required as a visible UI surface distinct
       from the event log? [Completeness, Spec §FR-022a, §FR-022b]
 
 ## Consistency / No Hidden Production Claims
 
-- [ ] CHK028 — Does the spec avoid implying security or reliability
+- [X] CHK028 — Does the spec avoid implying security or reliability
       properties the MVP does not implement (e.g., E2EE beyond browser
       defaults)? [Consistency / Honesty, Spec §NFR-005]
-- [ ] CHK029 — Are "no auto-reconnect" and "advanced reconnect = non-goal"
+- [X] CHK029 — Are "no auto-reconnect" and "advanced reconnect = non-goal"
       statements consistent across Non-Goals, FR-005, Edge Cases, and
       Assumptions? [Consistency, Spec §Non-Goals, §FR-005, §Edge Cases]
-- [ ] CHK030 — Is the "signaling server MUST NOT relay media" rule stated
+- [X] CHK030 — Is the "signaling server MUST NOT relay media" rule stated
       identically in FR-011, FR-029, and the Separation-of-Concerns
       constitution check, with no contradictory language elsewhere?
       [Consistency, Spec §FR-011, §FR-029]
-- [ ] CHK031 — Is the "learning project, not production" framing preserved
+- [X] CHK031 — Is the "learning project, not production" framing preserved
       across Purpose, Additional Constraints, Non-Goals, and NFRs — so no
       implied production SLA or 24/7 commitment leaks into MVP
       requirements? [Consistency, Spec §Purpose, §Additional Constraints,
@@ -127,49 +127,50 @@ measurability, and coverage for this WebRTC learning feature.
 
 ## Learning Intent Preservation
 
-- [ ] CHK032 — Is chat-transport choice deferred to planning **while** the
+- [X] CHK032 — Is chat-transport choice deferred to planning **while** the
       DataChannel-preferred final-MVP intent is locked, so the learning goal
       is not erased by a convenient-but-shallow implementation?
       [Consistency, Spec §FR-016a]
-- [ ] CHK033 — Are SDP, ICE, STUN, and TURN learning concepts required to
+- [X] CHK033 — Are SDP, ICE, STUN, and TURN learning concepts required to
       surface via a human-readable learning-inspector (not only raw SDP /
       candidate strings)? [Completeness, Spec §FR-030]
-- [ ] CHK034 — Does the spec require each chat message to be tagged with
+- [X] CHK034 — Does the spec require each chat message to be tagged with
       the path it used (signaling vs DataChannel), so the learner can
       directly observe the distinction? [Completeness, Spec §FR-016, §US5
       Conditional events]
 
 ## Scope Boundaries
 
-- [ ] CHK035 — Is every deferred capability (accounts/auth, DB, multi-party,
+- [X] CHK035 — Is every deferred capability (accounts/auth, DB, multi-party,
       SFU/MCU, recording, mobile native, file transfer, monitoring, advanced
       reconnect, custom E2EE, audio-only fallback, invite links, i18n,
       admin tools, non-Docker deployment automation, simultaneous two-track
       camera + screen) listed explicitly in Non-Goals? [Completeness, Spec
       §Non-Goals]
-- [ ] CHK036 — Is the 1:1 MVP boundary preserved in every capacity-adjacent
+- [X] CHK036 — Is the 1:1 MVP boundary preserved in every capacity-adjacent
       requirement (no "could support more peers later" implication leaks
       into the MVP codepath requirements)? [Consistency, Spec §FR-002, §IX
       constitution principle, §Non-Goals]
 
 ## Traceability
 
-- [ ] CHK037 — Do functional requirements, non-functional requirements, and
+- [X] CHK037 — Do functional requirements, non-functional requirements, and
       success criteria each carry stable, unique IDs usable by downstream
       tasks? [Traceability, Spec §FRs §NFRs §SCs]
-- [ ] CHK038 — Do edge cases carry stable IDs so tasks can reference them
+- [X] CHK038 — Do edge cases carry stable IDs so tasks can reference them
       individually? [Traceability, Spec §Edge Cases]
-- [ ] CHK039 — Does each acceptance scenario map clearly (implicitly or
+- [X] CHK039 — Does each acceptance scenario map clearly (implicitly or
       explicitly) to at least one FR it exercises? [Traceability]
-- [ ] CHK040 — Are the twelve learning outcomes individually traceable to
+- [X] CHK040 — Are the twelve learning outcomes individually traceable to
       the specific FRs, SCs, or ACs that make them observable?
       [Traceability, Spec §Purpose, §SC-008]
 
 ## Notes
 
-- A `[ ]` means the check is **not yet evaluated** in this file; see the
-  **Evaluation** section below for the actual pass/fail judgment against
-  the current `spec.md`.
+- Each `[X]` reflects the per-item PASS verdict recorded in the
+  **Evaluation** section below. Every CHK item was evaluated against
+  `spec.md` on 2026-04-19 and all 40 passed (see the **Result** block
+  and the three post-review passes 4/5/6 that re-confirmed the verdict).
 - Items tagged `[Gap]` mean the spec is missing a requirement; `[Ambiguity]`
   means a requirement exists but is unclear; `[Conflict]` means two
   requirements disagree.
