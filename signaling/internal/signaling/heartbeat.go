@@ -69,7 +69,19 @@ func runHeartbeat(ctx context.Context, conn *websocket.Conn, cfg HeartbeatConfig
 						slog.String("event", "pong_timeout"),
 						slog.String("conn_id", connID),
 					)
-					_ = conn.Close(websocket.StatusPolicyViolation, "pong_timeout")
+					// CloseNow (not Close) — a Pong-timed-out peer is
+					// by definition not reading, so a graceful close
+					// handshake has no one to acknowledge it and would
+					// stall until coder/websocket's close deadline
+					// fires. That stall blocks the enclosing read loop,
+					// delaying the deferred ServeHTTP cleanup
+					// (releaseAndNotify) past SC-009's 10 s bound.
+					// CloseNow sends a TCP FIN without waiting for a
+					// close frame; the read loop unblocks immediately
+					// and the classifier routes through
+					// releaseAndNotify(cc, "disconnect") well under the
+					// SC-009 budget.
+					_ = conn.CloseNow()
 					return &HeartbeatError{Reason: "pong_timeout"}
 				}
 				return &HeartbeatError{Reason: "ping_failed", Err: err}

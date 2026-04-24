@@ -385,17 +385,79 @@ func (h *Handler) handleLeaveRoom(ctx context.Context, cc *connCtx, d *Decoded) 
 	return nil
 }
 
+// departureClassification captures the §C.6 step-1 decision: was the
+// departing peer in-call (role-assigned | negotiating | connected)
+// or still pre-pairing (pending-media, or ready-but-not-paired). The
+// same classification decides both the presence enum on the broadcast
+// and whether the convenience peer_left message is sent.
+type departureClassification struct {
+	inCall          bool
+	presence        Presence
+	presenceReason  PresenceReason
+	peerLeftReason  PeerLeftReason
+}
+
+// classifyDeparture runs §C.6 step 1 BEFORE any state mutation. The
+// caller passes `reason ∈ {"graceful_leave", "disconnect",
+// "media_failed"}` — reason drives the PresenceReason / PeerLeftReason
+// labels but never overrides the in-call / pre-pairing split. A
+// pending-media departure is ALWAYS pre-pairing regardless of reason,
+// which is the invariant T086's
+// `TestPendingMediaDisconnectDoesNotEmitPeerLeft` locks down.
+func classifyDeparture(p *room.Participant, reason string) departureClassification {
+	inCall := false
+	if p != nil {
+		inCall = room.IsInCall(p.CallPhase)
+	}
+	var presence Presence
+	if inCall {
+		presence = PresenceLeft
+	} else {
+		presence = PresenceReleased
+	}
+	var presReason PresenceReason
+	switch reason {
+	case "graceful_leave":
+		presReason = PresenceReasonGracefulLeave
+	case "disconnect":
+		presReason = PresenceReasonDisconnect
+	case "media_failed":
+		presReason = PresenceReasonMediaFailed
+	default:
+		presReason = PresenceReasonDisconnect
+	}
+	var peerLeftReason PeerLeftReason
+	if reason == "graceful_leave" {
+		peerLeftReason = PeerLeftGracefulLeave
+	} else {
+		peerLeftReason = PeerLeftDisconnect
+	}
+	return departureClassification{
+		inCall:         inCall,
+		presence:       presence,
+		presenceReason: presReason,
+		peerLeftReason: peerLeftReason,
+	}
+}
+
 // releaseAndNotify runs the canonical server-side cleanup sequence
 // from data-model §C.6 for a single departing participant. reason is
 // "graceful_leave" (leave_room), "disconnect" (WS close / heartbeat
-// timeout), or "media_failed" (post-admission media acquisition
-// failure).
+// pong timeout — see heartbeat.go), or "media_failed" (post-admission
+// media acquisition failure).
 //
 // Classification happens BEFORE the slot is mutated so the
 // in-call-vs-pre-pairing decision is based on the participant's
 // CallPhase at the moment of departure. Pending-media releases
 // (media_failed, pending-media disconnect) are ALWAYS classified as
 // pre-pairing and MUST NOT emit peer_left, even in Phase 4+.
+//
+// Pong timeout routes through this same function: runHeartbeat
+// returns a HeartbeatError on timeout → the read loop unblocks with
+// an error → the deferred ServeHTTP cleanup calls
+// releaseAndNotify(_, cc, "disconnect"). Classification + emit logic
+// is therefore shared across graceful leave_room, WS-close, and
+// heartbeat-timeout paths — one source of truth.
 func (h *Handler) releaseAndNotify(_ context.Context, cc *connCtx, reason string) {
 	roomID := cc.roomID
 	peerID := cc.peerID
@@ -410,10 +472,7 @@ func (h *Handler) releaseAndNotify(_ context.Context, cc *connCtx, reason string
 
 	rm.Lock()
 	p := rm.FindByPeerID(peerID)
-	inCall := false
-	if p != nil {
-		inCall = room.IsInCall(p.CallPhase)
-	}
+	cls := classifyDeparture(p, reason)
 	rm.Unlock()
 
 	outcome := h.Rooms.Release(roomID, peerID)
@@ -430,30 +489,12 @@ func (h *Handler) releaseAndNotify(_ context.Context, cc *connCtx, reason string
 		return
 	}
 
-	var presence Presence
-	var presReason PresenceReason
-	if inCall {
-		presence = PresenceLeft
-	} else {
-		presence = PresenceReleased
-	}
-	switch reason {
-	case "graceful_leave":
-		presReason = PresenceReasonGracefulLeave
-	case "disconnect":
-		presReason = PresenceReasonDisconnect
-	case "media_failed":
-		presReason = PresenceReasonMediaFailed
-	default:
-		presReason = PresenceReasonDisconnect
-	}
-
 	// peer_presence_changed is ALWAYS sent on departure (§C.6 step 4).
 	presencePayload, _ := json.Marshal(PeerPresenceChangedPayload{
 		SubjectPeerID:  outcome.Departing.PeerID,
 		AdmissionOrder: outcome.Departing.AdmissionOrder,
-		Presence:       presence,
-		Reason:         presReason,
+		Presence:       cls.presence,
+		Reason:         cls.presenceReason,
 	})
 	presenceEnv := Envelope{
 		V:       ContractVersion,
@@ -471,16 +512,10 @@ func (h *Handler) releaseAndNotify(_ context.Context, cc *connCtx, reason string
 	// peer_left is ONLY sent for in-call departures (§C.6 step 5).
 	// Pending-media releases use peer_presence_changed alone (§3.12
 	// note: "Pending-media releases MUST NOT emit peer_left").
-	if inCall {
-		var peerLeftReason PeerLeftReason
-		if reason == "graceful_leave" {
-			peerLeftReason = PeerLeftGracefulLeave
-		} else {
-			peerLeftReason = PeerLeftDisconnect
-		}
+	if cls.inCall {
 		payload, _ := json.Marshal(PeerLeftPayload{
 			PeerID: outcome.Departing.PeerID,
-			Reason: peerLeftReason,
+			Reason: cls.peerLeftReason,
 		})
 		env := Envelope{
 			V:       ContractVersion,
@@ -501,7 +536,7 @@ func (h *Handler) releaseAndNotify(_ context.Context, cc *connCtx, reason string
 		slog.String("peer_id", peerID),
 		slog.String("room_id", roomID),
 		slog.String("reason", reason),
-		slog.Bool("in_call", inCall),
+		slog.Bool("in_call", cls.inCall),
 		slog.Bool("room_gc", outcome.RoomGarbageCollected),
 	)
 }
