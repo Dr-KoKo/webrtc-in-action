@@ -91,7 +91,7 @@ import {
 } from "./learning-inspector";
 import { CONTRACT_VERSION } from "../types/contract";
 
-interface PeerConnectionContextValue {
+export interface PeerConnectionContextValue {
   /** Read-only accessor. Browser objects live here; reducer state
    *  only mirrors getter snapshots (see PeerConnectionSlice). */
   getHandle(): PeerConnectionHandle | null;
@@ -126,7 +126,12 @@ export type ChatSendError =
   | "backpressure"
   | "invalid";
 
-const PeerConnectionContext = createContext<PeerConnectionContextValue | null>(
+// Exported so tests may provide a custom value (see
+// `tests/unit/screen-share-button.spec.tsx`). Production code MUST go
+// through `<PeerConnectionProvider>` + `usePeerConnection()` — the
+// export is a test seam, not a public API. Mirrors `LocalMediaContext`
+// at `local-media-provider.tsx:60`.
+export const PeerConnectionContext = createContext<PeerConnectionContextValue | null>(
   null,
 );
 

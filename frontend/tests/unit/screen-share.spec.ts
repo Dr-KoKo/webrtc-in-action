@@ -241,11 +241,14 @@ describe("screen-share browser-native stop (T077)", () => {
     h.sender.replaceTrack.mockClear();
 
     h.screen.fireEnded();
-    // Allow the async stop() to settle
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(h.sender.replaceTrack).toHaveBeenCalledTimes(1);
+    // The async chain is: `onended` listener → `void stop("browser")`
+    // (async fn) → `await sender.replaceTrack(target)`. The two
+    // previous `await Promise.resolve()` ticks drained that chain by
+    // coincidence in V8; `vi.waitFor` retries the assertion until it
+    // passes, which is runtime-agnostic and documents the intent.
+    await vi.waitFor(() => {
+      expect(h.sender.replaceTrack).toHaveBeenCalledTimes(1);
+    });
     expect(h.sender.replaceTrack.mock.calls[0][0]).toBe(h.camera);
     expect(ctrl.isActive()).toBe(false);
     const stopped = h.log.find((e) => e.type === "screen_share_stopped");
