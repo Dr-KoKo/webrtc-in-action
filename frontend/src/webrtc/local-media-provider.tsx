@@ -33,6 +33,7 @@ import { useSignalingClient } from "../signaling/provider";
 import { CONTRACT_VERSION } from "../types/contract";
 import {
   acquireLocalMedia,
+  readLocalMediaTriplet,
   stopTracks,
   type AcquireLocalMediaOptions,
   type MediaFailedReason,
@@ -121,6 +122,16 @@ export function LocalMediaProvider({
         }
         if (outcome.ok) {
           setStream(outcome.stream);
+          // A fresh getUserMedia stream has both tracks `enabled` and
+          // no screen share. Publish that as the authoritative local
+          // triplet so a prior leave/mute/rejoin cycle cannot leave
+          // the MediaControls UI showing stale "off" labels (Phase 10
+          // regression — the reducer is the source of truth for button
+          // state, so it must match the fresh stream after reacquire).
+          dispatch({
+            type: "LOCAL_MEDIA_STATE_SET",
+            triplet: readLocalMediaTriplet(outcome.stream, "inactive"),
+          });
           sendMediaReady(roomId);
           dispatch({ type: "MEDIA_READY_SENT" });
           dispatch({
@@ -156,8 +167,16 @@ export function LocalMediaProvider({
     // stop any tracks that are still live. The same effect also
     // fires for the initial idle mount; `release()` no-ops when the
     // stream is already null.
+    //
+    // Reset the media slice to its defaults so a subsequent rejoin
+    // starts from a clean slate — both `local` (so button labels
+    // reflect the fresh stream's all-enabled tracks) and `remote`
+    // (so the old peer's last triplet never leaks into a new
+    // pairing). Dispatching unconditionally on idle is safe: the
+    // reset action is a no-op when the slice is already initial.
     if (sessionState === "idle") {
       release();
+      dispatch({ type: "MEDIA_STATE_RESET" });
     }
 
     return () => {

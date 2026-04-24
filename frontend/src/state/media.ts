@@ -38,6 +38,7 @@ export const initialMediaSlice: MediaSlice = {
 export type MediaAction =
   | { type: "LOCAL_MEDIA_STATE_SET"; triplet: MediaTriplet }
   | { type: "REMOTE_MEDIA_STATE_RECEIVED"; triplet: MediaTriplet }
+  | { type: "REMOTE_MEDIA_STATE_CLEARED" }
   | { type: "MEDIA_STATE_RESET" };
 
 export function mediaReducer(
@@ -53,6 +54,9 @@ export function mediaReducer(
         return state;
       }
       return { ...state, remote: action.triplet };
+    case "REMOTE_MEDIA_STATE_CLEARED":
+      if (state.remote === null) return state;
+      return { ...state, remote: null };
     case "MEDIA_STATE_RESET":
       return initialMediaSlice;
     default: {

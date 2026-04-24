@@ -123,6 +123,18 @@ function dispatchValidated(
     case "peer_presence_changed": {
       const presence = msg as PeerPresenceChangedMessage;
       dispatch({ type: "PEER_PRESENCE_CHANGED", message: presence });
+      // When the remote peer is gone (left / released), clear the
+      // remote media triplet so the UI does not render the departed
+      // peer's last mic/camera state on top of a subsequent pairing.
+      // `left`/`released` are never delivered to the subject itself
+      // (the server broadcasts to the remaining participant only), so
+      // we can clear unconditionally.
+      if (
+        presence.payload.presence === "left" ||
+        presence.payload.presence === "released"
+      ) {
+        dispatch({ type: "REMOTE_MEDIA_STATE_CLEARED" });
+      }
       dispatch({
         type: "EVENT_LOG_APPEND",
         entry: makeEventLogEntry({

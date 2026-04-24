@@ -269,6 +269,98 @@ describe("signaling dispatcher", () => {
     expect(send).toHaveBeenCalled();
   });
 
+  it("inbound media_state updates the remote slice + logs one remote entry", () => {
+    const h = makeHarness();
+    h.handleInbound(
+      JSON.stringify({
+        v: 1,
+        type: "media_state",
+        roomId: ROOM,
+        payload: {
+          microphone: "off",
+          camera: "on",
+          screenShare: "inactive",
+        },
+      }),
+    );
+    expect(h.getState().media.remote).toEqual({
+      microphone: "off",
+      camera: "on",
+      screenShare: "inactive",
+    });
+    const mediaEntries = h
+      .getState()
+      .eventLog.entries.filter((e) => e.type === "media_state");
+    expect(mediaEntries).toHaveLength(1);
+    expect(mediaEntries[0].direction).toBe("remote");
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it("peer_presence_changed(left) clears the remote media slice", () => {
+    const h = makeHarness();
+    // Seed a remote media_state so the slice has a triplet to clear.
+    h.handleInbound(
+      JSON.stringify({
+        v: 1,
+        type: "media_state",
+        roomId: ROOM,
+        payload: {
+          microphone: "off",
+          camera: "on",
+          screenShare: "inactive",
+        },
+      }),
+    );
+    expect(h.getState().media.remote).not.toBeNull();
+
+    h.handleInbound(
+      JSON.stringify({
+        v: 1,
+        type: "peer_presence_changed",
+        roomId: ROOM,
+        payload: {
+          subjectPeerId: REMOTE_ID,
+          admissionOrder: 2,
+          presence: "left",
+          reason: "graceful_leave",
+        },
+      }),
+    );
+    expect(h.getState().media.remote).toBeNull();
+  });
+
+  it("peer_presence_changed(released) clears the remote media slice", () => {
+    const h = makeHarness();
+    h.handleInbound(
+      JSON.stringify({
+        v: 1,
+        type: "media_state",
+        roomId: ROOM,
+        payload: {
+          microphone: "on",
+          camera: "off",
+          screenShare: "inactive",
+        },
+      }),
+    );
+    expect(h.getState().media.remote).not.toBeNull();
+
+    h.handleInbound(
+      JSON.stringify({
+        v: 1,
+        type: "peer_presence_changed",
+        roomId: ROOM,
+        payload: {
+          subjectPeerId: REMOTE_ID,
+          admissionOrder: 2,
+          presence: "released",
+          reason: "disconnect",
+        },
+      }),
+    );
+    expect(h.getState().media.remote).toBeNull();
+  });
+
   it("validation failure without a client is tolerated (no throw)", () => {
     let state: RootState = initialRootState;
     const handleInbound = createSignalingDispatcher({

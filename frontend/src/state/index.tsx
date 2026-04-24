@@ -110,6 +110,7 @@ function isMediaAction(action: RootAction): action is MediaAction {
   return (
     action.type === "LOCAL_MEDIA_STATE_SET" ||
     action.type === "REMOTE_MEDIA_STATE_RECEIVED" ||
+    action.type === "REMOTE_MEDIA_STATE_CLEARED" ||
     action.type === "MEDIA_STATE_RESET"
   );
 }
