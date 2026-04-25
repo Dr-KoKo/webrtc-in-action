@@ -94,6 +94,14 @@
 
 ## Evaluation report — 2026-04-25 pass 1
 
+> **⚠ SUPERSEDED — historical only.** This pass-1 report is retained as
+> a record of the reviewer's first read; **do not treat its FAIL rows as
+> open issues**. All 9 failures listed below were resolved by the
+> reviewer-pass-2 spec edits; the authoritative current state is
+> **53 / 53 PASS** in **Evaluation report — 2026-04-25 pass 2** further
+> down. `/speckit.plan` and any downstream agents MUST consult pass 2,
+> not this section, for current spec quality.
+
 **Score**: 44 / 53 PASS (83%). 9 FAIL: 1 blocker, 8 non-blocking.
 
 ### Failures
