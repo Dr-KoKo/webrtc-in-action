@@ -156,9 +156,15 @@ is the canonical record of the decision itself.
   "Mesh mode (capacity 4)") that is distinguishable from the 1:1-mode
   indicator at a glance. (See FR-004 and US2.)
 - Q: What per-remote-peer state vocabulary does the roster expose? →
-  A: Exactly `joined`, `media-ready`, `connecting`, `connected`, `failed`,
-  `left`. The states preserve the two-phase join semantics from 001 but
-  are scoped per remote peer, not whole-room. (See FR-013.)
+  A: The **canonical vocabulary is 7 states**: `joined`, `media-ready`,
+  `connecting`, `connected`, `failed`, `released`, `left`. The `released`
+  state was added during reviewer pass 2 (see the later clarification
+  below in this section) to represent post-admission media failure
+  before any peer-pair exists; it mirrors 001's
+  `participant_released_media_failed` and carries **no peer-pair
+  teardown semantics**. The vocabulary preserves the two-phase join
+  semantics from 001 but is scoped per remote peer, not whole-room.
+  (See FR-013, FR-014, EC-003, and Key Entities → Participant.)
 - Q: For each mesh peer-pair, which participant creates the offer? →
   A: The participant with the **lower** server-assigned `admission_index`
   is the **offerer**; the participant with the **higher**
