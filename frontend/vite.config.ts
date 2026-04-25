@@ -45,7 +45,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "jsdom",
-    include: ["tests/**/*.{spec,test}.{ts,tsx}"],
+    // 001 specs live under tests/. The 002 mesh feature colocates its
+    // unit specs under src/features/mesh/tests/ per plan §5.2.
+    include: [
+      "tests/**/*.{spec,test}.{ts,tsx}",
+      "src/features/mesh/tests/**/*.{spec,test}.{ts,tsx}",
+    ],
     // Playwright owns the browser layer. Vitest must not pick up
     // `tests/e2e/**` or it will try to run Playwright's `test()` in
     // a jsdom context and fail at import (`node:crypto`,

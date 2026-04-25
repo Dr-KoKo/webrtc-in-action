@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"webrtc-lab/signaling/internal/logging"
+	"webrtc-lab/signaling/internal/mesh"
 	sig "webrtc-lab/signaling/internal/signaling"
 )
 
@@ -40,6 +41,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.Handle("/ws", sig.NewHandler(logger))
+	// 002 mesh endpoint — additive; plan §6.4 preserves /ws v1 unchanged.
+	mux.Handle("/ws/mesh", mesh.NewHandler(logger))
 
 	server := &http.Server{
 		Addr:              ":" + port,

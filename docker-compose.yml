@@ -47,6 +47,9 @@ services:
         condition: service_healthy
 
   signaling:
+    # The mesh endpoint /ws/mesh (002) is registered on this same listener
+    # alongside the 001 /ws endpoint via cmd/signaling/main.go — no extra
+    # service or port is required for mesh mode.
     build:
       context: ./signaling
       dockerfile: Dockerfile

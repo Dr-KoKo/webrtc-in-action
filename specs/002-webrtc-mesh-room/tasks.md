@@ -90,28 +90,28 @@ Tasks that **MUST be complete** before each pivotal point:
 
 ## Phase Setup — Project initialization (shared infrastructure, M1 prereq)
 
-- [ ] T001 [shared-infra][frontend] [Setup] Add `react-router-dom` (^6) to `frontend/package.json` — `frontend/package.json`, `frontend/package-lock.json`
+- [X] T001 [shared-infra][frontend] [Setup] Add `react-router-dom` (^6) to `frontend/package.json` — `frontend/package.json`, `frontend/package-lock.json`
     - Purpose: enable the `/` (001) vs `/mesh/:roomId` (002) route boundary; the only top-level frontend dependency added by 002.
     - Files: `frontend/package.json`, `frontend/package-lock.json`.
     - Dependencies: none.
     - DoD: `npm install` (or `npm ci` after lockfile commit) inside `frontend/` succeeds; `react-router-dom` appears in `dependencies`; no other dependency was added or removed; 001 build still succeeds (`npm run build`).
     - Verify: `cd frontend && npm install && npm run build` → exit 0; `git diff` shows only `package.json` + `package-lock.json` touched.
 
-- [ ] T002 [P] [shared-infra][frontend] [Setup] Create mesh feature directory skeleton — `frontend/src/features/mesh/{routes,components,signaling,state,webrtc,tests}/.gitkeep`
+- [X] T002 [P] [shared-infra][frontend] [Setup] Create mesh feature directory skeleton — `frontend/src/features/mesh/{routes,components,signaling,state,webrtc,tests}/.gitkeep`
     - Purpose: reserve the feature-scoped subtree per plan §5.2 so subsequent tasks don't need to invent paths.
     - Files: `.gitkeep` files at each subdir; `frontend/src/routes/.gitkeep` for the top-level route shell home.
     - Dependencies: none (no `[P]` block on T001 — different files).
     - DoD: `git status` shows the seven new empty paths; nothing else.
     - Verify: `find frontend/src/features/mesh -type d` lists the six subdirs.
 
-- [ ] T003 [P] [shared-infra][server] [Setup] Create mesh server package skeleton — `signaling/internal/mesh/.gitkeep`
+- [X] T003 [P] [shared-infra][server] [Setup] Create mesh server package skeleton — `signaling/internal/mesh/.gitkeep`
     - Purpose: reserve the server feature-scoped subtree.
     - Files: `signaling/internal/mesh/.gitkeep`; `signaling/tests/mesh/.gitkeep` for mesh-only test suite.
     - Dependencies: none.
     - DoD: paths exist on disk.
     - Verify: `ls signaling/internal/mesh signaling/tests/mesh`.
 
-- [ ] T004 [P] [shared-infra] [Setup] Confirm docker-compose still supports mesh dev — `docker-compose.yml`
+- [X] T004 [P] [shared-infra] [Setup] Confirm docker-compose still supports mesh dev — `docker-compose.yml`
     - Purpose: verify no compose-level change is required for `/ws/mesh` (the same `signaling` service hosts both endpoints; same port 8080); document this decision in a comment.
     - Files: `docker-compose.yml` (comment-only edit, optional).
     - Dependencies: none.
@@ -124,42 +124,42 @@ Tasks that **MUST be complete** before each pivotal point:
 
 **Goal**: `/` still loads 001 unchanged; `/mesh/:roomId` renders a placeholder shell with the mode badge; `/ws/mesh` accepts and logs WS connect/disconnect. No mesh logic yet.
 
-- [ ] T005 [shared-infra][frontend] [M1] Wrap `App.tsx` in `<BrowserRouter>` with two routes — `frontend/src/App.tsx`, `frontend/src/main.tsx`, `frontend/src/routes/index.tsx`
+- [X] T005 [shared-infra][frontend] [M1] Wrap `App.tsx` in `<BrowserRouter>` with two routes — `frontend/src/App.tsx`, `frontend/src/main.tsx`, `frontend/src/routes/index.tsx`
     - Purpose: install the route boundary; `/` continues to render the existing 001 component tree byte-for-byte; `/mesh/:roomId` renders a placeholder.
     - Files: `frontend/src/App.tsx` (wrap), `frontend/src/routes/index.tsx` (new — declares the two routes).
     - Dependencies: T001, T002.
     - DoD: visiting `/` renders the existing 001 layout exactly as before T001 (manual diff); visiting `/mesh/demo` renders the placeholder.
     - Verify: 001 quickstart `§4.1` (room entry) passes unchanged; `/mesh/demo` shows the placeholder.
 
-- [ ] T006 [P] [shared-infra][frontend] [M1] Add persistent ModeBadge — `frontend/src/routes/modeBadge.tsx`
+- [X] T006 [P] [shared-infra][frontend] [M1] Add persistent ModeBadge — `frontend/src/routes/modeBadge.tsx`
     - Purpose: FR-004 mesh-mode UI indicator; shows "Mesh mode (capacity 4)" on `/mesh/*` and "1:1 mode" on `/`. Persistent in the header for the entire session.
     - Files: `frontend/src/routes/modeBadge.tsx` (new).
     - Dependencies: T005 (routes must exist).
     - DoD: header badge text differs visibly between `/` and `/mesh/demo`; both badges remain visible during navigation between lobby and in-room views.
     - Verify: manual visit to `/` and `/mesh/demo`; screenshot diff or eyeballed badge.
 
-- [ ] T007 [frontend] [M1] Stub `MeshApp.tsx` placeholder — `frontend/src/features/mesh/routes/MeshApp.tsx`
+- [X] T007 [frontend] [M1] Stub `MeshApp.tsx` placeholder — `frontend/src/features/mesh/routes/MeshApp.tsx`
     - Purpose: this is the eventual mesh page; in M1 it is a placeholder rendering "Mesh mode (capacity 4) — placeholder". Replaced by real UI in M4.
     - Files: `frontend/src/features/mesh/routes/MeshApp.tsx` (new).
     - Dependencies: T002, T005.
     - DoD: `MeshApp` is the route component for `/mesh/:roomId`; renders the placeholder text and reads `:roomId` from the URL params.
     - Verify: navigate to `/mesh/abc123`; placeholder text shows the room ID.
 
-- [ ] T008 [server] [M1] Register `/ws/mesh` next to `/ws` in `cmd/signaling/main.go` — `signaling/cmd/signaling/main.go`, `signaling/internal/mesh/handler.go`
+- [X] T008 [server] [M1] Register `/ws/mesh` next to `/ws` in `cmd/signaling/main.go` — `signaling/cmd/signaling/main.go`, `signaling/internal/mesh/handler.go`
     - Purpose: add the mesh WebSocket endpoint. The 001 `/ws` registration is left untouched (plan §6.4).
     - Files: `signaling/cmd/signaling/main.go` (one new `mux.Handle("/ws/mesh", meshHandler)` line), `signaling/internal/mesh/handler.go` (new — minimal upgrader + log on connect/disconnect; no message logic yet).
     - Dependencies: T003.
     - DoD: server logs `mesh_ws_connected` / `mesh_ws_disconnected` with a per-conn correlation ID; `wscat -c ws://localhost:8080/ws/mesh` connects.
     - Verify: `docker compose up --build`; in another terminal `wscat -c ws://localhost:8080/ws/mesh`; observe logs.
 
-- [ ] T009 [P] [test][server] [M1] Smoke test for `/ws/mesh` connect — `signaling/tests/mesh/handler_smoke_test.go`
+- [X] T009 [P] [test][server] [M1] Smoke test for `/ws/mesh` connect — `signaling/tests/mesh/handler_smoke_test.go`
     - Purpose: assert mesh handler upgrades WS without 001 regression.
     - Files: `signaling/tests/mesh/handler_smoke_test.go` (new).
     - Dependencies: T008.
     - DoD: in-process WS connect to `/ws/mesh` succeeds; an idempotent test using `httptest` + `coder/websocket`'s test helpers.
     - Verify: `cd signaling && go test ./tests/mesh/...` → PASS; `go test ./...` shows no 001 failures.
 
-- [ ] T010 [test] [M1] 001 smoke regression after route shell — manual + CI
+- [X] T010 [test] [M1] 001 smoke regression after route shell — manual + CI
     - Purpose: confirm 001 quickstart `§4.1` (room entry, two browsers, lifecycle event log appears) passes after T005..T008.
     - Files: none — execution-only checklist on the existing 001 quickstart.
     - Dependencies: T005, T008.
@@ -174,91 +174,91 @@ Tasks that **MUST be complete** before each pivotal point:
 
 > **Source of truth**: `contracts/signaling-protocol.md` v2. If a task seems to require a contract change, stop and amend the contract first.
 
-- [ ] T011 [contract][server] [M2] Implement v2 envelope + version guard in Go — `signaling/internal/mesh/protocol.go`
+- [X] T011 [contract][server] [M2] Implement v2 envelope + version guard in Go — `signaling/internal/mesh/protocol.go`
     - Purpose: parse the envelope (`v`, `type`, `roomId`, `from`, `to`, `requestId`, `ts`, `payload`); reject `v != 2` with `error { code: "unsupported_version" }` and any unknown `type` with `error { code: "malformed" }`.
     - Files: `signaling/internal/mesh/protocol.go` (new).
     - Dependencies: T008.
     - DoD: helper functions `DecodeEnvelope`, `EncodeEnvelope`, `Validate(t MessageType, payload Raw) error` exist; rejection cases return typed `ProtocolError` matching contract §3.19.
     - Verify: unit test `protocol_envelope_test.go` covers `v=1`, `v=3`, unknown `type`, missing required fields; all reject correctly.
 
-- [ ] T011a [P] [test][server] [M2] Acceptance — `unsupported_version` on `/ws/mesh` — `signaling/tests/mesh/protocol_unsupported_version_test.go`
+- [X] T011a [P] [test][server] [M2] Acceptance — `unsupported_version` on `/ws/mesh` — `signaling/tests/mesh/protocol_unsupported_version_test.go`
     - Purpose: contract §3.19 — assert that any inbound message on `/ws/mesh` with `v != 2` triggers `error { code: "unsupported_version" }` and produces NO room/state mutation. Closes analyze report C9; standardizes the version-mismatch path on the protocol-level `error` channel (not on `join_rejected`).
     - Files: `signaling/tests/mesh/protocol_unsupported_version_test.go` (new).
     - Dependencies: T011.
     - DoD: scenarios covered — (1) `join_room` with `v=1`; (2) `join_room` with `v=3`; (3) `pair_offer` with `v=1`; in each case the server replies with `error { code: "unsupported_version" }`, the inbound is NOT relayed, and `MeshRoomManager` snapshots before/after are byte-equal (no mutation).
     - Verify: `go test ./tests/mesh/protocol_unsupported_version_test.go` → PASS.
 
-- [ ] T012 [P] [contract][frontend] [M2] Author Zod envelope schema — `frontend/src/features/mesh/signaling/schema.ts`
+- [X] T012 [P] [contract][frontend] [M2] Author Zod envelope schema — `frontend/src/features/mesh/signaling/schema.ts`
     - Purpose: TypeScript-side discriminated union over all v2 types; mirrors §3 of the contract.
     - Files: `frontend/src/features/mesh/signaling/schema.ts` (new).
     - Dependencies: T002.
     - DoD: `MeshClientMessage` and `MeshServerMessage` discriminated unions exported; envelope guard rejects `v != 2`.
     - Verify: `npx tsc --noEmit` clean; sample fixtures in `tests/` parse.
 
-- [ ] T013 [contract][server][P] [M2] Go structs + validators for admission family — `signaling/internal/mesh/protocol.go`
+- [X] T013 [contract][server][P] [M2] Go structs + validators for admission family — `signaling/internal/mesh/protocol.go`
     - Purpose: `join_room`, `join_accepted`, `join_rejected`, `participant_released`, `peer_left`, `leave_room` (contract §3.1, §3.2, §3.3, §3.8, §3.17, §3.18).
     - Files: `signaling/internal/mesh/protocol.go` (extend).
     - Dependencies: T011.
     - DoD: each type's `validate()` rejects malformed payload; `join_rejected.payload.result` enforces `{join_rejected_room_full | join_rejected_invalid_room}` (version mismatch is NOT a `join_rejected` result — it is delivered as `error { code: "unsupported_version" }`, see contract §3.3 + §3.19 + T011a). **Bare `room_full` envelope type does NOT exist.**
     - Verify: `protocol_admission_test.go` round-trips contract §3.1–§3.3 examples; assertion that `room_full` is not a registered `MessageType`; assertion that `join_rejected_unsupported_version` is NOT a valid `result` enum value.
 
-- [ ] T014 [contract][server][P] [M2] Go structs + validators for roster family — `signaling/internal/mesh/protocol.go`
+- [X] T014 [contract][server][P] [M2] Go structs + validators for roster family — `signaling/internal/mesh/protocol.go`
     - Purpose: `mesh_roster_snapshot`, `mesh_roster_update` (contract §3.4–§3.5).
     - Files: `signaling/internal/mesh/protocol.go` (extend).
     - Dependencies: T011.
     - DoD: `presence` enum is exactly the 7-element set from FR-013 (`joined | media-ready | connecting | connected | failed | released | left`); `serverSeq` monotonicity is enforced by the manager (§M3), not the validator, but the schema requires `serverSeq` present.
     - Verify: round-trip test for §3.4 / §3.5 examples; rejection for invalid `presence`.
 
-- [ ] T015 [contract][server][P] [M2] Go structs + validators for media-readiness family — `signaling/internal/mesh/protocol.go`
+- [X] T015 [contract][server][P] [M2] Go structs + validators for media-readiness family — `signaling/internal/mesh/protocol.go`
     - Purpose: `media_ready`, `media_failed` (contract §3.6, §3.7).
     - Files: `signaling/internal/mesh/protocol.go` (extend).
     - Dependencies: T011.
     - DoD: `media_ready.payload.mediaCapabilities` requires both `audio:true` and `video:true`; rejection ⇒ `error unsupported_media_capability`.
     - Verify: round-trip test; rejection for `audio:false`.
 
-- [ ] T016 [contract][server] [M2] Go structs + validators for pair family — `signaling/internal/mesh/protocol.go`
+- [X] T016 [contract][server] [M2] Go structs + validators for pair family — `signaling/internal/mesh/protocol.go`
     - Purpose: `pair_negotiation_instruction`, `pair_offer`, `pair_answer`, `pair_ice_candidate`, `pair_media_state`, `pair_failed`, `reconnect_pair`, `pair_reconnect_instruction` (contract §3.9–§3.16).
     - Files: `signaling/internal/mesh/protocol.go` (extend).
     - Dependencies: T011, T014.
     - DoD: every pairwise type carries `pairId` AND `pairEpoch` in `payload` (validator rejects missing); `pair_ice_candidate` rejects `candidate: ""` as `malformed` while accepting `candidate: null` (end-of-candidates); `pair_media_state` requires all three of `microphone`/`camera`/`screenShare` and does NOT carry `pairId` per §3.13 note.
     - Verify: `protocol_pair_test.go` round-trips contract §3.9–§3.16 examples; rejection cases for missing `pairEpoch`, `candidate:""`, partial `pair_media_state`.
 
-- [ ] T017 [contract][server] [M2] Go error types + codes — `signaling/internal/mesh/protocol.go`
+- [X] T017 [contract][server] [M2] Go error types + codes — `signaling/internal/mesh/protocol.go`
     - Purpose: implement the §3.19 error code enum; centralize `ProtocolError` construction.
     - Files: `signaling/internal/mesh/protocol.go` (extend).
     - Dependencies: T011.
     - DoD: codes match the table in §3.19 exactly; **`room_full` and `invalid_room_id` are NOT codes** — pre-admission rejection uses `join_rejected.result`; **`screen_share_busy` is NOT a code**.
     - Verify: unit test asserts the code-set equality with the spec table; assertion that the error-code constant for `screen_share_busy` does not exist (compile-time guarantee).
 
-- [ ] T018 [P] [contract][frontend] [M2] Zod schemas for admission + roster families — `frontend/src/features/mesh/signaling/schema.ts`
+- [X] T018 [P] [contract][frontend] [M2] Zod schemas for admission + roster families — `frontend/src/features/mesh/signaling/schema.ts`
     - Purpose: client-side counterparts to T013 + T014.
     - Files: `frontend/src/features/mesh/signaling/schema.ts` (extend).
     - Dependencies: T012.
     - DoD: `JoinAcceptedSchema`, `JoinRejectedSchema`, `MeshRosterSnapshotSchema`, `MeshRosterUpdateSchema`, `ParticipantReleasedSchema`, `PeerLeftSchema`, `LeaveRoomSchema` exported; presence enum hard-coded to the 7-element set.
     - Verify: round-trip Vitest spec.
 
-- [ ] T019 [P] [contract][frontend] [M2] Zod schemas for media + pair families — `frontend/src/features/mesh/signaling/schema.ts`
+- [X] T019 [P] [contract][frontend] [M2] Zod schemas for media + pair families — `frontend/src/features/mesh/signaling/schema.ts`
     - Purpose: client-side counterparts to T015 + T016.
     - Files: `frontend/src/features/mesh/signaling/schema.ts` (extend).
     - Dependencies: T012, T018.
     - DoD: pair schemas require `pairId` + `pairEpoch`; `pair_ice_candidate` rejects `candidate:""`; `pair_media_state` requires the full triple.
     - Verify: Vitest spec parses examples; rejection cases tested.
 
-- [ ] T020 [test][server] [M2] Server-side stale-message rejection unit test — `signaling/tests/mesh/protocol_pair_epoch_test.go`
+- [X] T020 [test][server] [M2] Server-side stale-message rejection unit test — `signaling/tests/mesh/protocol_pair_epoch_test.go`
     - Purpose: assert that an inbound pair message with `payload.pairEpoch < server.currentEpoch[pairId]` returns `error stale_pair_epoch` and is NOT forwarded.
     - Files: new test file.
     - Dependencies: T016, T017.
     - DoD: the test installs a fake current epoch, sends a pair message with a lower epoch, and asserts the validator returns `ProtocolError{Code: "stale_pair_epoch"}`. Forwarding side-effect is asserted via a fake relay sink (no message delivered).
     - Verify: `go test ./tests/mesh/protocol_pair_epoch_test.go` → PASS.
 
-- [ ] T021 [test][frontend] [M2] Client-side contract round-trip + invariant test — `frontend/src/features/mesh/tests/contract.spec.ts`
+- [X] T021 [test][frontend] [M2] Client-side contract round-trip + invariant test — `frontend/src/features/mesh/tests/contract.spec.ts`
     - Purpose: assert all v2 examples from `contracts/signaling-protocol.md §3` parse; assert specific invariants (no bare `room_full` type, no `screen_share_busy` type, presence enum is exactly the 7-element set, every pair message requires `pairEpoch`).
     - Files: `frontend/src/features/mesh/tests/contract.spec.ts` (new).
     - Dependencies: T012, T018, T019.
     - DoD: at least one positive case per type; explicit negative tests asserting `room_full` and `screen_share_busy` are not in the message-type union.
     - Verify: `cd frontend && npx vitest run features/mesh/tests/contract.spec.ts` → PASS.
 
-- [ ] T022 [test][server] [M2] Audit test — no signaling-relayed final chat surface — `signaling/tests/mesh/no_signaling_chat_test.go`
+- [X] T022 [test][server] [M2] Audit test — no signaling-relayed final chat surface — `signaling/tests/mesh/no_signaling_chat_test.go`
     - Purpose: enforce FR-053 final-MVP transport rule at the contract level: no `chat_message` (or equivalent) message type exists in v2.
     - Files: new test file.
     - Dependencies: T013–T017.
@@ -271,56 +271,56 @@ Tasks that **MUST be complete** before each pivotal point:
 
 **Goal**: server admits up to 4 participants per room; emits `mesh_roster_snapshot` exactly once at admission; emits ordered `mesh_roster_update` on every readiness change; 5th `join_room` is rejected with `join_rejected { result: "join_rejected_room_full" }` within 2 s; `admission_index` is monotonic and never reused; server **never** relays media.
 
-- [ ] T023 [server] [M3] Implement `MeshRoomManager` registry — `signaling/internal/mesh/manager.go`
+- [X] T023 [server] [M3] Implement `MeshRoomManager` registry — `signaling/internal/mesh/manager.go`
     - Purpose: top-level concurrent-safe registry of mesh rooms keyed by `roomId`; mirrors data-model §A.1.
     - Files: `signaling/internal/mesh/manager.go` (new).
     - Dependencies: T011.
     - DoD: `JoinOrCreate`, `Leave`, `LookupBySocket` exposed; per-room `sync.Mutex` consistently held during state mutations.
     - Verify: `manager_test.go` covers create-on-first-join + lookup.
 
-- [ ] T024 [server] [M3] Implement `MeshRoom` capacity + reserved slots — `signaling/internal/mesh/room.go`
+- [X] T024 [server] [M3] Implement `MeshRoom` capacity + reserved slots — `signaling/internal/mesh/room.go`
     - Purpose: 4-element `[4]ReservedSlot`; allocate-on-admit; `admissionCounter` monotonic and **never** reused (data-model §A.2 / research §5).
     - Files: `signaling/internal/mesh/room.go` (new).
     - Dependencies: T023.
     - DoD: `MeshRoom.Admit` returns `ErrRoomFull` when 4 slots reserved; index is `++admissionCounter`; freeing a slot via `OnLeave` keeps `admissionCounter` strictly monotonic (the freed slot's index is NOT recycled). Reconnect / pair-epoch correctness depends on this invariant — see T030 sub-tests `TestAdmissionIndexNeverReused` + `TestPairIdUsesAdmissionIndexNotSlotIndex`.
     - Verify: `mesh_admission_test.go` (T030) green.
 
-- [ ] T025 [server] [M3] Implement `Participant` FSM — `signaling/internal/mesh/participant.go`
+- [X] T025 [server] [M3] Implement `Participant` FSM — `signaling/internal/mesh/participant.go`
     - Purpose: `joined → media-ready → left` plus side-exit `joined → released` (data-model §A.3).
     - Files: `signaling/internal/mesh/participant.go` (new).
     - Dependencies: T024.
     - DoD: enforce only valid transitions; reject `media_ready` from non-`joined` (`error unexpected_media_ready`); `released` is terminal pre-pairing.
     - Verify: `participant_fsm_test.go` covers all transitions including invalid ones.
 
-- [ ] T026 [server] [M3] Implement `Pair` + `PairId` + `pairEpoch` ledger — `signaling/internal/mesh/pair.go`
+- [X] T026 [server] [M3] Implement `Pair` + `PairId` + `pairEpoch` ledger — `signaling/internal/mesh/pair.go`
     - Purpose: per-pair state machine and the server-canonical epoch counter (data-model §A.4–§A.5).
     - Files: `signaling/internal/mesh/pair.go` (new).
     - Dependencies: T024.
     - DoD: `PairId` derived from sorted `(loIdx, hiIdx)` as `"<lo>-<hi>"`; `pairEpoch[pairId]` initialized to `1` at first eligibility, increments by `+1` on each `OnReconnectPair`; per-`PairId` mutex serializes reconnect races.
     - Verify: `pair_epoch_test.go` (later) green.
 
-- [ ] T027 [server] [M3] Roster snapshot on admission + ordered updates — `signaling/internal/mesh/roster.go`
+- [X] T027 [server] [M3] Roster snapshot on admission + ordered updates — `signaling/internal/mesh/roster.go`
     - Purpose: implement `EmitRosterSnapshot` and `BroadcastRosterUpdate` per FR-012a / FR-012b; bumps `MeshRoom.rosterSeq`.
     - Files: `signaling/internal/mesh/roster.go` (new).
     - Dependencies: T023, T024, T025.
     - DoD: snapshot includes all current participants (incl. the newly-admitted self); updates carry strictly-increasing `serverSeq`; broadcast targets every participant including the subject (data-model §A.6).
     - Verify: `mesh_roster_test.go` (T030).
 
-- [ ] T028 [server] [M3] Mesh handler — wire admission + leave to /ws/mesh — `signaling/internal/mesh/handler.go`
+- [X] T028 [server] [M3] Mesh handler — wire admission + leave to /ws/mesh — `signaling/internal/mesh/handler.go`
     - Purpose: replace the M1 placeholder handler with the real read-loop that parses envelopes (T011), routes to the manager (T023), and emits `join_accepted` + `mesh_roster_snapshot` + first `mesh_roster_update`.
     - Files: `signaling/internal/mesh/handler.go` (extend; replaces M1 stub).
     - Dependencies: T008, T011, T013, T014, T023, T027.
     - DoD: 1st–4th `join_room` succeed; 5th gets `join_rejected { result: "join_rejected_room_full" }`; `leave_room` releases the slot and broadcasts `mesh_roster_update { presence: "left" }` (the M5 / M11 paths add the convenience `peer_left` for in-call departures).
     - Verify: `mesh_admission_test.go`.
 
-- [ ] T029 [server] [M3] Heartbeat / disconnect detection wiring — `signaling/internal/mesh/heartbeat.go`
+- [X] T029 [server] [M3] Heartbeat / disconnect detection wiring — `signaling/internal/mesh/heartbeat.go`
     - Purpose: 5 s ping + 5 s pong-timeout (≤10 s detection — SC-005a); identical timing constants to 001.
     - Files: `signaling/internal/mesh/heartbeat.go` (new); env wiring in `cmd/signaling/main.go`.
     - Dependencies: T008, T028.
     - DoD: a hung WS triggers slot release + roster update within 10 s; environment vars `PING_INTERVAL_MS` / `PONG_TIMEOUT_MS` honored (default 5000 each).
     - Verify: `heartbeat_test.go` simulates a missed pong and asserts cleanup runs within the bound.
 
-- [ ] T030 [test][server] [M3] M3 acceptance — admission + roster + 5th rejection — `signaling/tests/mesh/{mesh_admission,mesh_roster}_test.go`
+- [X] T030 [test][server] [M3] M3 acceptance — admission + roster + 5th rejection — `signaling/tests/mesh/{mesh_admission,mesh_roster}_test.go`
     - Purpose: protocol-flow tests that 4 WS clients are admitted (each receiving snapshot + the appropriate roster updates), and a 5th gets `join_rejected_room_full` < 2 s. Also lock in the `admissionIndex` non-reuse invariant on which `pairEpoch` / reconnect correctness depends.
     - Files: `signaling/tests/mesh/mesh_admission_test.go`, `mesh_roster_test.go` (new).
     - Dependencies: T024, T027, T028.
