@@ -648,7 +648,7 @@ PairContext {
   states: {
     connection: RTCPeerConnectionState
     iceConnection: RTCIceConnectionState
-    iceGathering: RTCIceGathererState
+    iceGathering: RTCIceGatheringState
     signaling: RTCSignalingState
     dataChannel: 'connecting' | 'open' | 'closing' | 'closed' | 'absent'
   }
@@ -681,7 +681,7 @@ directly from `PairMap`.
 | `pair_offer` / `pair_answer` | dispatch to matching `PairContext` after `pairEpoch` validation |
 | `pair_ice_candidate` | dispatch to matching `PairContext`; buffer if RD not set |
 | `pair_media_state` | update `RemoteParticipant.remoteMedia` for the matching peer |
-| `pair_failed` | `PairContext.states.connection = 'failed'`; roster presence → `failed` |
+| `pair_failed` | `PairContext.states.connection = 'failed'`; the matching `RemoteParticipant.presence` is derived locally to `failed` from this pair state (no server-emitted roster `presence: "failed"` is involved — see §11.5 / contract §3.16) |
 | `peer_left` / roster `left` | tear down `PairContext`; remove `RemoteParticipant`; tear down dc + pc; do NOT touch other pairs |
 | `error` | `eventLog.error`; non-mutating unless terminal |
 
@@ -708,10 +708,21 @@ Authoritative document: **`specs/002-webrtc-mesh-room/contracts/signaling-protoc
   two participants' `admission_index`es (sorted ascending). Stable for the
   lifetime of the pair across reconnects.
 - `pairEpoch` (server-canonical) = monotonic `uint64`, starting at `1` for
-  the first attempt of a pair, incremented by **+1** on every
-  server-issued `reconnect_pair`. It is carried by every pairwise message
-  (`pair_offer`, `pair_answer`, `pair_ice_candidate`, `pair_media_state`,
-  `pair_failed`, `pair_negotiation_instruction`).
+  the first attempt of a pair, incremented by **+1** on every server-issued
+  `reconnect_pair`. `pairEpoch` is required ONLY on **pairwise
+  connection-attempt messages**:
+  - `pair_negotiation_instruction`
+  - `pair_reconnect_instruction`
+  - `pair_offer`
+  - `pair_answer`
+  - `pair_ice_candidate`
+  - `pair_failed`
+
+  `pair_media_state` is **participant-level signaling metadata**, not a
+  pairwise connection-attempt message. The client sends one update to the
+  server; the server fans it out to every other participant in the room.
+  It carries **neither `pairId` nor `pairEpoch`** on the wire (contract
+  §3.13). The "pair_" prefix is a naming-family artifact only.
 - Stale-message rule: a recipient MUST **drop** any pairwise message
   whose `payload.pairEpoch` is less than its currently-known `pairEpoch`
   for the pair. The server enforces the same rule on inbound C→S pair
@@ -723,7 +734,7 @@ Authoritative document: **`specs/002-webrtc-mesh-room/contracts/signaling-protoc
 |---|---|---|---|
 | 1 | `join_room` | C→S | request admission (`payload.mode = "mesh"` is a redundant check; the endpoint already implies mesh) |
 | 2 | `join_accepted` | S→C | admission OK — assigns `peerId`, `admissionIndex`, embeds `mesh_roster_snapshot` (or sent immediately after) |
-| 3 | `join_rejected` | S→C | typed pre-admission rejection — `payload.result ∈ {"join_rejected_room_full", "join_rejected_invalid_room", "join_rejected_unsupported_version"}` |
+| 3 | `join_rejected` | S→C | typed pre-admission rejection — `payload.result ∈ {"join_rejected_room_full", "join_rejected_invalid_room"}`. Version mismatch (`v != 2` on `/ws/mesh`) is **not** a `join_rejected` result; it is a protocol-level envelope error delivered as `error { code: "unsupported_version" }` (see row 19 + contract §3.3 / §3.19). |
 | 4 | `mesh_roster_snapshot` | S→C | initial full roster (FR-012a) |
 | 5 | `mesh_roster_update` | S→B | incremental roster change (FR-012b) — `presence` ∈ FR-013 7-state set |
 | 6 | `media_ready` | C→S | local media acquired; transitions own readiness; triggers pair instructions |
@@ -736,7 +747,7 @@ Authoritative document: **`specs/002-webrtc-mesh-room/contracts/signaling-protoc
 | 13 | `pair_media_state` | C→S→B | sender's mic/cam/screen state — server **fans out** to all other room peers (FR-032 server-fan-out) |
 | 14 | `reconnect_pair` | C→S | requester asks to fresh-attempt this pair (FR-026) |
 | 15 | `pair_reconnect_instruction` | S→B (per pair) | server's response to `reconnect_pair`: increments `pairEpoch`, sends both peers a fresh `pair_negotiation_instruction` payload semantics |
-| 16 | `pair_failed` | C→S→B | endpoint-detected pair failure; carries `pairId`, `pairEpoch`, `reason` |
+| 16 | `pair_failed` | C→S→C | endpoint-detected pair failure; carries `pairId`, `pairEpoch`, `reason`; server unicasts to the **other endpoint of the pair only** (no fan-out — see contract §3.16) |
 | 17 | `peer_left` | S→C | convenience cleanup trigger when a remote peer leaves while in-call (mirrors 001's narrowed `peer_left`) |
 | 18 | `leave_room` | C→S | explicit graceful departure |
 | 19 | `error` | S↔C | typed error code + correlation |
@@ -746,12 +757,21 @@ SC-005a — same 5 s + 5 s layout as 001 so worst case ≤ 10 s.)
 
 ### 10.4 Relay semantics
 
-The mesh server is a **pure signaling relay** for `pair_offer`,
-`pair_answer`, `pair_ice_candidate`, `pair_media_state`, and
-`pair_failed`. It validates envelope + sender + `pairEpoch` only; it
-does NOT parse SDP / ICE bodies, does NOT cache them, does NOT log
-their contents. It forwards the JSON to the matched `to` peer (for
-unicast pair messages) or fans out to N − 1 peers (for `pair_media_state`).
+The mesh server is a **pure signaling relay**. Two relay families exist
+with different validation surfaces:
+
+**Pairwise relay** — for `pair_offer`, `pair_answer`, `pair_ice_candidate`,
+and `pair_failed`. The server validates envelope, sender membership in
+the named pair, `pairId`, and `pairEpoch` (`payload.pairEpoch ==
+pairEpoch[pairId]`; stale ⇒ `error stale_pair_epoch`, NOT forwarded). It
+does NOT parse SDP / ICE bodies, does NOT cache them, does NOT log their
+contents. It forwards the JSON to the matched `to` peer.
+
+**Participant-level fan-out** — for `pair_media_state` only. This is NOT
+a pairwise message; it carries no `pairId` and no `pairEpoch`. The server
+validates envelope, sender room membership, and sender lifecycle state
+(must be `media-ready`; otherwise `error not_in_room`), then fans the
+metadata out to every other participant in the room without mutation.
 
 ### 10.5 Stale-message rejection
 
@@ -825,9 +845,13 @@ keyed by `pairId`. The lifecycle has four major phases.
 
 ### 11.5 Failures
 
-- ICE failure / DTLS failure / `connectionState === "failed"` ⇒ emit
-  `pair_failed { pairId, pairEpoch, reason }` and roster presence →
-  `failed`.
+- ICE failure / DTLS failure / `pc.connectionState === "failed"` emits
+  `pair_failed { pairId, pairEpoch, reason }` to the **other endpoint of
+  that pair only**. The server MUST NOT broadcast a room-wide
+  `mesh_roster_update { presence: "failed" }`; presence `failed` is
+  per-(viewer, subject) and each client derives its remote tile's
+  `failed` state locally from its own `PairContext.states.connection`
+  (data-model §A.6 derivation rule).
 - Other pairs are not affected (FR-025, L15).
 
 ### 11.6 Stale-message guard
@@ -972,7 +996,7 @@ sequenceDiagram
 
 | Failure | Detected | UI surface | Event-log entry | Effect on other pairs |
 |---|---|---|---|---|
-| `pc.connectionState === "failed"` (one pair) | client | `RemoteTile` → `failed`; `MeshCostSummary.failed += 1`; `PartialMeshBadge` toggles if at least one other pair `connected` (FR-065) | `peer pair failed` (with `pairId`, reason) | None |
+| `pc.connectionState === "failed"` (one pair) | client | `RemoteTile` → `failed` (derived locally from `PairContext.states.connection`, NOT from any server roster broadcast); `MeshCostSummary.failed += 1`; `PartialMeshBadge` toggles if at least one other pair `connected` (FR-065) | `peer pair failed` (with `pairId`, reason) | None — server unicasts `pair_failed` to the other endpoint of the pair only; no third-party roster update is emitted |
 | ICE failure / DTLS failure (one pair) | client | same as above | `ICE state changed → failed` + `peer pair failed` | None |
 | Remote `peer_left` / roster update `left` | server → client | `RemoteTile` removed; cost summary recomputes | `peer left` | None |
 | Local signaling drop (EC-012, SC-005b) | client | `LocalParticipant.fsm = signaling-error` (top-level banner) | `signaling error` | Already-connected P2P pairs MAY keep flowing media until they fail on their own; new pair instructions cannot arrive |

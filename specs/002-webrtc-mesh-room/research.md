@@ -59,7 +59,15 @@ is the baseline; topics below are mesh-specific deltas or refinements.
 
 **Decision**:
 - `pairId = "<lo>-<hi>"` where `lo` and `hi` are the two `admission_index`es sorted ascending, formatted as decimal strings (e.g., `"3-7"`). Stable for the lifetime of the pair across reconnects.
-- `pairEpoch` is a `uint64` issued and incremented exclusively by the server. First attempt = `1`. Every server-issued `pair_reconnect_instruction` increments by `+1`. Every pairwise message (`pair_offer`, `pair_answer`, `pair_ice_candidate`, `pair_media_state`, `pair_failed`, `pair_negotiation_instruction`, `pair_reconnect_instruction`) carries `pairEpoch` in its payload.
+- `pairEpoch` is a `uint64` issued and incremented exclusively by the server. First attempt = `1`. Every server-issued `pair_reconnect_instruction` increments by `+1`. `pairEpoch` is required ONLY on **pairwise connection-attempt messages**:
+  - `pair_negotiation_instruction`
+  - `pair_reconnect_instruction`
+  - `pair_offer`
+  - `pair_answer`
+  - `pair_ice_candidate`
+  - `pair_failed`
+
+  `pair_media_state` is **not** a pairwise connection-attempt message; it is participant-level signaling metadata (server-fan-out per §6) and carries no `pairId` or `pairEpoch` on the wire (contract §3.13). The "pair_" prefix in its name is a naming-family artifact only.
 - Stale-message rule: any pairwise message whose `payload.pairEpoch` is less than the pair's currently-known epoch is **dropped**, both server-side (returned as `error stale_pair_epoch`) and client-side (logged peer-scoped, no state change).
 
 **Rationale**:

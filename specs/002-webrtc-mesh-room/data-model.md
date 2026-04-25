@@ -202,11 +202,23 @@ Each `epoch` represents one fresh attempt:
 - `epoch = 1` — initial attempt (created when both peers reach `media-ready`).
 - `epoch = N+1` — fresh attempt after `reconnect_pair` from the previous attempt at `epoch = N`.
 
-**Stale-message rule (server-side)**: every inbound pair message
-(`pair_offer`, `pair_answer`, `pair_ice_candidate`, `pair_failed`,
-`pair_media_state` does NOT carry `pairEpoch`) MUST have
-`payload.pairEpoch == pairEpoch[pairId]`; otherwise the server returns
-`error stale_pair_epoch` to the sender and does NOT forward.
+**Stale-message rule (server-side)**: the following pairwise
+connection-attempt messages MUST carry `payload.pairEpoch` and MUST match
+the server's current `pairEpoch[pairId]`:
+
+- `pair_offer`
+- `pair_answer`
+- `pair_ice_candidate`
+- `pair_failed`
+
+Any mismatch ⇒ the server returns `error { code: "stale_pair_epoch" }`
+to the sender and does NOT forward.
+
+`pair_media_state` is **exempt** from this rule because it is
+participant-level server-fan-out metadata and carries no `pairId` or
+`pairEpoch` on the wire (contract §3.13). The server's relay validation
+for `pair_media_state` is scoped to envelope + room membership + sender
+readiness (`media-ready`), not pair epoch.
 
 ### A.6 `RosterSnapshot` and `RosterUpdate`
 
@@ -387,7 +399,7 @@ type PairContext = {
   states: {
     connection: RTCPeerConnectionState
     iceConnection: RTCIceConnectionState
-    iceGathering: RTCIceGathererState
+    iceGathering: RTCIceGatheringState
     signaling: RTCSignalingState
     dataChannel: 'connecting' | 'open' | 'closing' | 'closed' | 'absent'
   }

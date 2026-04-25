@@ -80,10 +80,10 @@ Tasks that **MUST be complete** before each pivotal point:
 
 | Gate | Required tasks |
 |---|---|
-| Before any RTCPeerConnection code (M6+) | All of M1, M2, M3, M4, M5; specifically T029 (server-side roster + admission) and T044 (frontend two-phase join) green. |
+| Before any RTCPeerConnection code (M6+) | All of M1, M2, M3, M4, M5; specifically T027 + T028 (server-side roster + admission), T039 + T044 (frontend two-phase join end-to-end), and T030 (admission tests incl. `TestAdmissionIndexNeverReused`) green. |
 | Before DataChannel chat work (M8) | All of M1–M7. M7 must reach SC-001 (4-browser mesh call) on a manual run. |
 | Before `reconnect_pair` work (M11) | All of M6 (pairEpoch infrastructure) and M7 (per-pair indicators); M7's contract tests for `pairEpoch` (T053) must be green. |
-| Before `/speckit.implement` is invoked | Setup phase complete (T001–T004). The implement workflow then proceeds task-by-task. |
+| Before `/speckit.implement` is invoked | **No implementation task must be complete.** The workflow consumes this `tasks.md` and starts at T001; it MUST follow the §0.1 phase DAG (no skipping ahead). The recommended first batch to execute is Setup + M1 + M2 + M3; do not proceed to M4+ until M1–M3 verification is green. |
 | Before M12 final verification | All of M1–M11 green; quickstart §4.2–§4.6 reproducible by a fresh contributor following the doc. |
 
 ---
@@ -175,11 +175,18 @@ Tasks that **MUST be complete** before each pivotal point:
 > **Source of truth**: `contracts/signaling-protocol.md` v2. If a task seems to require a contract change, stop and amend the contract first.
 
 - [ ] T011 [contract][server] [M2] Implement v2 envelope + version guard in Go — `signaling/internal/mesh/protocol.go`
-    - Purpose: parse the envelope (`v`, `type`, `roomId`, `from`, `to`, `requestId`, `ts`, `payload`); reject `v != 2` with `error unsupported_version` and any unknown `type` with `error malformed`.
+    - Purpose: parse the envelope (`v`, `type`, `roomId`, `from`, `to`, `requestId`, `ts`, `payload`); reject `v != 2` with `error { code: "unsupported_version" }` and any unknown `type` with `error { code: "malformed" }`.
     - Files: `signaling/internal/mesh/protocol.go` (new).
     - Dependencies: T008.
     - DoD: helper functions `DecodeEnvelope`, `EncodeEnvelope`, `Validate(t MessageType, payload Raw) error` exist; rejection cases return typed `ProtocolError` matching contract §3.19.
     - Verify: unit test `protocol_envelope_test.go` covers `v=1`, `v=3`, unknown `type`, missing required fields; all reject correctly.
+
+- [ ] T011a [P] [test][server] [M2] Acceptance — `unsupported_version` on `/ws/mesh` — `signaling/tests/mesh/protocol_unsupported_version_test.go`
+    - Purpose: contract §3.19 — assert that any inbound message on `/ws/mesh` with `v != 2` triggers `error { code: "unsupported_version" }` and produces NO room/state mutation. Closes analyze report C9; standardizes the version-mismatch path on the protocol-level `error` channel (not on `join_rejected`).
+    - Files: `signaling/tests/mesh/protocol_unsupported_version_test.go` (new).
+    - Dependencies: T011.
+    - DoD: scenarios covered — (1) `join_room` with `v=1`; (2) `join_room` with `v=3`; (3) `pair_offer` with `v=1`; in each case the server replies with `error { code: "unsupported_version" }`, the inbound is NOT relayed, and `MeshRoomManager` snapshots before/after are byte-equal (no mutation).
+    - Verify: `go test ./tests/mesh/protocol_unsupported_version_test.go` → PASS.
 
 - [ ] T012 [P] [contract][frontend] [M2] Author Zod envelope schema — `frontend/src/features/mesh/signaling/schema.ts`
     - Purpose: TypeScript-side discriminated union over all v2 types; mirrors §3 of the contract.
@@ -192,8 +199,8 @@ Tasks that **MUST be complete** before each pivotal point:
     - Purpose: `join_room`, `join_accepted`, `join_rejected`, `participant_released`, `peer_left`, `leave_room` (contract §3.1, §3.2, §3.3, §3.8, §3.17, §3.18).
     - Files: `signaling/internal/mesh/protocol.go` (extend).
     - Dependencies: T011.
-    - DoD: each type's `validate()` rejects malformed payload; `join_rejected.payload.result` enforces `{join_rejected_room_full | join_rejected_invalid_room | join_rejected_unsupported_version}`. **Bare `room_full` envelope type does NOT exist.**
-    - Verify: `protocol_admission_test.go` round-trips contract §3.1–§3.3 examples; assertion that `room_full` is not a registered `MessageType`.
+    - DoD: each type's `validate()` rejects malformed payload; `join_rejected.payload.result` enforces `{join_rejected_room_full | join_rejected_invalid_room}` (version mismatch is NOT a `join_rejected` result — it is delivered as `error { code: "unsupported_version" }`, see contract §3.3 + §3.19 + T011a). **Bare `room_full` envelope type does NOT exist.**
+    - Verify: `protocol_admission_test.go` round-trips contract §3.1–§3.3 examples; assertion that `room_full` is not a registered `MessageType`; assertion that `join_rejected_unsupported_version` is NOT a valid `result` enum value.
 
 - [ ] T014 [contract][server][P] [M2] Go structs + validators for roster family — `signaling/internal/mesh/protocol.go`
     - Purpose: `mesh_roster_snapshot`, `mesh_roster_update` (contract §3.4–§3.5).
@@ -275,7 +282,7 @@ Tasks that **MUST be complete** before each pivotal point:
     - Purpose: 4-element `[4]ReservedSlot`; allocate-on-admit; `admissionCounter` monotonic and **never** reused (data-model §A.2 / research §5).
     - Files: `signaling/internal/mesh/room.go` (new).
     - Dependencies: T023.
-    - DoD: `MeshRoom.Admit` returns `ErrRoomFull` when 4 slots reserved; index is `++admissionCounter`; freeing a slot keeps the counter monotonic.
+    - DoD: `MeshRoom.Admit` returns `ErrRoomFull` when 4 slots reserved; index is `++admissionCounter`; freeing a slot via `OnLeave` keeps `admissionCounter` strictly monotonic (the freed slot's index is NOT recycled). Reconnect / pair-epoch correctness depends on this invariant — see T030 sub-tests `TestAdmissionIndexNeverReused` + `TestPairIdUsesAdmissionIndexNotSlotIndex`.
     - Verify: `mesh_admission_test.go` (T030) green.
 
 - [ ] T025 [server] [M3] Implement `Participant` FSM — `signaling/internal/mesh/participant.go`
@@ -314,11 +321,13 @@ Tasks that **MUST be complete** before each pivotal point:
     - Verify: `heartbeat_test.go` simulates a missed pong and asserts cleanup runs within the bound.
 
 - [ ] T030 [test][server] [M3] M3 acceptance — admission + roster + 5th rejection — `signaling/tests/mesh/{mesh_admission,mesh_roster}_test.go`
-    - Purpose: protocol-flow tests that 4 WS clients are admitted (each receiving snapshot + the appropriate roster updates), and a 5th gets `join_rejected_room_full` < 2 s.
+    - Purpose: protocol-flow tests that 4 WS clients are admitted (each receiving snapshot + the appropriate roster updates), and a 5th gets `join_rejected_room_full` < 2 s. Also lock in the `admissionIndex` non-reuse invariant on which `pairEpoch` / reconnect correctness depends.
     - Files: `signaling/tests/mesh/mesh_admission_test.go`, `mesh_roster_test.go` (new).
     - Dependencies: T024, T027, T028.
-    - DoD: tests pass; `mesh_roster_test.go` asserts strictly-increasing `serverSeq` over 6+ updates.
-    - Verify: `go test ./tests/mesh/...` → PASS.
+    - DoD: tests pass; `mesh_roster_test.go` asserts strictly-increasing `serverSeq` over 6+ updates. `mesh_admission_test.go` additionally contains:
+        - `TestAdmissionIndexNeverReused` — A and B join (indices `1`, `2`); A leaves gracefully; C joins; assert `C.admissionIndex > B.admissionIndex` (`= 3`, NOT `1`). Existing pair IDs MUST NOT collide with historical pair IDs from A's session.
+        - `TestPairIdUsesAdmissionIndexNotSlotIndex` — induce a freed-then-reused slot scenario; assert `pairId` derivation uses `admissionIndex`, not `slot.index`, so a recycled slot does NOT produce a colliding `pairId`.
+    - Verify: `go test ./tests/mesh/...` → PASS, with both new sub-tests green.
 
 ---
 
@@ -912,10 +921,18 @@ A failed audit blocks shipment.
 
 ### Tasks that must complete before `/speckit.implement`
 
-`/speckit.implement` consumes this `tasks.md` directly; no tasks need
-to complete before invoking it. However, the **first** task it should
-execute is T001, and the implement workflow MUST treat the dependency
-arrows in §0.1 as binding (no skipping ahead).
+**No implementation task must be complete** before invoking
+`/speckit.implement` — the command consumes this `tasks.md` directly.
+The implement workflow MUST:
+
+- start at T001 (the first task);
+- treat the §0.1 phase DAG as binding (no skipping ahead);
+- limit the **first execution batch to Setup + M1 + M2 + M3 only**, and
+  pause for verification at the end of M3 before proceeding to M4+.
+
+Re-invoke `/speckit.implement` (or continue the same session) after each
+phase boundary checkpoint so the M3 → M4 / M7 → M8 / M10 → M11 / M11 → M12
+gates are honored.
 
 ### Tasks that must complete before any RTCPeerConnection code
 

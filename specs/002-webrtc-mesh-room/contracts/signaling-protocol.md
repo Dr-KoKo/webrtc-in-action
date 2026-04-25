@@ -126,7 +126,7 @@ performed.
 
 **Server response** (exactly one of):
 - `join_accepted` (admission OK), or
-- `join_rejected` (`result = "join_rejected_room_full" | "join_rejected_invalid_room" | "join_rejected_unsupported_version"`), or
+- `join_rejected` (`result = "join_rejected_room_full" | "join_rejected_invalid_room"`), or
 - `error { code: "already_joined" }`.
 
 ---
@@ -189,10 +189,15 @@ envelope type from earlier draft contract designs.
 
 `payload.result` ∈ `{
 "join_rejected_room_full",
-"join_rejected_invalid_room",
-"join_rejected_unsupported_version"
+"join_rejected_invalid_room"
 }`. `reason` is a short machine-readable tag; `message` is human-readable
 and safe to display in the UI (per NFR-006).
+
+**Version mismatch is NOT a `join_rejected` result.** A `join_room` (or
+any other message) carrying `v != 2` on `/ws/mesh` is a protocol-level
+envelope error; the server replies with `error { code: "unsupported_version" }`
+(see §3.19) and does not create or modify any room state. Version mismatch
+is therefore handled before admission semantics apply.
 
 **Forbidden**: a bare `room_full` envelope `type` MUST NOT exist in v2.
 Pre-admission rejection has exactly one canonical channel: this message.
@@ -516,7 +521,7 @@ All three fields are **required** in every message; partial updates are
 not supported (MVP simplicity, mirrors 001 v1).
 
 **Server behavior**:
-1. Validate the sender is `connected` (in the mesh-room sense) — i.e., has reached `media-ready`.
+1. Validate the sender is `connected` (in the mesh-room sense) — i.e., has reached `media-ready`. Reject if `Participant.readiness ∉ {media-ready}` ⇒ `error not_in_room` (a `released` or `left` sender must not be able to leak media-state to the room).
 2. For every other participant in the room, emit one envelope with `from = sender.peerId` and the same payload. Do NOT mutate the payload.
 3. Do NOT log mic/cam/screen state values beyond a count + correlation ID.
 
@@ -598,13 +603,16 @@ for `pairId` is dropped + logged.
 
 ---
 
-### 3.16 `pair_failed` (C→S→B)
+### 3.16 `pair_failed` (C→S→C)
 
-**Purpose**: endpoint-detected pair failure (e.g., `pc.connectionState === "failed"`). Server fans out to the other endpoint of the pair only (the originator already knows).
+**Purpose**: endpoint-detected pair failure (e.g., `pc.connectionState === "failed"`). Server unicasts to the other endpoint of the pair only (the originator already knows); does NOT fan out to the rest of the room (the §2 legend reserves `C→S→B` for `pair_media_state`).
 
 **Direction**: C→S then S→C (to the other peer of the pair). Server does
-NOT fan out to other room members; pair state changes are reflected via
-`mesh_roster_update` if needed.
+NOT fan out to other room members and MUST NOT emit a
+`mesh_roster_update { presence: "failed" }` in response — presence
+`failed` is per-(viewer, subject) and each client derives its own remote
+tile's `failed` state locally from `PairContext.states.connection`
+(data-model §A.6).
 
 **Required fields**: `v`, `type`, `roomId`, `to`, `payload`
 
@@ -627,12 +635,13 @@ NOT fan out to other room members; pair state changes are reflected via
 
 **Server behavior**:
 1. Validate `pairId` + `pairEpoch`.
-2. Update `Pair.state = failed`.
-3. Forward to the other endpoint of the pair.
-4. Emit a single `mesh_roster_update { presence: "failed", reason: "pair_failed" }` for the **subject** participant only if the spec's roster `presence` is now derivable as `failed` for that pair direction. (Roster `presence` is per-remote-peer per-viewer; the receiving client computes its own roster's presence for the subject from the pair state — i.e., the client-side roster `presence: "failed"` is derived locally on each client based on its own `PairContext.states.connection`.)
+2. Update server-side `Pair.state = failed` for bookkeeping only.
+3. Forward `pair_failed` to the **other endpoint of the pair only**.
+4. Do NOT fan out `pair_failed` or any roster update to unrelated room members. The server MUST NOT emit a `mesh_roster_update { presence: "failed" }` in response to a `pair_failed`: presence `failed` is per-(viewer, subject) and each client derives its own remote tile's `failed` state locally from its `PairContext.states.connection` (data-model §A.6).
 
 Failure isolation guarantee: this message MUST NOT cause the server to
-touch other pairs (FR-025).
+touch other pairs and MUST NOT alter any third party's roster (FR-025,
+L15).
 
 ---
 
