@@ -53,3 +53,17 @@
   roster snapshot and broadcast updates; FR-070 / US8 / SC-008 lock
   outgoing-sender count to `2 × (N − 1)`; FR-010 + EC-015 lock 001's
   room-ID validation rule. All checklist items continue to pass.
+- Validation pass 3 (2026-04-25, post reviewer pass 2 / mesh.md
+  pass 2): mesh.md reaches **53 / 53 PASS**. Reviewer pass 2 edits
+  applied — stable IDs **L13–L18** in §Mesh-specific learning
+  outcomes (with SC-010 retargeted); **FR-026** manual
+  reconnect-this-pair via fresh PC; **FR-021a** pair-attempt
+  identity (`pairEpoch`/equivalent); **FR-022a** existing-pair
+  stability on newcomer join; **FR-013a** local-vs-remote-vs-pair
+  state separation; **FR-032** locked to server-side fan-out;
+  **FR-052a** chat local echo separated from per-channel send log;
+  FR-011 de-bareified `room_full` → typed `join_rejected`;
+  Assumption "001 codepath untouched" split into behavioral vs
+  implementation freeze; Assumption "No reconnection" → "No
+  automatic reconnect / no ICE restart proper"; Non-Goals add
+  codec-selection + `screen_share_busy`. Spec is **plan-ready**.

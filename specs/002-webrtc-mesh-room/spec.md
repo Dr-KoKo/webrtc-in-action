@@ -33,25 +33,82 @@ Teach how WebRTC behaves when moving from a single 1:1 peer connection to a
 multi-party mesh topology, and let the learner directly observe **why mesh
 scales poorly and why an SFU is the natural next step**.
 
-### Learning outcomes the feature MUST make explicit
+### Mesh-specific learning outcomes (stable IDs L13–L18)
 
-The running mesh mode MUST let a learner directly observe and reason about:
+The running mesh mode MUST let a learner directly observe and reason
+about each of the following. Each outcome MUST have at least one
+observable moment in the UI or event log (per SC-010). The original
+001 learning outcomes (referred to as L1–L12) remain reachable through
+the preserved 001 mode (FR-002, US2 AS#1, SC-002).
 
-- each participant maintaining **one RTCPeerConnection per remote peer**,
-- mesh topology cost growing as **N×(N−1)/2** peer-pairs in the room and
-  **N−1** RTCPeerConnections per participant (the O(N²) shape),
-- this scaling cost being exactly why an SFU exists as the natural next step,
-- offer/answer and ICE flows being **pairwise**, not room-global,
-- a group chat message requiring **fan-out** over each remote peer's
-  RTCDataChannel,
-- screen sharing remaining a **per-peer outgoing-track replacement** — the
-  same rule as 001, generalized to N−1 remote peers,
-- failure isolation being **per RTCPeerConnection**: A↔B failing must not
-  kill A↔C or A↔D,
-- per-peer `connectionState`, `iceConnectionState`, `iceGatheringState`,
-  and `signalingState` diverging at the same instant (the four lifecycle
-  states mandated by Constitution Principle V),
-- event logs and state indicators being **peer-scoped**, not room-scoped.
+- **L13 — Per-PC connection independence**: each peer-pair has its
+  own offer/answer, ICE, connection, and DataChannel lifecycle;
+  offer/answer and ICE flows are **pairwise**, not room-global.
+  Observable surfaces:
+  - per-peer `connectionState`, `iceConnectionState`,
+    `iceGatheringState`, and `signalingState` indicators (FR-023,
+    FR-064) — the four lifecycle states mandated by Constitution
+    Principle V — diverging at the same instant for two different
+    remote peers (US3 AS#1, AS#3);
+  - peer-scoped event log entries (FR-060, FR-061) carrying explicit
+    peer ID / pair context for every pairwise event.
+
+- **L14 — Mesh fan-out cost**: each participant maintains **`N − 1`**
+  RTCPeerConnections and the room has **`N × (N − 1) / 2`**
+  peer-pairs (the O(N²) shape); this scaling cost is exactly why an
+  SFU exists as the natural next step (§Constitutional alignment).
+  Observable surfaces:
+  - mesh cost summary panel (FR-070, FR-071, NFR-007);
+  - SC-008 step-by-step counts (1 → 0/0; 2 → 1/1; 3 → 2/3; 4 → 3/6);
+  - outgoing-sender count growing as `2 × (N − 1)` per participant.
+
+- **L15 — Per-PC failure isolation**: a failure of A↔B does NOT
+  affect A↔C or A↔D (FR-025); the room MUST NOT enter a terminal
+  failed state because of a single peer-pair failure (FR-065).
+  Observable surfaces:
+  - per-peer `failed` indicator on a single remote tile (US7 AS#1);
+  - room-level **partial-mesh** indicator visually distinct from a
+    whole-room failure (FR-065);
+  - mesh cost summary `failed` count incrementing without
+    `connected` count collapsing (FR-070).
+
+- **L16 — Per-peer single outgoing video slot**: each participant has
+  exactly **one** outgoing video slot; screen sharing replaces that
+  slot's track on every connected remote peer via
+  `RTCRtpSender.replaceTrack` (FR-040, FR-042). Multiple participants
+  MAY screen-share concurrently (FR-041); WebRTC has **no native
+  room-level "screen share" concept** — screen share is purely a
+  per-peer outgoing-track replacement at each sender's
+  RTCPeerConnection.
+  Observable surfaces:
+  - remote tile mirroring the remote's current outgoing video source
+    (FR-043);
+  - `local track replaced` event-log entries per peer-pair (FR-060);
+  - mesh cost summary outgoing-sender count remaining `2 × (N − 1)`
+    across track replacements (FR-070).
+
+- **L17 — DataChannel fan-out**: a single group chat message produces
+  **`N − 1`** DataChannel writes, one per remote peer (FR-051). There
+  is no shared "room" DataChannel without an SFU.
+  Observable surfaces:
+  - per-message fan-out count in the sender's UI (FR-052, SC-006);
+  - per-channel send-attempt entries in the peer-scoped event log
+    (FR-052, FR-060);
+  - chat UI rendering each sent message exactly once via local echo
+    (FR-052a), distinct from the `N − 1` log entries.
+
+- **L18 — Newcomer pairing-order independence**: when a newcomer
+  becomes `media-ready`, the system creates only the **new**
+  peer-pairs involving the newcomer; existing peer-pairs among
+  already-present participants MUST NOT be paused, torn down, or
+  renegotiated solely because the newcomer joined (FR-022a).
+  Observable surfaces:
+  - existing peer-pair tiles remaining in `connected` state during
+    new pairings (US1 AS#5);
+  - the newcomer's per-peer indicators progressing through
+    `connecting` → `connected` independently for each existing peer
+    without any state transition appearing on the existing-peers'
+    own tiles for each other.
 
 ## Clarifications
 
@@ -205,6 +262,76 @@ is the canonical record of the decision itself.
 
   EC-012 is the local-viewpoint edge case; SC-005a / SC-005b name the
   measurable outcomes for each viewpoint.
+- Q: Does the MVP include a manual per-pair Reconnect affordance for a
+  failed peer-pair, or is whole-session leave/rejoin the only
+  recovery? → A: **Manual per-pair Reconnect IS in scope**. FR-026
+  defines it; activation creates a **fresh RTCPeerConnection** for
+  that peer-pair only (NOT an ICE restart on the existing PC).
+  Whole-room auto-reconnect, signaling auto-reconnect, full-mesh
+  reconnect, and ICE restart proper remain out of scope. The
+  Assumption "No automatic reconnect / no ICE restart proper"
+  replaces the earlier over-restrictive "No reconnection / no ICE
+  restart". (See FR-026, FR-021a, US7 AS#3, §Assumptions, §Non-Goals.)
+- Q: How are pairwise messages distinguished between a failed
+  attempt and a fresh attempt for the same peer-pair (so stale
+  messages don't poison reconnect)? → A: Every pairwise negotiation
+  attempt MUST carry a **pair-attempt identifier** (`pairEpoch`,
+  `pairAttemptId`, or equivalent monotonic counter scoped per
+  peer-pair) on every offer / answer / ICE / DataChannel-meta
+  message. The exact format is a contract decision (FR-090); the
+  spec only requires that some such mechanism exists and is checked
+  before applying any pairwise message. (See FR-021a, FR-026.)
+- Q: Are mesh-specific learning outcomes assigned stable IDs for
+  traceability? → A: **Yes** — six outcomes **L13–L18** in
+  §"Mesh-specific learning outcomes". Original 001 outcomes (treated
+  as L1–L12) remain reachable through the preserved 001 mode. SC-010
+  pegs reviewer-walkthrough coverage to L13–L18. (See §Mesh-specific
+  learning outcomes, §SC-010.)
+- Q: Is `room_full` a bare signaling message type, or a structured
+  rejection result? → A: **Structured rejection result.** FR-011
+  requires a clear, user-visible **room-full error**, but does NOT
+  require a bare `room_full` envelope type. The v2 contract SHOULD
+  prefer a typed `join_rejected` message with a structured
+  `result: "join_rejected_room_full"` for symmetry with 001 v1's
+  rejection shape. (See FR-011, FR-090.)
+- Q: How is media-state propagated to all remote peers — client-side
+  fan-out or server-side fan-out? → A: **Server-side fan-out.** The
+  client sends ONE media-state update to the mesh signaling server;
+  the server fans it out to every other participant in the same
+  mesh room. This preserves 001's signaling-server-as-router model.
+  Client-side fan-out (client iterates and sends N − 1 separate
+  signaling messages for one state change) MUST NOT be used. The
+  server still routes metadata only — never media payloads. (See
+  FR-032, FR-024, FR-091.)
+- Q: When a newcomer joins, may existing peer-pairs be paused or
+  renegotiated as a side effect? → A: **No.** FR-022a explicitly
+  forbids it: only the new peer-pairs involving the newcomer are
+  created; existing pairs' connection / ICE / signaling /
+  DataChannel state MUST be unchanged by the newcomer's pairing
+  flow. This is the testable surface of L18. (See FR-022a, US1 AS#5,
+  L18.)
+- Q: Where does a sent group-chat message render — once locally,
+  N − 1 times, or both? → A: **Exactly once** in the sender's chat
+  UI as a local echo (FR-052a), independent of the N − 1
+  per-channel send entries that appear in the peer-scoped event log
+  (FR-060). The chat UI and the event log are two separate
+  surfaces; conflating them would make a single sent message look
+  like N messages. (See FR-052a, FR-052, FR-060.)
+- Q: Is the 001 freeze a behavioral freeze or an implementation-shell
+  freeze? → A: **Behavioral.** All 001 FRs / acceptance scenarios /
+  success criteria / contract semantics MUST be preserved.
+  Non-breaking implementation-shell refactors that preserve all 001
+  behavior (mode router, shared utility extraction, file moves) ARE
+  permitted; they are NOT prohibited by Non-Goals "No removal or
+  rewrite". (See §Assumptions → "001 codepath untouched (behavioral
+  freeze, not implementation freeze)".)
+- Q: Is local-vs-remote-vs-pair state separation explicit, or implicit?
+  → A: **Explicit** via FR-013a. Three distinct surfaces — local
+  participant state, remote peer presence/readiness state, peer-pair
+  lifecycle state — MUST be rendered without conflation. Peer-pair
+  state is rendered ONLY on remote tiles; the local participant's own
+  tile shows local readiness / media state but no pair state (no pair
+  exists with oneself). (See FR-013a.)
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -447,10 +574,23 @@ A↔C, A↔D, B↔C, B↔D, and C↔D remain in their actual states.
    Alice's event log records a `peer pair failed` entry tagged with Bob's
    peer ID, and **no whole-room cleanup is triggered**.
 2. **Given** A↔B is in failed state, **When** Alice clicks a per-peer
-   "Leave / Remove" affordance on Bob's tile (or simply clears the failed
-   tile), **Then** the recovery action is scoped to A↔B only and does not
-   tear down A↔C or A↔D. (Automatic ICE restart and full-mesh reconnect
-   are out of scope per Non-Goals; manual per-peer recovery is the MVP.)
+   "Leave / Remove" affordance on Bob's tile (or simply clears the
+   failed tile), **Then** the recovery action is scoped to A↔B only
+   and does not tear down A↔C or A↔D. (Automatic ICE restart and
+   full-mesh reconnect remain out of scope per Non-Goals; manual
+   per-peer recovery is the MVP.)
+3. **Given** A↔B is in `failed` state while A↔C and A↔D remain
+   `connected`, **When** Alice clicks the per-pair **Reconnect**
+   affordance on Bob's tile (FR-026), **Then** the application tears
+   down only the failed A↔B RTCPeerConnection and RTCDataChannel and
+   creates a **fresh pairing attempt** for A↔B (new
+   RTCPeerConnection, new pair-attempt identifier per FR-021a, new
+   offer/answer/ICE flow under FR-022). A↔C and A↔D MUST remain in
+   `connected` state throughout (no pause, no renegotiation — per
+   FR-022a invariants applied to non-newcomer pairs as well). Any
+   late-arriving stale offer/answer/ICE/DataChannel-meta messages
+   from the failed attempt MUST be dropped because their
+   pair-attempt identifier no longer matches.
 
 ---
 
@@ -621,7 +761,15 @@ the UI and/or per-peer event log; silent failure is not acceptable.
   on receipt (defense in depth). See EC-015.
 - **FR-011**: A mesh room MUST admit a maximum of **4 participants** by
   default. The 5th attempted participant MUST be rejected with a clear,
-  user-visible `room_full` error (no waiting queue, no auto-retry).
+  user-visible **room-full** error within the latency bound of SC-004
+  (no waiting queue, no auto-retry, no existing peer-pair disturbance).
+  The exact v2 signaling shape carrying this rejection is defined by
+  the mesh signaling contract (FR-090); the spec does **NOT** require
+  a bare `room_full` envelope type. The v2 contract SHOULD prefer a
+  typed `join_rejected` message with a structured result/reason
+  (e.g., `result: "join_rejected_room_full"`) for symmetry with 001
+  v1's rejection shape (001 spec FR-011a / contract §join_rejected),
+  unless planning explicitly justifies otherwise.
 - **FR-012**: The system MUST display a **roster** of every participant in
   the mesh room, including the local participant and each remote peer with
   a stable peer identifier or label.
@@ -676,6 +824,31 @@ the UI and/or per-peer event log; silent failure is not acceptable.
   observes one such state for every other participant in the roster
   (FR-012), and the state MUST be visible without opening browser
   developer tools.
+- **FR-013a (State separation: local vs remote vs pair)**: The UI
+  MUST render **three distinct state surfaces** without conflating
+  them:
+  1. **Local participant state** — the local participant's own
+     lifecycle (`joining` → `joined` → `media-ready` → `in-room` →
+     `leaving` / `left` / `failed`, with side-exit `joined` →
+     `released`) and local media state (mic / camera / screen-share
+     on/off). Answer to "what state am I in?"
+  2. **Remote peer presence/readiness state** — for each remote peer
+     in the roster, exactly one of the 7 states defined in FR-013.
+     Answer to "what state is that remote peer in, from my
+     perspective?"
+  3. **Peer-pair lifecycle state** — for each (local, remote) pair,
+     `RTCPeerConnection.connectionState`, `iceConnectionState`,
+     `iceGatheringState`, `signalingState`, and DataChannel state
+     (FR-023, FR-064). Answer to "what state is the connection
+     **between us** in?"
+
+  The roster (FR-012) lists the local participant alongside remote
+  peers, but **peer-pair lifecycle state is rendered ONLY on remote
+  tiles** (no peer-pair exists with oneself). UI implementations and
+  tests MUST distinguish these three surfaces; conflating them — for
+  example, rendering the local participant's own `media-ready` as a
+  pair `connectionState`, or rendering a remote peer's presence
+  state in the pair-state column — is a defect.
 - **FR-014 (Per-peer cleanup, by terminal state)**:
   - When a peer transitions to **`left`** (graceful leave, ungraceful
     disconnect, network loss, or remote signaling drop after at least
@@ -702,6 +875,27 @@ the UI and/or per-peer event log; silent failure is not acceptable.
   peer-pair identifier), and the application MUST never apply an
   offer/answer or ICE candidate intended for one peer-pair to another
   peer-pair.
+- **FR-021a (Pair attempt identity)**: Every pairwise negotiation
+  attempt MUST be distinguishable from prior attempts for the **same**
+  peer-pair. The plan/contract MUST define a **pair-attempt
+  identifier** (e.g., `pairEpoch`, `pairAttemptId`, or an equivalent
+  monotonic counter scoped per peer-pair) carried on every pairwise
+  signaling message — offer / answer / ICE candidate / DataChannel
+  meta — so that late-arriving messages from a previously-failed
+  attempt cannot be applied to a fresh attempt for the same pair.
+  This invariant is a hard prerequisite for the manual
+  reconnect-this-pair flow (FR-026); without it, stale messages can
+  poison a fresh pairing attempt.
+- **FR-022a (Existing pair stability on newcomer join)**: When a
+  newcomer participant becomes `media-ready`, the system MUST create
+  only the **new** peer-pairs that involve the newcomer. Existing
+  `connected` or `connecting` peer-pairs among already-present
+  participants MUST NOT be paused, torn down, or renegotiated solely
+  because the newcomer joined; their `connectionState`,
+  `iceConnectionState`, `iceGatheringState`, `signalingState`, and
+  DataChannel state MUST be unchanged by the newcomer's pairing
+  flow. This is the testable surface of L18 (newcomer pairing-order
+  independence) and aligns with US1 AS#5.
 - **FR-022 (Deterministic offerer per peer-pair)**: For each peer-pair,
   the deterministic offerer/answerer rule MUST be:
   - **offerer** = the participant with the **lower** server-assigned
@@ -751,6 +945,25 @@ the UI and/or per-peer event log; silent failure is not acceptable.
   terminal `failed` state. The system MUST NOT propagate that failure to
   any other peer-pair. The system MUST NOT enter a whole-room `failed`
   state in response to a single peer-pair failure.
+- **FR-026 (Manual reconnect-this-pair)**: When a peer-pair is in
+  `failed` state (per FR-025), the UI MUST expose a **per-pair manual
+  Reconnect affordance**. Activating it MUST:
+  1. tear down the failed pair's RTCPeerConnection and RTCDataChannel
+     locally;
+  2. create a **fresh pairing attempt** for that peer-pair (a new
+     RTCPeerConnection, a new pair-attempt identifier per FR-021a,
+     and a new offer/answer/ICE flow under FR-022);
+  3. affect **only** that peer-pair — no other healthy or pending
+     peer-pair MUST be paused, renegotiated, or torn down as a side
+     effect.
+
+  The reconnect attempt MUST be a fresh pairing attempt, **NOT** an
+  ICE restart on the existing PC; ICE restart proper remains out of
+  scope (§Non-Goals, §Assumptions). The pair-attempt identifier
+  (FR-021a) ensures stale offer/answer/ICE/DataChannel-meta messages
+  from the failed attempt are dropped and cannot be applied to the
+  fresh attempt. Whole-room auto-reconnect, signaling auto-reconnect,
+  and full-mesh reconnect remain out of scope.
 
 **Local media & per-peer media state**
 
@@ -763,11 +976,25 @@ the UI and/or per-peer event log; silent failure is not acceptable.
 - **FR-031**: Each participant MUST be able to mute/unmute their microphone
   and turn their camera on/off during an active mesh call. The local UI
   MUST reflect the change immediately.
-- **FR-032**: Whenever a participant changes microphone, camera, or
-  screen-share state, the client MUST notify **every connected remote
-  peer** via an explicit media-state signaling message (per the signaling
-  contract), so each remote's per-peer media-state indicator updates
-  deliberately rather than being inferred from packet flow.
+- **FR-032 (Media-state fan-out)**: Whenever a participant changes
+  microphone, camera, or screen-share state, the client MUST notify
+  **every connected remote peer** of the new state via an explicit
+  media-state signaling update, so each remote's per-peer media-state
+  indicator (FR-033) updates deliberately rather than being inferred
+  from packet flow.
+
+  **Direction (locked for MVP)**: the client sends **one**
+  media-state update to the **mesh signaling server**, and the server
+  **fans it out** to every other participant in the same mesh room.
+  This preserves 001's signaling-server-as-router model for metadata
+  coordination. The client MUST NOT implement client-side fan-out for
+  media-state updates (i.e., the client does NOT iterate over its
+  N − 1 peers and send N − 1 separate signaling messages for one
+  state change).
+
+  The signaling server routes this metadata only and MUST NOT relay
+  any audio, video, or screen-share **media payload** — that
+  separation, identical to 001 (FR-024, FR-091), is preserved.
 - **FR-033**: For each remote peer, the system MUST display **per-peer**
   indicators for that peer's microphone, camera, and screen-share state.
 
@@ -826,6 +1053,20 @@ the UI and/or per-peer event log; silent failure is not acceptable.
   sends were attempted and how many succeeded. Skipped peers (e.g.,
   DataChannel not `open`) MUST be visible as a per-peer "send skipped"
   log entry.
+- **FR-052a (Chat local echo separated from per-channel send log)**:
+  When a participant sends a mesh group chat message, the sender's
+  **chat UI** MUST render the message **exactly once** as a local
+  message, immediately upon send, **independent of** the `N − 1`
+  per-peer DataChannel writes performed by fan-out (FR-051, FR-052).
+  Local echo MUST NOT depend on round-trip confirmation from any
+  remote peer — the message appears in the sender's chat list as
+  soon as the local user submits it. The peer-scoped event log
+  (FR-060) separately records the `N − 1` per-channel send attempts
+  (one entry per remote peer); these log entries MUST NOT cause the
+  chat UI to render the same message N times. **Invariant**: chat UI
+  shows N=1 message; event log shows N − 1 send-attempt events for
+  that message. This separation is the testable surface tying L17
+  (DataChannel fan-out) to the user-facing chat experience.
 - **FR-053**: Signaling-relayed group chat MAY be used as an interim build
   milestone while DataChannel fan-out work is in progress, but the **final
   MVP MUST use DataChannel fan-out** unless the plan documents a strong,
@@ -879,6 +1120,10 @@ the UI and/or per-peer event log; silent failure is not acceptable.
   `chat message received` (with sender peer ID/label and transport
   label per FR-053),
   `peer pair failed` (with reason),
+  `peer pair reconnect requested` (manual reconnect-this-pair
+  invoked — see FR-026, US7 AS#3),
+  `peer pair fresh attempt started` (new pair-attempt identifier per
+  FR-021a; replaces a prior failed attempt),
   `signaling error` (local-viewpoint signaling-socket loss — see
   EC-012, SC-005b),
   `error occurred` (with reason).
@@ -1132,22 +1377,34 @@ the UI and/or per-peer event log; silent failure is not acceptable.
   at the same time, every other participant sees both screens (one per
   remote tile, replacing each sharer's camera output), and the application
   does not prompt or auto-stop either share.
-- **SC-010 (Learning-outcome coverage)**: A reviewer walking through the
-  running mesh mode and its per-peer event log + cost summary can point
-  to at least one observable moment for **each** of the nine learning
-  outcomes listed in "Purpose & Learning Intent / Learning outcomes the
-  feature MUST make explicit", AND can point to live per-peer
-  indicators for **all four** Constitution-Principle-V lifecycle
-  states (`connectionState`, `iceConnectionState`, `iceGatheringState`,
+- **SC-010 (Learning-outcome coverage)**: A reviewer walking through
+  the running mesh mode and its per-peer event log + cost summary can
+  point to at least one observable moment for **each** of the
+  mesh-specific learning outcomes **L13–L18** (§"Mesh-specific
+  learning outcomes"), AND can point to live per-peer indicators for
+  **all four** Constitution-Principle-V lifecycle states
+  (`connectionState`, `iceConnectionState`, `iceGatheringState`,
   `signalingState`) on at least one remote peer during the walkthrough.
+  Coverage of 001's L1–L12 is not measured here — those are preserved
+  through the running 001 mode and verified by SC-002.
 
 ## Assumptions
 
-- **001 codepath untouched**: 001's signaling contract, room model, UI,
-  acceptance criteria, and constitution-mapping remain unchanged. Any
+- **001 codepath untouched (behavioral freeze, not implementation freeze)**:
+  The 001 freeze that this feature respects is **behavioral**: all 001
+  functional requirements, acceptance scenarios, success criteria,
+  signaling-contract semantics, room model, UI behavior, and
+  constitution-mapping MUST be preserved without modification. Any
   mesh-mode signaling message types that share an envelope with 001
-  messages MUST extend the contract **additively** (no breaking edits to
-  the 001 contract entries).
+  messages MUST extend the contract **additively** (no breaking edits
+  to the 001 contract entries). Implementation-shell changes that
+  preserve **all** 001 behavior — extracting shared utilities into a
+  common module, adopting a mode router, file-organization moves, or
+  TypeScript-level refactors — ARE permitted and are NOT within the
+  scope of the §Non-Goals "No removal or rewrite of the 001 1:1
+  codepath." That Non-Goal forbids behavioral regressions and
+  out-and-out replacement of 001, NOT non-breaking refactors that
+  keep 001's externally-observable behavior identical.
 - **Mesh-mode selection mechanism**: The way a participant enters mesh
   mode (separate route, in-app mode toggle, mode argument on `join_room`,
   or a distinct WebSocket endpoint) is a plan-level decision. The spec
@@ -1194,9 +1451,17 @@ the UI and/or per-peer event log; silent failure is not acceptable.
   only delivered to currently-connected peers (via their open
   DataChannels). A peer who joins later does NOT receive prior messages,
   and the application MUST NOT persist or replay chat.
-- **No reconnection / no ICE restart**: Identical to 001's stance. A
-  failed peer-pair, a dropped signaling connection, or a refresh requires
-  manual leave/rejoin in MVP.
+- **No automatic reconnect / no ICE restart proper**: The MVP does
+  NOT attempt automatic reconnect of any kind, and does NOT implement
+  ICE restart on an existing RTCPeerConnection. A failed peer-pair
+  MAY be recovered via the **manual reconnect-this-pair affordance
+  (FR-026)**, which creates a fresh RTCPeerConnection (and a new
+  pair-attempt identifier per FR-021a) for that pair only — this is
+  NOT an ICE restart, it is a fresh pairing. Whole-room
+  auto-reconnect, signaling auto-reconnect, full-mesh reconnect, and
+  ICE restart proper all remain out of scope. A dropped signaling
+  connection or a page refresh still requires manual leave/rejoin in
+  MVP.
 - **Hardware**: Each participant has a working camera and microphone. No
   audio-only or video-only fallback is required for MVP.
 - **Browser support**: Modern Chromium-based browsers are the primary
@@ -1223,12 +1488,21 @@ feature spec.
 - **No server-side media forwarding.** Signaling-only server, identical
   to 001.
 - **No simulcast / SVC.**
+- **No custom codec selection or codec preferences.** Browser default
+  codec negotiation applies; the MVP MUST NOT introduce a
+  codec-selection UI, signaling fields carrying codec preferences, or
+  `RTCRtpSender.setCodecPreferences` /
+  `RTCRtpTransceiver.setCodecPreferences` calls. Browser-divergent
+  codec defaults (Chromium / Firefox / Safari) are documented in
+  §Assumptions but are not configurable from the application.
 - **No E2EE Insertable Streams** beyond browser-provided WebRTC DTLS/SRTP
   defaults.
 - **No call recording or media archiving.**
 - **No file transfer over DataChannel.**
-- **No automatic ICE restart, no automatic full-mesh reconnect, no
-  automatic signaling reconnect.**
+- **No automatic ICE restart, no ICE restart proper, no automatic
+  full-mesh reconnect, no automatic signaling reconnect.** Manual
+  per-pair reconnect (FR-026) IS in scope but creates a fresh
+  RTCPeerConnection — it is **not** an ICE restart on an existing PC.
 - **No support for more than 4 participants in MVP.**
 - **No room ownership, authentication, authorization, or moderation.**
 - **No invite links, QR codes, or other room-discovery UX** unless a
@@ -1248,3 +1522,9 @@ feature spec.
   implementation MUST live alongside 001, not replace it.
 - **No room-level single-sharer mutex** for screen share. Multiple
   concurrent sharers are explicitly allowed (FR-041).
+- **No `screen_share_busy` (or equivalent) error code** in the
+  signaling or chat contract. The application MUST NOT introduce any
+  room-level "current sharer" concept, busy-flag, or reservation;
+  concurrent sharers (FR-041) are first-class behavior, not an
+  exception path. WebRTC has no native room-level "screen share"
+  concept (§Mesh-specific learning outcomes → L16).

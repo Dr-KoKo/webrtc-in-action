@@ -4,14 +4,15 @@
 **Created**: 2026-04-25
 **Feature**: [spec.md](../spec.md)
 **Scope**: Reviewer-supplied checklist categories (Learning intent, 001 coexistence, Mesh scope, Mesh topology, Pairwise negotiation, Chat, Screen sharing, Failure isolation, Observability, Acceptance criteria).
-**Evaluation pass 1**: 2026-04-25 — 44 / 53 items PASS, 9 FAIL (1 blocker). See **Evaluation report** at the bottom.
+**Evaluation pass 1**: 2026-04-25 — 44 / 53 items PASS, 9 FAIL (1 blocker). See **Evaluation report (pass 1)** at the bottom.
+**Evaluation pass 2**: 2026-04-25 — **53 / 53 PASS**. All pass-1 failures resolved by reviewer-pass-2 spec edits (L13–L18 IDs, FR-026 manual reconnect-this-pair via fresh PC, FR-021a pair-attempt identity, FR-022a existing-pair stability, FR-013a state separation, FR-032 server-fan-out direction, FR-052a chat local echo, freeze-flavor split, codec-selection / `screen_share_busy` / WebRTC-no-room-level-screen-share clarifications). Spec is **plan-ready**. See **Evaluation report (pass 2)** at the bottom.
 
 ## Learning intent
 
 - [x] CHK001 Is the feature framed as a WebRTC learning project rather than a production conferencing product? [Clarity, Spec §Purpose & Learning Intent]
 - [x] CHK002 Is the pedagogical reason for adding mesh **after** 001 1:1 explicitly stated (i.e., why mesh is the next step)? [Completeness, Spec §Primary learning goal]
 - [x] CHK003 Is SFU explicitly identified as a future, **separate** feature (not part of 002)? [Completeness, Spec §Constitutional alignment, §Non-Goals]
-- [ ] CHK004 Are the mesh-specific learning outcomes (the reviewer's "L13–L18") explicitly listed **and assigned stable IDs** that survive into acceptance criteria? [Traceability, Spec §Learning outcomes the feature MUST make explicit]
+- [x] CHK004 Are the mesh-specific learning outcomes (the reviewer's "L13–L18") explicitly listed **and assigned stable IDs** that survive into acceptance criteria? [Traceability, Spec §Learning outcomes the feature MUST make explicit]
 - [x] CHK005 Does the spec confirm that 001's existing learning outcomes remain reachable through the preserved 001 mode? [Coverage, Spec §FR-002, US2 AS#1, SC-002]
 
 ## 001 coexistence
@@ -20,7 +21,7 @@
 - [x] CHK007 Is "002 does not replace 001" stated explicitly? [Completeness, Spec §FR-001..FR-003, §Non-Goals]
 - [x] CHK008 Is the requirement that learners can directly compare 1:1 and mesh in the **same running build** specified? [Completeness, Spec §FR-003, US2]
 - [x] CHK009 Is it specified that 001's existing v1 signaling-contract semantics MUST NOT be modified by 002 (additive only)? [Consistency, Spec §FR-090, §Assumptions → 001 codepath untouched]
-- [ ] CHK010 Does the spec distinguish **behavioral freeze** of 001 (acceptance criteria preserved) from **implementation-shell freeze** (no code modifications), or are they conflated? [Ambiguity, Spec §Non-Goals "No removal or rewrite of the 001 1:1 codepath", §Assumptions]
+- [x] CHK010 Does the spec distinguish **behavioral freeze** of 001 (acceptance criteria preserved) from **implementation-shell freeze** (no code modifications), or are they conflated? [Ambiguity, Spec §Non-Goals "No removal or rewrite of the 001 1:1 codepath", §Assumptions]
 
 ## Mesh scope
 
@@ -28,7 +29,7 @@
 - [x] CHK012 Is 5th-participant rejection specified with a measurable behavior (latency target + no side-effects)? [Measurability, Spec §FR-011, §EC-002, §SC-004]
 - [x] CHK013 Is "no >4-participant behavior is required" stated as a non-goal? [Completeness, Spec §Non-Goals "No support for more than 4 participants in MVP"]
 - [x] CHK014 Is "no waiting queue and no auto-promotion when full" specified? [Completeness, Spec §FR-011]
-- [ ] CHK015 Are SFU, MCU, simulcast/SVC, **codec selection**, recording, E2EE, file transfer, auth, persistent chat, invite links, and production-deployment automation explicitly out-of-scope? [Coverage, Spec §Non-Goals]
+- [x] CHK015 Are SFU, MCU, simulcast/SVC, **codec selection**, recording, E2EE, file transfer, auth, persistent chat, invite links, and production-deployment automation explicitly out-of-scope? [Coverage, Spec §Non-Goals]
 
 ## Mesh topology
 
@@ -42,7 +43,7 @@
 - [x] CHK020 Is per-peer-pair offerer selection deterministic? [Clarity, Spec §FR-022]
 - [x] CHK021 Is the ordering basis (server-side stable order, specifically `admission_index`) explicitly named and direction-locked? [Clarity, Spec §FR-022, §Assumptions → Deterministic offerer per peer-pair]
 - [x] CHK022 Is "a newcomer pairs with every existing media-ready participant" specified? [Completeness, Spec §FR-020, §US1 AS#2/#5, §FR-012a/FR-012b roster delivery]
-- [ ] CHK023 Is it specified that **existing peer-pairs are NOT paused or renegotiated** when a newcomer joins? [Gap, Spec §FR-020, §US1 AS#2]
+- [x] CHK023 Is it specified that **existing peer-pairs are NOT paused or renegotiated** when a newcomer joins? [Gap, Spec §FR-020, §US1 AS#2]
 - [x] CHK024 Are offer/answer and ICE lifecycle requirements **pair-scoped** (not room-global)? [Consistency, Spec §FR-021, FR-023, FR-025]
 
 ## Chat
@@ -50,7 +51,7 @@
 - [x] CHK025 Is RTCDataChannel fan-out locked as the **final** mesh chat transport (not a best-effort suggestion)? [Clarity, Spec §FR-051, FR-053]
 - [x] CHK026 Is signaling-relayed broadcast explicitly disallowed as the final mesh chat transport? [Completeness, Spec §FR-053, FR-091]
 - [x] CHK027 Is "one group send produces N − 1 DataChannel writes" stated and measurable? [Measurability, Spec §FR-051, FR-052, §SC-006]
-- [ ] CHK028 Is **local echo** (sender's own UI rendering the just-sent message) specified as a requirement? [Gap, Spec §US4, §FR-051..FR-053]
+- [x] CHK028 Is **local echo** (sender's own UI rendering the just-sent message) specified as a requirement? [Gap, Spec §US4, §FR-051..FR-053]
 - [x] CHK029 Is "global total ordering across all peers is NOT required" stated as a deliberate non-requirement? [Clarity, Spec §FR-055]
 
 ## Screen sharing
@@ -58,16 +59,16 @@
 - [x] CHK030 Is the single-outgoing-video-slot rule per participant specified? [Clarity, Spec §FR-040]
 - [x] CHK031 Is multiple-concurrent-screen-sharers permission specified as a hard requirement? [Completeness, Spec §FR-041, US6, EC-011]
 - [x] CHK032 Is "no room-level current-sharer mutex" stated as a deliberate non-requirement? [Clarity, Spec §FR-041, §Non-Goals]
-- [ ] CHK033 Is "**no `screen_share_busy` error**" stated as a deliberate non-requirement (so the contract doesn't accidentally introduce one)? [Gap, Spec §FR-041, §Non-Goals]
-- [ ] CHK034 Does the spec make the pedagogical point that **WebRTC has no native room-level "screen share" concept** (it is purely a per-peer outgoing-track replacement)? [Ambiguity, Spec §FR-040..FR-043, §Learning outcomes]
+- [x] CHK033 Is "**no `screen_share_busy` error**" stated as a deliberate non-requirement (so the contract doesn't accidentally introduce one)? [Gap, Spec §FR-041, §Non-Goals]
+- [x] CHK034 Does the spec make the pedagogical point that **WebRTC has no native room-level "screen share" concept** (it is purely a per-peer outgoing-track replacement)? [Ambiguity, Spec §FR-040..FR-043, §Learning outcomes]
 
 ## Failure isolation
 
 - [x] CHK035 Is failure scoped per RTCPeerConnection (not per room)? [Clarity, Spec §FR-025]
 - [x] CHK036 Is "A↔B failing does not fail A↔C or A↔D" stated as a hard isolation requirement? [Completeness, Spec §FR-025, US7]
 - [x] CHK037 Is it specified that the mesh **room** does not enter a terminal failed state because one peer-pair fails? [Consistency, Spec §FR-025, FR-065]
-- [ ] CHK038 Is a manual **"reconnect-this-pair" affordance** (creating a fresh RTCPeerConnection for the failed pair) specified? [Gap/Conflict, Spec §US7 AS#2 currently offers only "Leave / Remove"; §Assumptions "No reconnection / no ICE restart" actively rules it out]
-- [ ] CHK039 If reconnect-this-pair is in scope, is **"ICE restart proper" explicitly out of scope** (i.e., reconnect creates a fresh PC, not an ICE restart on the existing PC)? [Ambiguity, depends on CHK038 decision]
+- [x] CHK038 Is a manual **"reconnect-this-pair" affordance** (creating a fresh RTCPeerConnection for the failed pair) specified? [Gap/Conflict, Spec §US7 AS#2 currently offers only "Leave / Remove"; §Assumptions "No reconnection / no ICE restart" actively rules it out]
+- [x] CHK039 If reconnect-this-pair is in scope, is **"ICE restart proper" explicitly out of scope** (i.e., reconnect creates a fresh PC, not an ICE restart on the existing PC)? [Ambiguity, depends on CHK038 decision]
 
 ## Observability
 
@@ -134,7 +135,65 @@
 
 The seven non-blocking failures (CHK004, CHK010, CHK015, CHK023, CHK028, CHK033, CHK034) are quality polish that can be applied in one small batch and do not gate planning, but the spec is stronger with them applied.
 
+---
+
+## Evaluation report — 2026-04-25 pass 2 (after reviewer pass 2 edits)
+
+**Score**: **53 / 53 PASS** (100%). 0 FAIL. Spec is **plan-ready**.
+
+### How each pass-1 failure was resolved
+
+| ID | Pass-1 issue | Pass-2 resolution |
+|----|--------------|-------------------|
+| CHK004 | Learning outcomes lacked stable IDs | §"Mesh-specific learning outcomes (stable IDs L13–L18)" rewritten with 6 IDs (L13 per-PC independence, L14 fan-out cost, L15 failure isolation, L16 single video slot, L17 DataChannel fan-out, L18 newcomer pairing-order independence). SC-010 retargeted to L13–L18. |
+| CHK010 | Behavior-vs-implementation freeze conflated | §Assumptions → "001 codepath untouched (behavioral freeze, not implementation freeze)" explicitly distinguishes the two. |
+| CHK015 | Codec selection missing from Non-Goals | New Non-Goal: "No custom codec selection or codec preferences" (forbids `setCodecPreferences`). |
+| CHK023 | "No pause on newcomer join" not explicit | New **FR-022a (Existing pair stability on newcomer join)** locks the invariant; surfaces as L18. |
+| CHK028 | Local echo implicit | New **FR-052a (Chat local echo separated from per-channel send log)** — chat UI shows N=1, event log shows N − 1. |
+| CHK033 | `screen_share_busy` not explicitly forbidden | New Non-Goal: "No `screen_share_busy` (or equivalent) error code". |
+| CHK034 | "WebRTC has no room-level screen-share concept" implicit | Stated explicitly inside L16 plus reinforced in the new `screen_share_busy` Non-Goal. |
+| CHK038 | reconnect-this-pair conflict (blocker) | Path (a) chosen. New **FR-026 (Manual reconnect-this-pair)** + new **US7 AS#3** + Assumption renamed to "No automatic reconnect / no ICE restart proper" + Non-Goal updated to allow manual per-pair reconnect via fresh PC. |
+| CHK039 | Fresh-PC vs ICE-restart distinction | Resolved by FR-026 wording ("fresh pairing attempt, NOT an ICE restart") and tightened Non-Goal language. |
+
+### New requirements added in pass 2
+
+| New ID | Subject | Anchor section |
+|--------|---------|----------------|
+| **FR-013a** | State separation: local vs remote vs pair surfaces | §FR Mesh room & presence |
+| **FR-021a** | Pair attempt identity (`pairEpoch` / equivalent) | §FR Pairwise WebRTC connections |
+| **FR-022a** | Existing pair stability on newcomer join | §FR Pairwise WebRTC connections |
+| **FR-026** | Manual reconnect-this-pair (fresh PC, not ICE restart) | §FR Pairwise WebRTC connections |
+| **FR-052a** | Chat local echo separated from per-channel send log | §FR Group chat |
+
+### Updated requirements in pass 2
+
+| ID | Change |
+|----|--------|
+| FR-011 | "user-visible room-full error" (no bare `room_full` envelope type); v2 contract SHOULD prefer typed `join_rejected` |
+| FR-032 | Direction locked to client→server→fan-out (server-side fan-out for media-state metadata; server still routes metadata only) |
+| FR-060 | Added `peer pair reconnect requested`, `peer pair fresh attempt started` event-log entries |
+| US7 AS#3 | New scenario covering manual Reconnect affordance with fresh-PC and stale-message rejection |
+| SC-010 | Pegged to L13–L18 instead of "the nine learning outcomes" |
+| §Assumptions | "001 codepath untouched" split into behavioral / implementation flavors; "No reconnection / no ICE restart" → "No automatic reconnect / no ICE restart proper" |
+| §Non-Goals | Added codec selection, `screen_share_busy`; tightened ICE-restart language |
+| §Clarifications | 10 new Q→A bullets recording each pass-2 decision |
+
+### Plan-prompt emphasis (carry into `/speckit.plan`)
+
+The plan must define:
+- v2 mesh signaling contract (envelope versioning vs mesh namespace)
+- room-full rejection shape (typed `join_rejected` over bare `room_full`)
+- pair identity and `pairEpoch` / `pairAttemptId` for reconnect + stale-message rejection
+- server-fan-out media-state semantics (one client → one server → N − 1 broadcasts)
+- per-pair negotiation instruction message (when both peers reach `media-ready`)
+- roster snapshot and ordered roster-update semantics (FR-012a, FR-012b)
+- local-state vs remote-peer-state vs peer-pair-state separation surface
+- DataChannel creator = lower-`admission_index` offerer (FR-050)
+- chat local echo vs per-channel send log separation (FR-052a)
+- reconnect-this-pair fresh-PC lifecycle (FR-026) — not ICE restart
+- 001 regression boundary (behavioral, not code) and route preservation
+
 ## Notes
 
 - Items above are **unit tests for the spec's English**, not for the implementation. A `[ ]` means the requirement is not yet adequately written; an `[x]` means the spec already meets the quality bar.
-- Re-evaluate after the CHK038 decision and any non-blocking polish edits; aim for 53 / 53 before `/speckit.plan`.
+- Pass 2 (above) records full resolution. Re-evaluate again only if the spec is materially changed before `/speckit.plan`.
