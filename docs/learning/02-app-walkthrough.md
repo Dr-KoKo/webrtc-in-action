@@ -67,7 +67,7 @@ Three things are worth internalizing before the walkthrough:
    contract in
    [`specs/001-webrtc-1to1-call/contracts/signaling-protocol.md`](../../specs/001-webrtc-1to1-call/contracts/signaling-protocol.md)
    — and implemented it in `signaling/` (server) and
-   `frontend/src/signaling/` (client).
+   `frontend/src/modes/one-to-one/signaling/` (client).
 2. **Media and DataChannel are peer-to-peer.** After setup, audio/video
    frames and chat bytes travel directly between the two browsers over
    encrypted UDP (SRTP over DTLS). Neither the signaling server nor
@@ -83,12 +83,12 @@ Three things are worth internalizing before the walkthrough:
 
 | Layer | Owned by | Key files |
 |---|---|---|
-| **Signaling** — who's in the room, role assignment, SDP/ICE relay | JSON over WebSocket, both sides | `signaling/internal/signaling/handler.go`, `frontend/src/signaling/{client,dispatcher,schema}.ts` |
-| **Local media** — `getUserMedia`, a live `MediaStream` | Browser, wrapped in a React provider | `frontend/src/webrtc/local-media-provider.tsx`, `frontend/src/webrtc/media-acquisition.ts` |
-| **Peer connection** — the actual WebRTC pipe: SDP, ICE, media tracks, DataChannel | Browser `RTCPeerConnection`, wrapped in a provider | `frontend/src/webrtc/peer-connection.ts`, `frontend/src/webrtc/peer-connection-provider.tsx`, `frontend/src/webrtc/ice-buffer.ts`, `frontend/src/webrtc/data-channel.ts` |
+| **Signaling** — who's in the room, role assignment, SDP/ICE relay | JSON over WebSocket, both sides | `signaling/internal/modes/onetoone/handler.go`, `frontend/src/modes/one-to-one/signaling/{client,dispatcher,schema}.ts` |
+| **Local media** — `getUserMedia`, a live `MediaStream` | Browser, wrapped in a React provider | `frontend/src/modes/one-to-one/webrtc/local-media-provider.tsx`, `frontend/src/shared/webrtc/media-acquisition.ts` |
+| **Peer connection** — the actual WebRTC pipe: SDP, ICE, media tracks, DataChannel | Browser `RTCPeerConnection`, wrapped in a provider | `frontend/src/modes/one-to-one/webrtc/peer-connection.ts`, `frontend/src/modes/one-to-one/webrtc/peer-connection-provider.tsx`, `frontend/src/modes/one-to-one/webrtc/ice-buffer.ts`, `frontend/src/modes/one-to-one/webrtc/data-channel.ts` |
 
-The UI (`frontend/src/components/`) is deliberately thin: it dispatches
-actions into a reducer (`frontend/src/state/`) and reads state back out.
+The UI (`frontend/src/modes/one-to-one/components/`) is deliberately thin: it dispatches
+actions into a reducer (`frontend/src/modes/one-to-one/state/`) and reads state back out.
 Nothing app-logical lives in components.
 
 ---
@@ -178,8 +178,8 @@ sequenceDiagram
 ```
 
 Each numbered arrow is either a line in
-`signaling/internal/signaling/handler.go` or a method call inside
-`frontend/src/webrtc/peer-connection-provider.tsx`. The sections below
+`signaling/internal/modes/onetoone/handler.go` or a method call inside
+`frontend/src/modes/one-to-one/webrtc/peer-connection-provider.tsx`. The sections below
 expand the interesting ones.
 
 ---
@@ -191,11 +191,11 @@ expand the interesting ones.
 Before anything WebRTC-specific happens, the browser needs a
 bidirectional channel to the signaling server. We use WebSocket.
 
-- Client: `frontend/src/signaling/client.ts` — a thin `connect(url)`
+- Client: `frontend/src/modes/one-to-one/signaling/client.ts` — a thin `connect(url)`
   wrapper whose only job is to turn browser WS events into
   `SignalingTransportState` transitions (`disconnected` →
   `connecting` → `connected`) and pass JSON strings through.
-- Server: `signaling/internal/signaling/handler.go` upgrades HTTP to
+- Server: `signaling/internal/modes/onetoone/handler.go` upgrades HTTP to
   WS on `/ws` and runs a per-connection read loop.
 
 Because the page is served over HTTPS (Vite's `@vitejs/plugin-basic-ssl`),
@@ -220,8 +220,8 @@ UUID `requestId`. The server matches that `requestId` on the reply so
 clients can correlate. It then either admits the peer (up to 2 per
 room) and replies `join_accepted`, or it replies `join_rejected`.
 
-- Sender: `frontend/src/components/JoinForm.tsx` (`runJoinFlow`).
-- Server: `handleJoinRoom` in `signaling/internal/signaling/handler.go`.
+- Sender: `frontend/src/modes/one-to-one/components/JoinForm.tsx` (`runJoinFlow`).
+- Server: `handleJoinRoom` in `signaling/internal/modes/onetoone/handler.go`.
 - The server also **broadcasts** `peer_presence_changed(admitted)` to
   every reserved slot — that's how the remote peer sees you arrive.
 
@@ -249,10 +249,10 @@ This is the call that triggers the browser's mic/camera permission
 prompt. It **requires a secure context** — same reason the HTTPS fix
 was necessary to get this working on LAN devices.
 
-- Wrapper: `frontend/src/webrtc/media-acquisition.ts`
+- Wrapper: `frontend/src/shared/webrtc/media-acquisition.ts`
   (`acquireLocalMedia`) normalizes browser DOMException codes into
   app-domain `MediaFailureReason`s.
-- Lifecycle: `frontend/src/webrtc/local-media-provider.tsx` watches the
+- Lifecycle: `frontend/src/modes/one-to-one/webrtc/local-media-provider.tsx` watches the
   session reducer. When `session.session === "pending-media"` it calls
   `acquireLocalMedia`, emits `media_ready` on success, and hands the
   stream to the `PeerConnectionProvider` via a ref (the live
@@ -282,9 +282,9 @@ TURN). Both peers must use the **same** list or they can end up with
 asymmetric candidate gathering — so we always send it from the server.
 
 - Server: `sendReadyForOffer` in
-  `signaling/internal/signaling/handler.go`.
+  `signaling/internal/modes/onetoone/handler.go`.
 - Client receiver: `PeerConnectionProvider` in
-  `frontend/src/webrtc/peer-connection-provider.tsx` — this is where
+  `frontend/src/modes/one-to-one/webrtc/peer-connection-provider.tsx` — this is where
   the `RTCPeerConnection` is actually constructed (not earlier).
 
 ### 4.5 Building the peer connection
@@ -299,7 +299,7 @@ if (role === "offerer") pc.createDataChannel("chat")
 ```
 
 - Factory: `createPeerConnection(...)` in
-  `frontend/src/webrtc/peer-connection.ts`.
+  `frontend/src/modes/one-to-one/webrtc/peer-connection.ts`.
 - The **DataChannel must be created before the offer** if we want it
   to appear in the SDP and on the remote side automatically. See the
   `createChatDataChannel()` note in that file.
@@ -380,7 +380,7 @@ synchronized with `setRemoteDescription` completing. If you call
 `pc.addIceCandidate(c)` *before* the remote description is set, the
 browser either silently drops it or throws `InvalidStateError`.
 
-- Buffer: `frontend/src/webrtc/ice-buffer.ts` (`createIceBuffer`).
+- Buffer: `frontend/src/modes/one-to-one/webrtc/ice-buffer.ts` (`createIceBuffer`).
   Pushes early candidates into a FIFO; drains them in order once the
   remote description resolves.
 - Per-peer behavior: `peer-connection-provider.tsx` passes inbound
@@ -402,7 +402,7 @@ machine inside `RTCPeerConnection` fires:
 
 `pc.ontrack` fires on each side once the first remote track's keys are
 ready. We attach the `event.streams[0]` to the `<video>` element in
-`frontend/src/components/RemoteVideo.tsx`.
+`frontend/src/modes/one-to-one/components/RemoteVideo.tsx`.
 
 **What you see**: `pc.connectionState` in the State panel flips to
 `connected`, the remote video frame turns on, audio starts playing.
@@ -414,7 +414,7 @@ the offer, the SDP advertises a DataChannel, and the answerer's
 `pc.ondatachannel` fires with a ready channel on its side.
 
 - Wrapper: `wrapDataChannel(...)` in
-  `frontend/src/webrtc/data-channel.ts` maps the browser's `readyState`
+  `frontend/src/modes/one-to-one/webrtc/data-channel.ts` maps the browser's `readyState`
   to an app-visible `DataChannelStateValue` (`absent | connecting |
   open | closing | closed`) and handles send-with-backpressure.
 
@@ -445,7 +445,7 @@ flowchart LR
 ## 5. Session state machine (one peer's view)
 
 The UI surface is driven by this reducer slice in
-`frontend/src/state/session.ts`. Every transition shown here is a real
+`frontend/src/modes/one-to-one/state/session.ts`. Every transition shown here is a real
 `case` in `sessionReducer`.
 
 ```mermaid
@@ -463,7 +463,7 @@ Points to note:
 
 - State **only advances one step at a time** — the reducer rejects
   illegal transitions with `IllegalSessionTransitionError`, and a
-  snapshot test in `frontend/tests/unit/session.spec.ts` pins every
+  snapshot test in `frontend/frontend/src/modes/one-to-one/tests/unit/session.spec.ts` pins every
   legal edge.
 - The peer connection's own machine (`connectionState`,
   `iceConnectionState`, `signalingState`) is shown separately in the

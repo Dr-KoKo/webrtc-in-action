@@ -1,5 +1,13 @@
 # Phase 14 — Final Verification Log
 
+> **Note (2026-04-27)**: this log captures a verbatim run from the 001
+> Phase 14 gate. The repo layout has since been refactored to the
+> per-mode shape (`internal/modes/onetoone/`, `internal/modes/mesh/`,
+> `internal/shared/`); see `specs/architecture.md`. Captured shell
+> output below is preserved historically and is NOT updated to the new
+> paths. Inline narrative path references in this doc HAVE been
+> updated to the current layout.
+
 **Feature**: 1:1 WebRTC Learning Call (`001-webrtc-1to1-call`).
 **Scope**: MVP exit gate for tasks T095–T102.
 **Date**: 2026-04-25.
@@ -72,7 +80,7 @@ Canonical source: [`../../specs/001-webrtc-1to1-call/contracts/signaling-protoco
 Every §3.1–§3.15 message type and every `payload.result` / `reason`
 enum value appears in both codebases. Row-level evidence:
 
-| §  | Type | `frontend/src/signaling/schema.ts` | `signaling/internal/signaling/envelope.go` + `messages.go` | `handler.go` dispatch/emit | `frontend/src/signaling/dispatcher.ts` |
+| §  | Type | `frontend/src/modes/one-to-one/signaling/schema.ts` | `signaling/internal/modes/onetoone/envelope.go` + `messages.go` | `handler.go` dispatch/emit | `frontend/src/modes/one-to-one/signaling/dispatcher.ts` |
 |----|------|---|---|---|---|
 | 3.1  | `join_room`            | L166 `z.literal("join_room")`            | envelope.go L31 `TypeJoinRoom`            | L242 case + inbound handler                 | L238 case (C→S mirror guard) |
 | 3.2  | `join_accepted`        | L176                                     | envelope.go L32                           | L258, L340 emit                             | L85 case |
@@ -133,12 +141,12 @@ Exit `0`, with all hits annotated and allowed:
 
 | Hit | File | Nature |
 |---|---|---|
-| `frontend/src/signaling/schema.ts:17–18` | comment citing the forbidden names | explanatory doc, not runtime |
-| `frontend/src/signaling/schema.ts:205` | `z.enum(["room_full","invalid_room_id"])` | payload `reason` enum for `join_rejected` (§3.3) |
-| `frontend/src/signaling/schema.ts:334` | `"participant_released_media_failed"` | payload `result` enum for `participant_released` (§3.13) |
-| `signaling/internal/signaling/envelope.go:24–25` | comment explaining the forbidden names | explanatory doc, not runtime |
-| `signaling/internal/signaling/messages.go:102` | `ReasonRoomFull JoinRejectedReason = "room_full"` | payload enum (§3.3) |
-| `signaling/internal/signaling/messages.go:140` | `ParticipantReleasedMediaFailed ParticipantReleasedResult = "participant_released_media_failed"` | payload enum (§3.13) |
+| `frontend/src/modes/one-to-one/signaling/schema.ts:17–18` | comment citing the forbidden names | explanatory doc, not runtime |
+| `frontend/src/modes/one-to-one/signaling/schema.ts:205` | `z.enum(["room_full","invalid_room_id"])` | payload `reason` enum for `join_rejected` (§3.3) |
+| `frontend/src/modes/one-to-one/signaling/schema.ts:334` | `"participant_released_media_failed"` | payload `result` enum for `participant_released` (§3.13) |
+| `signaling/internal/modes/onetoone/envelope.go:24–25` | comment explaining the forbidden names | explanatory doc, not runtime |
+| `signaling/internal/modes/onetoone/messages.go:102` | `ReasonRoomFull JoinRejectedReason = "room_full"` | payload enum (§3.3) |
+| `signaling/internal/modes/onetoone/messages.go:140` | `ParticipantReleasedMediaFailed ParticipantReleasedResult = "participant_released_media_failed"` | payload enum (§3.13) |
 
 No forbidden name leaks into the `type` discriminator on either side.
 
@@ -189,12 +197,12 @@ rg -n '\.SDP|\.Candidate' signaling/internal/signaling
 rg -n 'regexp.*(sdp|candidate)|strings\.(Contains|Index).*(sdp|candidate)' signaling/
 ```
 
-- One hit: `signaling/tests/protocol_flow_test.go:1216` —
+- One hit: `signaling/tests/modes/onetoone/protocol_flow_test.go:1216` —
   `strings.Contains(logs, "\"event\":\"ice_candidate_relay\"")`.
   Test-only, asserts an event-name string, not payload content.
 
 ```
-rg -n 'json\.Unmarshal' signaling/internal/signaling/handler.go
+rg -n 'json\.Unmarshal' signaling/internal/modes/onetoone/handler.go
 ```
 
 Exit `1` — zero hits.

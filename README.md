@@ -1,12 +1,19 @@
-# webrtc-lab — 1:1 WebRTC Learning Call
+# webrtc-lab — multi-mode WebRTC playground
 
-A two-package learning application that establishes a 1:1 WebRTC call
-(audio + video + chat + screen share) with the **full connection
-lifecycle visible in the UI**. The frontend is React + TypeScript + Vite
-calling the browser WebRTC APIs directly (no wrappers); the signaling
-server is a small Go + WebSocket service that **only** routes signaling
-JSON — it never touches media. Full spec:
-[`specs/001-webrtc-1to1-call/spec.md`](./specs/001-webrtc-1to1-call/spec.md).
+A two-package learning application demonstrating WebRTC topologies, with
+the **full connection lifecycle visible in the UI**. The frontend is
+React + TypeScript + Vite calling the browser WebRTC APIs directly
+(no wrappers); the signaling server is a small Go + WebSocket service
+that **only** routes signaling JSON — it never touches media.
+
+Each WebRTC topology is a self-contained **mode**:
+
+| Mode         | Topology     | Route             | Signaling   | Spec                                                          |
+|--------------|--------------|-------------------|-------------|---------------------------------------------------------------|
+| `one-to-one` | 1:1 call     | `/`               | `/ws`       | [`specs/001-webrtc-1to1-call/`](./specs/001-webrtc-1to1-call) |
+| `mesh`       | 4-peer mesh  | `/mesh/:roomId`   | `/ws/mesh`  | [`specs/002-webrtc-mesh-room/`](./specs/002-webrtc-mesh-room) |
+
+Cross-mode rules: [`specs/architecture.md`](./specs/architecture.md).
 
 The MVP is **local-dev only** — there is no cloud deploy, no managed
 TURN, no auth, no persistence (spec Non-Goals). The app uses a browser-
@@ -117,22 +124,26 @@ for the Playwright scenario → spec-ID matrix.
 
 ## Directory layout
 
-- [`frontend/`](./frontend) — React 18 + TypeScript + Vite client. Multi-
-  stage prod image (`Dockerfile`) serves the built SPA via `vite preview`;
-  dev image (`Dockerfile.dev`) runs `vite dev` for fast iteration + e2e.
+- [`frontend/`](./frontend) — React 18 + TypeScript + Vite client.
+  - `src/app/` — `BrowserRouter` + `ModeBadge` + the `MODES` registry (`modes.tsx`).
+  - `src/shared/` — cross-mode primitives only (no mode imports).
+  - `src/modes/<id>/` — one self-contained subtree per WebRTC topology (components/state/signaling/webrtc/tests).
+  - `tests/e2e/` — Playwright scenarios at the multi-mode boundary.
 - [`signaling/`](./signaling) — Go 1.23+ WebSocket signaling server.
-  Prod image is a distroless/static-debian12:nonroot binary; dev image
-  (`Dockerfile.dev`) builds and runs from source. Ships an auxiliary
-  `cmd/healthprobe` binary that the compose healthcheck invokes
-  (distroless has no shell / wget / curl).
-- [`infra/coturn/`](./infra/coturn) — example TURN relay config. Disabled
-  by default.
-- [`specs/001-webrtc-1to1-call/`](./specs/001-webrtc-1to1-call) — feature
-  spec, implementation plan, phase 0/1 artifacts, signaling protocol
-  contract, quickstart + manual verification checklist, and the 14-phase
-  task list.
-- [`docs/manual-tests/`](./docs/manual-tests) — human-run test scripts
-  (two-browser walkthrough, screen-share edge cases).
+  - `cmd/signaling/main.go` — entry; calls `app.RegisterRoutes(...)`.
+  - `internal/app/routes.go` — mux wiring (`/healthz` + per-mode endpoints).
+  - `internal/shared/{logging,heartbeat,config}/` — cross-mode infra.
+  - `internal/modes/{onetoone,mesh}/` — per-mode handler + protocol code.
+  - `tests/modes/<id>/` — per-mode Go protocol-flow tests.
+  - Prod image is distroless/static-debian12:nonroot; dev image
+    (`Dockerfile.dev`) builds and runs from source. Ships
+    `cmd/healthprobe` for the compose healthcheck (distroless has no
+    shell / wget / curl).
+- [`infra/coturn/`](./infra/coturn) — example TURN relay config (disabled by default).
+- [`specs/architecture.md`](./specs/architecture.md) — per-mode boundary rules + "adding a new mode" checklist.
+- [`specs/001-webrtc-1to1-call/`](./specs/001-webrtc-1to1-call), [`specs/002-webrtc-mesh-room/`](./specs/002-webrtc-mesh-room) — per-mode specs (frozen historical record once shipped).
+- [`scripts/audit-boundaries.sh`](./scripts/audit-boundaries.sh) — enforces shared-never-imports-mode + no-cross-mode-imports rules; run as part of validation.
+- [`docs/manual-tests/`](./docs/manual-tests) — human-run test scripts.
 
 The two compose files are:
 
@@ -148,17 +159,9 @@ The two compose files are:
 
 ## Full docs
 
-- [Feature spec](./specs/001-webrtc-1to1-call/spec.md) — requirements,
-  Non-Goals, NFRs, success criteria.
-- [Implementation plan](./specs/001-webrtc-1to1-call/plan.md) — 14-phase
-  slice plan, architecture diagrams, risk register.
-- [Signaling protocol contract](./specs/001-webrtc-1to1-call/contracts/signaling-protocol.md)
-  — canonical message types and state transitions.
-- [Quickstart + manual verification](./specs/001-webrtc-1to1-call/quickstart.md)
-  — the detailed two-browser walkthrough, failure-path tests, and
-  per-phase Definition-of-Done checklist.
-- [Project constitution v2.0.0](./.specify/memory/constitution.md) —
-  nine project principles (specification-first, contract-first signaling,
-  separate signaling from media transport, vertical slices, lifecycle
-  visibility, failure-aware design, security-by-default, testing
-  discipline, simplicity with extension points).
+- [Architecture](./specs/architecture.md) — per-mode boundary rules, layout, "adding a new mode" checklist.
+- [001 spec + plan](./specs/001-webrtc-1to1-call) — 1:1 call requirements, 14-phase slice plan.
+- [001 v1 signaling contract](./specs/001-webrtc-1to1-call/contracts/signaling-protocol.md).
+- [002 spec + plan](./specs/002-webrtc-mesh-room) — mesh-room requirements + 12-phase plan (M1–M5 done).
+- [002 v2 mesh signaling contract](./specs/002-webrtc-mesh-room/contracts/signaling-protocol.md).
+- [Project constitution v2.0.0](./.specify/memory/constitution.md) — nine principles (specification-first, contract-first signaling, signaling separated from media transport, vertical slices, lifecycle visibility, failure-aware design, security-by-default, testing discipline, simplicity with extension points).

@@ -16,9 +16,9 @@ import (
 	"syscall"
 	"time"
 
-	"webrtc-lab/signaling/internal/logging"
-	"webrtc-lab/signaling/internal/mesh"
-	sig "webrtc-lab/signaling/internal/signaling"
+	"webrtc-lab/signaling/internal/shared/logging"
+	"webrtc-lab/signaling/internal/modes/mesh"
+	sig "webrtc-lab/signaling/internal/modes/onetoone"
 )
 
 const (

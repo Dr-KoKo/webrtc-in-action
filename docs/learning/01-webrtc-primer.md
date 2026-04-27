@@ -235,7 +235,7 @@ sending the offer. That added seconds to call setup. **Trickle ICE**
 found. It's what every modern browser does; this app implements it
 (and has to buffer candidates that arrive before
 `setRemoteDescription` has finished — see
-`frontend/src/webrtc/ice-buffer.ts`).
+`frontend/src/modes/one-to-one/webrtc/ice-buffer.ts`).
 
 ---
 

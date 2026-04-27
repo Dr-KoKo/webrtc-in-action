@@ -28,7 +28,7 @@ services:
     environment:
       # Signaling URL the browser uses for the WS upgrade. T103 makes
       # the same-origin fallback in
-      # frontend/src/components/{JoinForm,FailurePanel}.tsx
+      # frontend/src/modes/one-to-one/components/{JoinForm,FailurePanel}.tsx
       # authoritative (both vite dev's server.proxy and vite preview's
       # preview.proxy in frontend/vite.config.ts forward `/ws` to
       # signaling:8080), so this variable is OPTIONAL. Set it only

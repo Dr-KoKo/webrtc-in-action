@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Boundary-rule enforcement for the per-mode layout (specs/architecture.md).
+#
+# Three rules:
+#   1. shared/ must NEVER import a mode (frontend + backend).
+#   2. one mode must NEVER import another mode (frontend + backend).
+#   3. relative imports must NEVER escape a mode subdir or shared subdir
+#      (forces all cross-tree imports through aliases / Go module paths).
+#
+# Run as part of the validation gate. The mode list is enumerated inline
+# below — adding a new mode requires updating both the frontend
+# (`for m in one-to-one mesh ...`) and backend (`for m in onetoone mesh ...`)
+# loops.
+#
+# Uses grep -E (POSIX) so it works in any shell environment without
+# requiring ripgrep.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+FRONT_MODES=(one-to-one mesh)
+BACK_MODES=(onetoone mesh)
+
+fail() {
+  echo "VIOLATION: $1" >&2
+  shift
+  if [ "$#" -gt 0 ]; then
+    "$@" >&2 || true
+  fi
+  exit 1
+}
+
+# 1a. Frontend shared/ MUST NOT import @/modes/*.
+if grep -RInE '@/modes/' frontend/src/shared/ >/dev/null; then
+  fail "frontend src/shared/ imports @/modes/" \
+    grep -RInE '@/modes/' frontend/src/shared/
+fi
+
+# 1b. Frontend cross-mode imports forbidden.
+for m in "${FRONT_MODES[@]}"; do
+  for other in "${FRONT_MODES[@]}"; do
+    [ "$m" = "$other" ] && continue
+    if grep -RInE "@/modes/$other" "frontend/src/modes/$m/" >/dev/null; then
+      fail "frontend mode $m imports @/modes/$other" \
+        grep -RInE "@/modes/$other" "frontend/src/modes/$m/"
+    fi
+  done
+done
+
+# 1c. Frontend: relative imports must not escape a mode/shared subdir.
+#     Inside src/modes/<m>/, any `from "(../){3,}"` is leaving the mode.
+#     Inside src/shared/, any `from "(../){2,}"` is leaving shared.
+if grep -RInE 'from "(\.\./){3,}' frontend/src/modes/ >/dev/null; then
+  fail "frontend relative import escapes mode subdir (use @/-alias)" \
+    grep -RInE 'from "(\.\./){3,}' frontend/src/modes/
+fi
+if grep -RInE 'from "(\.\./){2,}' frontend/src/shared/ >/dev/null; then
+  fail "frontend relative import escapes shared subdir (use @/-alias)" \
+    grep -RInE 'from "(\.\./){2,}' frontend/src/shared/
+fi
+
+# 2a. Backend shared/ MUST NOT depend on internal/modes/*.
+(
+  cd signaling
+  if go list -deps ./internal/shared/... 2>/dev/null | grep -E '/internal/modes/' >/dev/null; then
+    echo "VIOLATION: signaling internal/shared/ depends on internal/modes/" >&2
+    go list -deps ./internal/shared/... 2>/dev/null | grep -E '/internal/modes/' >&2 || true
+    exit 1
+  fi
+)
+
+# 2b. Backend cross-mode dependencies forbidden.
+(
+  cd signaling
+  for m in "${BACK_MODES[@]}"; do
+    for other in "${BACK_MODES[@]}"; do
+      [ "$m" = "$other" ] && continue
+      if go list -deps "./internal/modes/$m/..." 2>/dev/null | grep -E "/internal/modes/$other" >/dev/null; then
+        echo "VIOLATION: backend mode $m depends on internal/modes/$other" >&2
+        exit 1
+      fi
+    done
+  done
+)
+
+echo "Boundary audit clean."

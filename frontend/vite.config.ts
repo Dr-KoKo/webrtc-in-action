@@ -4,9 +4,19 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import basicSsl from "@vitejs/plugin-basic-ssl";
+import { fileURLToPath, URL } from "node:url";
 
 export default defineConfig({
   plugins: [react(), basicSsl()],
+  // Per-mode layout aliases (mirrors tsconfig.json paths). Vitest reads
+  // this resolver, so test imports of "@/shared/..." resolve correctly.
+  resolve: {
+    alias: {
+      "@/app":    fileURLToPath(new URL("./src/app", import.meta.url)),
+      "@/modes":  fileURLToPath(new URL("./src/modes", import.meta.url)),
+      "@/shared": fileURLToPath(new URL("./src/shared", import.meta.url)),
+    },
+  },
   server: {
     host: "0.0.0.0",
     port: 5173,
@@ -45,11 +55,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "jsdom",
-    // 001 specs live under tests/. The 002 mesh feature colocates its
-    // unit specs under src/features/mesh/tests/ per plan §5.2.
+    // Per-mode layout: every mode owns its tests under
+    // src/modes/<id>/tests/; shared specs colocate under src/shared/.
     include: [
-      "tests/**/*.{spec,test}.{ts,tsx}",
-      "src/features/mesh/tests/**/*.{spec,test}.{ts,tsx}",
+      "src/modes/**/tests/**/*.{spec,test}.{ts,tsx}",
+      "src/shared/**/*.{spec,test}.{ts,tsx}",
     ],
     // Playwright owns the browser layer. Vitest must not pick up
     // `tests/e2e/**` or it will try to run Playwright's `test()` in
