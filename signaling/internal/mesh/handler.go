@@ -71,7 +71,12 @@ func NewHandler(log *slog.Logger) *Handler {
 func loadIceServersFromEnv() []IceServer {
 	var servers []IceServer
 	if raw := os.Getenv("VITE_STUN_URLS"); raw != "" {
-		urls := splitAndTrim(raw, ",")
+		var urls []string
+		for _, part := range strings.Split(raw, ",") {
+			if t := strings.TrimSpace(part); t != "" {
+				urls = append(urls, t)
+			}
+		}
 		if len(urls) > 0 {
 			servers = append(servers, IceServer{URLs: urls})
 		}
@@ -87,25 +92,6 @@ func loadIceServersFromEnv() []IceServer {
 		})
 	}
 	return servers
-}
-
-func splitAndTrim(s, sep string) []string {
-	out := []string{}
-	cur := ""
-	for _, r := range s {
-		if string(r) == sep {
-			if t := strings.TrimSpace(cur); t != "" {
-				out = append(out, t)
-			}
-			cur = ""
-			continue
-		}
-		cur += string(r)
-	}
-	if t := strings.TrimSpace(cur); t != "" {
-		out = append(out, t)
-	}
-	return out
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -254,15 +240,19 @@ func (h *Handler) readLoop(ctx context.Context, cc *connCtx) error {
 	}
 }
 
-// dispatch routes a decoded envelope to the correct handler. M3
-// arms: join_room, leave_room, error (echo to log). Future milestones
-// extend the switch with media + pair handlers.
+// dispatch routes a decoded envelope to the correct handler. M3+M5
+// arms: join_room, leave_room, media_ready, media_failed, error (echo
+// to log). M6+ extends the switch with pair handlers.
 func (h *Handler) dispatch(ctx context.Context, cc *connCtx, d *Decoded) error {
 	switch d.Envelope.Type {
 	case TypeJoinRoom:
 		return h.handleJoinRoom(ctx, cc, d)
 	case TypeLeaveRoom:
 		return h.handleLeaveRoom(ctx, cc, d)
+	case TypeMediaReady:
+		return h.handleMediaReady(ctx, cc, d)
+	case TypeMediaFailed:
+		return h.handleMediaFailed(ctx, cc, d)
 	case TypeError:
 		// Clients may send `error` back as informational; log + drop.
 		h.Log.Debug("mesh client error reported",
@@ -279,10 +269,10 @@ func (h *Handler) dispatch(ctx context.Context, cc *connCtx, d *Decoded) error {
 		}, d.Envelope.RequestID)
 		return nil
 	default:
-		// Types reserved for later milestones (media_ready, pair_*, etc.)
-		// — accept the envelope (already validated) but reply with
+		// Types reserved for later milestones (pair_*, reconnect_pair).
+		// Accept the envelope (already validated) but reply with
 		// not_in_room so a malformed client cannot drive state we have
-		// not built yet. M5+ replaces this default with real handlers.
+		// not built yet. M6+ replaces this default with real handlers.
 		h.writeError(ctx, cc, &ProtocolError{
 			Code:    CodeNotInRoom,
 			Message: string(d.Envelope.Type) + " is not yet wired in this milestone",
@@ -322,6 +312,11 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *connCtx, d *Decoded) e
 	case JoinAccepted:
 		cc.peerID = outcome.Participant.PeerID
 		cc.roomID = roomID
+		// Reset the disconnect-cleanup latch so a future ungraceful
+		// close on this WS triggers `releaseAndNotify` for the freshly
+		// admitted participant. Important when the user retries after
+		// a `media_failed` release.
+		cc.released.Store(false)
 	}
 
 	// join_accepted (§3.2)
@@ -402,19 +397,13 @@ func (h *Handler) releaseAndNotify(cc *connCtx, reason string, rosterReason Rost
 	if outcome.Departing == nil {
 		return
 	}
-	// Departing presence is `released` if the participant never reached
-	// media-ready, else `left`. M3 has no media yet so all departures
-	// are pre-pairing — every M3 release emits `left` for graceful
-	// leaves and `left` for disconnects (both are valid wire values
-	// even pre-pair). M5+ will refine this with the released-vs-left
-	// classification once media_ready is wired.
-	presence := PresenceLeft
-	if outcome.Departing.Readiness == ReadinessJoined {
-		presence = PresenceLeft // still wire-valid; refined in M5
-	}
+	// Departing presence is `left` for both graceful leaves and
+	// disconnects on this path; `released` is reserved for the
+	// `media_failed` path in `handleMediaFailed`. M5+ may refine this
+	// further once pair lifecycle lands.
 	rm := outcome.Room
 	rm.Lock()
-	update := BuildRosterUpdate(rm, outcome.Departing, presence, rosterReason)
+	update := BuildRosterUpdate(rm, outcome.Departing, PresenceLeft, rosterReason)
 	rm.Unlock()
 	updatePayload, _ := json.Marshal(update)
 	env := Envelope{
@@ -469,6 +458,151 @@ func (h *Handler) broadcastRosterUpdate(rm *MeshRoom, subject *Participant, pres
 				slog.String("error", err.Error()))
 		}
 	}
+}
+
+// handleMediaReady implements §3.6. Transitions the participant
+// readiness to media-ready and broadcasts the corresponding roster
+// update. M5 stops here — pair instructions land in M6.
+//
+// Per data-model §A.3, media_ready arriving from a non-`joined`
+// readiness is rejected with `error { code: "unexpected_media_ready" }`.
+func (h *Handler) handleMediaReady(ctx context.Context, cc *connCtx, d *Decoded) error {
+	if cc.peerID == "" {
+		h.writeError(ctx, cc, &ProtocolError{
+			Code:    CodeNotInRoom,
+			Message: "media_ready requires an admitted participant",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	rm := h.Manager.Room(cc.roomID)
+	if rm == nil {
+		h.writeError(ctx, cc, &ProtocolError{
+			Code:    CodeNotInRoom,
+			Message: "mesh room not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	rm.Lock()
+	subject := rm.FindByPeerID(cc.peerID)
+	if subject == nil {
+		rm.Unlock()
+		h.writeError(ctx, cc, &ProtocolError{
+			Code:    CodeNotInRoom,
+			Message: "participant not found in room",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	if subject.Readiness != ReadinessJoined {
+		rm.Unlock()
+		h.writeError(ctx, cc, &ProtocolError{
+			Code:    CodeUnexpectedMediaReady,
+			Message: "media_ready requires readiness=joined",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	subject.Readiness = ReadinessMediaReady
+	subject.LastSeen = time.Now()
+	rm.Unlock()
+
+	// Broadcast roster update presence:media-ready (FR-012b).
+	h.broadcastRosterUpdate(rm, subject, PresenceMediaReady, RosterReasonMediaReady)
+	h.Log.Info("mesh peer media-ready",
+		slog.String("event", "mesh_peer_media_ready"),
+		slog.String("conn_id", cc.connID),
+		slog.String("peer_id", cc.peerID),
+		slog.String("room_id", cc.roomID),
+	)
+	return nil
+}
+
+// handleMediaFailed implements §3.7. Releases the sender's slot,
+// emits `participant_released` to the sender, and broadcasts a
+// `mesh_roster_update { presence: "released", reason: "media_failed" }`
+// to the remaining participants. The admissionIndex value is preserved
+// (data-model §A.4 — never reused).
+func (h *Handler) handleMediaFailed(ctx context.Context, cc *connCtx, d *Decoded) error {
+	if cc.peerID == "" {
+		h.writeError(ctx, cc, &ProtocolError{
+			Code:    CodeNotInRoom,
+			Message: "media_failed requires an admitted participant",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	payload, _ := d.Message.(*MediaFailedPayload)
+	detail := ""
+	if payload != nil {
+		detail = payload.Detail
+	}
+
+	// Step 1: release the slot (data-model §C.4). Captures the
+	// remaining participants for the roster broadcast.
+	outcome := h.Manager.Release(cc.roomID, cc.peerID)
+	cc.released.Store(true)
+	if outcome.Departing == nil {
+		// Already released somehow — emit nothing (idempotent).
+		return nil
+	}
+	rm := outcome.Room
+
+	// Step 2: send `participant_released` to the failing peer
+	// (the sender is still WS-connected; the user may Retry).
+	releasedPayload, _ := json.Marshal(ParticipantReleasedPayload{
+		Result: ParticipantReleasedMediaFailed,
+		Reason: ReleasedReasonMediaFailed,
+		Detail: detail,
+	})
+	releasedEnv := Envelope{
+		V:       ContractVersion,
+		Type:    TypeParticipantReleased,
+		RoomID:  rm.ID(),
+		TS:      time.Now().UnixMilli(),
+		Payload: releasedPayload,
+	}
+	if err := cc.sendJSON(ctx, releasedEnv); err != nil {
+		h.Log.Warn("participant_released send failed",
+			slog.String("peer_id", cc.peerID),
+			slog.String("error", err.Error()))
+	}
+
+	// Step 3: broadcast `mesh_roster_update { presence: "released" }`
+	// to remaining participants. Caller already released the slot, so
+	// `outcome.Remaining` is the post-release roster.
+	rm.Lock()
+	update := BuildRosterUpdate(rm, outcome.Departing, PresenceReleased, RosterReasonMediaFailed)
+	rm.Unlock()
+	updatePayload, _ := json.Marshal(update)
+	updateEnv := Envelope{
+		V:       ContractVersion,
+		Type:    TypeMeshRosterUpdate,
+		RoomID:  rm.ID(),
+		TS:      time.Now().UnixMilli(),
+		Payload: updatePayload,
+	}
+	for _, p := range outcome.Remaining {
+		if p.Conn == nil {
+			continue
+		}
+		if err := p.Conn.SendJSON(updateEnv); err != nil {
+			h.Log.Warn("mesh_roster_update send failed",
+				slog.String("peer_id", p.PeerID),
+				slog.String("error", err.Error()))
+		}
+	}
+
+	// Local connCtx no longer references a participant. The WS stays
+	// open so the user can Retry with a fresh `join_room` (contract
+	// §3.8 client behavior).
+	cc.peerID = ""
+	cc.roomID = ""
+
+	h.Log.Info("mesh peer released (media_failed)",
+		slog.String("event", "mesh_peer_released"),
+		slog.String("conn_id", cc.connID),
+		slog.String("peer_id", outcome.Departing.PeerID),
+		slog.String("room_id", rm.ID()),
+		slog.Bool("room_gc", outcome.RoomGarbageCollected),
+	)
+	return nil
 }
 
 // sendJoinRejected centralizes the join_rejected send.

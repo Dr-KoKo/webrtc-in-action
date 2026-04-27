@@ -335,56 +335,56 @@ Tasks that **MUST be complete** before each pivotal point:
 
 **Goal**: `MeshApp` connects to `/ws/mesh`, joins a room, renders the roster (presence pills), and surfaces a peer-scoped event log. **No `RTCPeerConnection`, no `getUserMedia` yet.**
 
-- [ ] T031 [frontend] [M4] Mesh WebSocket client — `frontend/src/features/mesh/signaling/client.ts`
+- [X] T031 [frontend] [M4] Mesh WebSocket client — `frontend/src/features/mesh/signaling/client.ts`
     - Purpose: connect to `/ws/mesh`, send/receive JSON; expose `connect()`, `send()`, `onMessage()`. No auto-reconnect (Spec Non-Goals).
     - Files: `frontend/src/features/mesh/signaling/client.ts` (new).
     - Dependencies: T012, T018, T019.
     - DoD: schema-validated outbound + inbound; `signalingTransport` slice receives transport state; logs transport-level events (`signaling connected`, `signaling disconnected`).
     - Verify: a manual visit to `/mesh/demo` shows event-log entry `signaling connected`; close server → event-log entry `signaling disconnected`.
 
-- [ ] T032 [frontend][P] [M4] Mesh dispatcher — `frontend/src/features/mesh/signaling/dispatcher.ts`
+- [X] T032 [frontend][P] [M4] Mesh dispatcher — `frontend/src/features/mesh/signaling/dispatcher.ts`
     - Purpose: route inbound mesh messages to the correct reducer slice (plan §9.5 mapping).
     - Files: `frontend/src/features/mesh/signaling/dispatcher.ts` (new).
     - Dependencies: T031.
     - DoD: a discriminated switch over `MeshServerMessage["type"]`; default arm logs `error occurred` and does not mutate state.
     - Verify: unit test feeding each message type asserts the correct slice action is dispatched.
 
-- [ ] T033 [frontend] [M4] Local participant reducer — `frontend/src/features/mesh/state/local.ts`
+- [X] T033 [frontend] [M4] Local participant reducer — `frontend/src/features/mesh/state/local.ts`
     - Purpose: `LocalParticipant` FSM (data-model §B.1); handles `join_accepted`, `join_rejected`, `participant_released`, transitions to `signaling-error` on socket loss.
     - Files: `frontend/src/features/mesh/state/local.ts` (new).
     - Dependencies: T002.
     - DoD: every transition matches data-model §B.1 diagram; invalid inbound transitions are no-op + log entry.
     - Verify: `local.spec.ts` covers each transition incl. `signaling-error`.
 
-- [ ] T034 [frontend][P] [M4] Roster reducer — `frontend/src/features/mesh/state/roster.ts`
+- [X] T034 [frontend][P] [M4] Roster reducer — `frontend/src/features/mesh/state/roster.ts`
     - Purpose: applies `mesh_roster_snapshot` and `mesh_roster_update`; enforces `serverSeq` monotonicity; removes participants on `released` / `left`.
     - Files: `frontend/src/features/mesh/state/roster.ts` (new).
     - Dependencies: T002.
     - DoD: out-of-order `serverSeq` is dropped + log entry; snapshot replaces the map; updates upsert.
     - Verify: `roster.spec.ts` ((covered later in T097 audit too)).
 
-- [ ] T035 [frontend][P] [M4] Event log reducer (bounded ring buffer) — `frontend/src/features/mesh/state/eventLog.ts`
+- [X] T035 [frontend][P] [M4] Event log reducer (bounded ring buffer) — `frontend/src/features/mesh/state/eventLog.ts`
     - Purpose: data-model §B.6; bounded at 1000 entries; every `peer`-/`pair`-scoped entry must carry `peerId` (and `pairId` for pair scope) per FR-061.
     - Files: `frontend/src/features/mesh/state/eventLog.ts` (new).
     - Dependencies: T002.
     - DoD: append, evict-on-overflow, and selectors for `all | room | peer:<id> | pair:<id>` filters.
     - Verify: `eventLog.spec.ts`.
 
-- [ ] T036 [frontend] [M4] `MeshApp.tsx` real layout — `frontend/src/features/mesh/routes/MeshApp.tsx`
+- [X] T036 [frontend] [M4] `MeshApp.tsx` real layout — `frontend/src/features/mesh/routes/MeshApp.tsx`
     - Purpose: replace the M1 placeholder with the real shell: `JoinForm`, `MeshRoster`, `MeshEventLogPanel`. No PCs / DCs yet.
     - Files: `frontend/src/features/mesh/routes/MeshApp.tsx` (extend), `frontend/src/features/mesh/components/{MeshRoster,MeshEventLogPanel,JoinForm}.tsx` (new).
     - Dependencies: T031, T033, T034, T035.
     - DoD: 4 windows joining `/mesh/demo` see each other in the roster within 1 s; every readiness change appears as a peer-scoped log entry with `peerId` (FR-061).
     - Verify: manual 4-window run; quickstart §4.2 partial green.
 
-- [ ] T037 [frontend][P] [M4] Mesh JoinForm — `frontend/src/features/mesh/components/JoinForm.tsx`
+- [X] T037 [frontend][P] [M4] Mesh JoinForm — `frontend/src/features/mesh/components/JoinForm.tsx`
     - Purpose: client-side room-ID validation (Spec FR-010 + EC-015) — trim / case-sensitive / 1–64 / `[A-Za-z0-9._-]`.
     - Files: `frontend/src/features/mesh/components/JoinForm.tsx` (new — covered partly by T036; this is the standalone validation logic).
     - Dependencies: T002, T036.
     - DoD: invalid IDs surface a clear error before any signaling message is sent; valid IDs send `join_room`.
     - Verify: `joinForm.spec.ts` covers boundary cases (empty after trim, 65 chars, `bad room!`).
 
-- [ ] T038 [test][frontend][P] [M4] M4 acceptance test — `frontend/src/features/mesh/tests/{roster,eventLog,local}.spec.ts`
+- [X] T038 [test][frontend][P] [M4] M4 acceptance test — `frontend/src/features/mesh/tests/{roster,eventLog,local}.spec.ts`
     - Purpose: assert the M4 reducers (T033/T034/T035) behave per data-model §B; M4 quickstart §4.2 manual run green.
     - Files: 3 spec files (new).
     - Dependencies: T033, T034, T035, T036.
@@ -397,42 +397,42 @@ Tasks that **MUST be complete** before each pivotal point:
 
 **Goal**: each browser acquires camera + mic, sends `media_ready`; on failure sends `media_failed` and surfaces a retry-able UX; server emits the corresponding roster updates (`media-ready` / `released`); **no pair negotiation occurs until `media-ready`**.
 
-- [ ] T039 [frontend][webrtc] [M5] Local media acquisition + preview — `frontend/src/features/mesh/webrtc/mediaAcquisition.ts`, `frontend/src/features/mesh/components/LocalPreview.tsx`
+- [X] T039 [frontend][webrtc] [M5] Local media acquisition + preview — `frontend/src/features/mesh/webrtc/mediaAcquisition.ts`, `frontend/src/features/mesh/components/LocalPreview.tsx`
     - Purpose: `getUserMedia({ audio: true, video: true })`; render a self-tile preview; transition `LocalParticipant.fsm` to `media-ready` on success or `media-error` on failure.
     - Files: 2 new files.
     - Dependencies: T033, T036.
     - DoD: permission grant ⇒ preview renders + `media_ready` sent; permission denial ⇒ `media_failed` sent + Retry affordance.
     - Verify: quickstart §5.1 / §5.2 manual checks pass.
 
-- [ ] T040 [server] [M5] Handle `media_ready` + `media_failed` — `signaling/internal/mesh/handler.go`, `signaling/internal/mesh/room.go`
+- [X] T040 [server] [M5] Handle `media_ready` + `media_failed` — `signaling/internal/mesh/handler.go`, `signaling/internal/mesh/room.go`
     - Purpose: server transitions `Participant.readiness` and emits the corresponding roster update; on `media_failed`, also emits `participant_released` to the failing peer.
     - Files: extend handler + room.
     - Dependencies: T015, T028.
     - DoD: `media_ready` → roster update `presence: "media-ready", reason: "media_ready"`; `media_failed` → `participant_released` to the sender + roster update `presence: "released", reason: "media_failed"` to others.
     - Verify: `mesh_media_ready_test.go`, `mesh_media_failed_test.go`.
 
-- [ ] T041 [frontend][P] [M5] Roster presence rendering for `released` — `frontend/src/features/mesh/components/MeshRoster.tsx`
+- [X] T041 [frontend][P] [M5] Roster presence rendering for `released` — `frontend/src/features/mesh/components/MeshRoster.tsx`
     - Purpose: visualize the `released` presence; FR-013/FR-014 distinguish from `left`.
     - Files: extend `MeshRoster.tsx`.
     - Dependencies: T034, T036.
     - DoD: a `released` participant disappears from each other's roster (not just dimmed); local UI shows the persistent media-error banner for the failing self.
     - Verify: manual run with one peer denying permission; remaining peers see no roster entry; failing peer sees Retry banner.
 
-- [ ] T042 [P][test][server] [M5] Slot release on `media_failed` — `signaling/tests/mesh/mesh_media_failed_test.go`
+- [X] T042 [P][test][server] [M5] Slot release on `media_failed` — `signaling/tests/mesh/mesh_media_failed_test.go`
     - Purpose: assert server frees the slot and emits the right roster update; `admission_index` is preserved (not reused) per data-model §C.4.
     - Files: new test file.
     - Dependencies: T040.
     - DoD: after `media_failed` from a 4th joiner, a 5th joiner can be admitted (slot is free) AND the 5th's `admission_index` is greater than the failed 4th's (no reuse).
     - Verify: `go test ./tests/mesh/mesh_media_failed_test.go`.
 
-- [ ] T043 [P][test][frontend] [M5] Two-phase join readiness reducer test — `frontend/src/features/mesh/tests/twoPhaseJoin.spec.ts`
+- [X] T043 [P][test][frontend] [M5] Two-phase join readiness reducer test — `frontend/src/features/mesh/tests/twoPhaseJoin.spec.ts`
     - Purpose: assert the local FSM cannot pre-pair (no PC creation requests are emitted while `LocalParticipant.fsm != media-ready`).
     - Files: new spec.
     - Dependencies: T033, T039.
     - DoD: spec exercises the `joining → joined → media-ready` order; if a stub pair instruction were to arrive in `joined`, the dispatcher logs `error occurred` and does not create a PC.
     - Verify: `npx vitest run features/mesh/tests/twoPhaseJoin.spec.ts`.
 
-- [ ] T044 [frontend] [M5] Persistent media-error banner + retry — `frontend/src/features/mesh/components/MediaErrorBanner.tsx`
+- [X] T044 [frontend] [M5] Persistent media-error banner + retry — `frontend/src/features/mesh/components/MediaErrorBanner.tsx`
     - Purpose: SC clarity for EC-003 post-admission case; user sees a visible banner with Retry that re-invokes `getUserMedia` and re-issues `media_ready` on success.
     - Files: new component; small extension to `MeshApp.tsx`.
     - Dependencies: T039, T041.
