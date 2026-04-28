@@ -67,8 +67,6 @@ export type MeshEventLogAction =
   | { type: "MESH_EVENT_APPEND"; entry: MeshEventEntry }
   | { type: "MESH_EVENT_LOG_RESET" };
 
-let meshEventSeq = 0;
-
 export function makeMeshEventEntry(
   init: Omit<MeshEventEntry, "id" | "ts"> & { ts?: number; id?: string },
 ): MeshEventEntry {
@@ -83,9 +81,12 @@ export function makeMeshEventEntry(
   if (init.scope === "pair" && !init.pairId) {
     throw new Error("mesh event entry of scope=pair requires pairId (FR-061)");
   }
-  meshEventSeq += 1;
+  // crypto.randomUUID is supported in jsdom 22+ (current Vitest 1.x+)
+  // and all production Vite + modern browser targets. Random IDs
+  // remove the need for a per-test counter reset (~10 mesh specs land
+  // M6-M11; not having to remember to reset them prevents flake).
   return {
-    id: init.id ?? `mevt-${Date.now().toString(36)}-${meshEventSeq}`,
+    id: init.id ?? `mevt-${crypto.randomUUID()}`,
     ts: init.ts ?? Date.now(),
     scope: init.scope,
     type: init.type,
@@ -94,10 +95,6 @@ export function makeMeshEventEntry(
     ...(init.pairId !== undefined ? { pairId: init.pairId } : {}),
     ...(init.detail !== undefined ? { detail: init.detail } : {}),
   };
-}
-
-export function __resetMeshEventLogSequence(): void {
-  meshEventSeq = 0;
 }
 
 export function meshEventLogReducer(

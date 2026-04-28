@@ -6,9 +6,8 @@
 //      carry both peerId + pairId. Failures throw at construction.
 //   3. Selectors: selectAll, selectByPeer, selectByPair, selectRoomScope.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  __resetMeshEventLogSequence,
   initialMeshEventLogSlice,
   makeMeshEventEntry,
   meshEventLogReducer,
@@ -23,9 +22,6 @@ const PEER_A = "11111111-1111-4111-8111-111111111111";
 const PEER_B = "22222222-2222-4222-8222-222222222222";
 
 describe("makeMeshEventEntry", () => {
-  beforeEach(() => __resetMeshEventLogSequence());
-  afterEach(() => __resetMeshEventLogSequence());
-
   it("requires peerId for peer-scoped entries (FR-061)", () => {
     expect(() =>
       makeMeshEventEntry({
@@ -58,9 +54,6 @@ describe("makeMeshEventEntry", () => {
 });
 
 describe("meshEventLogReducer", () => {
-  beforeEach(() => __resetMeshEventLogSequence());
-  afterEach(() => __resetMeshEventLogSequence());
-
   it("appends entries newest-at-end", () => {
     const a = makeMeshEventEntry({
       scope: "peer",

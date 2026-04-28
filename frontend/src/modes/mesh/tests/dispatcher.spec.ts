@@ -15,8 +15,6 @@ import {
   meshRootReducer,
   type MeshRootState,
 } from "../state";
-import { __resetMeshEventLogSequence } from "../state/eventLog";
-
 const PEER_A = "11111111-1111-4111-8111-111111111111";
 const PEER_B = "22222222-2222-4222-8222-222222222222";
 const SELF = "99999999-9999-4999-8999-999999999999";
@@ -39,7 +37,6 @@ function makeDispatcher(opts: {
   client?: { send: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> };
   fsm?: () => string;
 }) {
-  __resetMeshEventLogSequence();
   return createMeshDispatcher({
     dispatch: opts.store.dispatch,
     client: opts.client ?? null,

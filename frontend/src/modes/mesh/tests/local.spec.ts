@@ -141,4 +141,46 @@ describe("meshLocalReducer", () => {
     expect(state.errorBanner?.kind).toBe("media-error");
     expect(state.errorBanner?.detail).toBe("permission_denied");
   });
+
+  // MESH_PARTICIPANT_RELEASED FSM guard. Allowed only from
+  // joined | acquiring-media | media-error (M5 server emits this only
+  // from handleMediaFailed). Disallowed from media-ready / in-room /
+  // released so a stray message can't null a live stream mid-call.
+  // See local.ts MESH_PARTICIPANT_RELEASED arm + M11 forward comment.
+  describe("MESH_PARTICIPANT_RELEASED guard", () => {
+    const allowed = ["joined", "acquiring-media", "media-error"] as const;
+    const disallowed = ["media-ready", "in-room", "released"] as const;
+
+    function stateAt(fsm: (typeof allowed)[number] | (typeof disallowed)[number]) {
+      return {
+        fsm,
+        signalingTransport: "open" as const,
+        roomId: "demo",
+        peerId: "00000000-0000-4000-8000-000000000001",
+        admissionIndex: 1,
+      };
+    }
+
+    for (const fsm of allowed) {
+      it(`allows transition from ${fsm}`, () => {
+        const next = meshLocalReducer(stateAt(fsm), {
+          type: "MESH_PARTICIPANT_RELEASED",
+          detail: "test",
+        });
+        expect(next.fsm).toBe("released");
+        expect(next.errorBanner?.kind).toBe("media-error");
+      });
+    }
+
+    for (const fsm of disallowed) {
+      it(`is a no-op from ${fsm}`, () => {
+        const before = stateAt(fsm);
+        const after = meshLocalReducer(before, {
+          type: "MESH_PARTICIPANT_RELEASED",
+          detail: "test",
+        });
+        expect(after).toBe(before); // strict reference equality — reducer returned state unchanged
+      });
+    }
+  });
 });

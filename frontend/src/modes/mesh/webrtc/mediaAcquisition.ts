@@ -181,6 +181,33 @@ export function MeshMediaController() {
     }
   }, [local.fsm]);
 
+  // Unmount-only cleanup. Runs exactly once on unmount regardless of
+  // fsm value at the time. Targets the browser-back-button-while-
+  // in-room race that no Path A/B/C scenario covers (data-model §C.3
+  // Path A is graceful Leave; B is remote peer_left; this is neither).
+  //
+  // May double-fire after a graceful Leave (the FSM-driven effect
+  // above already nulled the stream); idempotent by design —
+  // track.stop() on stopped tracks is a no-op, double
+  // publishLocalStream(null) is fine.
+  useEffect(() => {
+    return () => {
+      const s = streamRef.current;
+      if (s) {
+        for (const t of s.getTracks()) {
+          try {
+            t.stop();
+          } catch {
+            // already ended
+          }
+        }
+      }
+      streamRef.current = null;
+      publishLocalStream(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return null;
 }
 

@@ -139,8 +139,20 @@ export function meshLocalReducer(
       return { ...rest, fsm: "joined" };
     }
     case "MESH_PARTICIPANT_RELEASED": {
-      // Server signaled release of own slot. After this, the local user
-      // sees the media-error banner and may retry. (data-model §C.4.)
+      // Server signaled release of own slot. After this, the local
+      // user sees the media-error banner and may retry (data-model
+      // §C.4). M5: server only emits participant_released from
+      // handleMediaFailed, so post-media-ready states are unreachable
+      // — guard them so a stray message can't null a live stream
+      // mid-call. Extend this guard when M11 introduces
+      // server-initiated releases (pair-failure / kick semantics).
+      if (
+        state.fsm !== "joined" &&
+        state.fsm !== "acquiring-media" &&
+        state.fsm !== "media-error"
+      ) {
+        return state;
+      }
       return {
         ...state,
         fsm: "released",
