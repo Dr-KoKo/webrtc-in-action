@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -254,12 +255,16 @@ func (h *Handler) dispatch(ctx context.Context, cc *connCtx, d *Decoded) error {
 		}, d.Envelope.RequestID)
 		return nil
 	default:
-		// Types reserved for later milestones (pair_*, reconnect_pair).
-		// Accept the envelope (already validated) but reply with
-		// not_in_room so a malformed client cannot drive state we have
-		// not built yet. M6+ replaces this default with real handlers.
+		// Types reserved for later milestones. M6 (T049) wires
+		// pair_offer + pair_answer; pair_ice_candidate waits for M7
+		// (T055), pair_media_state for M9 (T071), pair_failed +
+		// reconnect_pair for M11. Until each handler lands, reply
+		// with internal_error per §3.19 — the request was understood
+		// (decode passed) but the server has no implementation yet.
+		// Using `not_in_room` here would be misleading because the
+		// peer IS in the room; the failure is server-side.
 		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeNotInRoom,
+			Code:    CodeInternalError,
 			Message: string(d.Envelope.Type) + " is not yet wired in this milestone",
 		}, d.Envelope.RequestID)
 		return nil
@@ -275,7 +280,12 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *connCtx, d *Decoded) e
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	roomID := d.Envelope.RoomID
+	// Contract §1.1: trim surrounding whitespace before validation.
+	// Done at handler entry rather than inside ValidateRoomID so the
+	// validator stays a pure regex check; trimmed value is used for
+	// every downstream lookup so "demo " and "demo" map to the same
+	// MeshRoom.
+	roomID := strings.TrimSpace(d.Envelope.RoomID)
 	if err := ValidateRoomID(roomID); err != nil {
 		h.sendJoinRejected(ctx, cc, roomID, d.Envelope.RequestID,
 			JoinRejectedInvalidRoom, ReasonInvalidRoomID,
@@ -456,6 +466,28 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *connCtx, d *Decoded)
 		h.writeError(ctx, cc, &ProtocolError{
 			Code:    CodeNotInRoom,
 			Message: "media_ready requires an admitted participant",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	// decodeInto[MediaReadyPayload] already runs Validate() at decode
+	// (protocol_media.go enforces audio=true && video=true). Re-check
+	// here as belt-and-braces in case a future code path constructs a
+	// Decoded without going through DecodeEnvelope. Split the
+	// type-assertion failure (server-side decode mismatch) from the
+	// capability mismatch (client contract violation) so each carries
+	// the right error code.
+	payload, ok := d.Message.(*MediaReadyPayload)
+	if !ok || payload == nil {
+		h.writeError(ctx, cc, &ProtocolError{
+			Code:    CodeInternalError,
+			Message: "media_ready decode mismatch",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	if !payload.MediaCapabilities.Audio || !payload.MediaCapabilities.Video {
+		h.writeError(ctx, cc, &ProtocolError{
+			Code:    CodeUnsupportedMediaCapability,
+			Message: "media_ready requires audio=true AND video=true",
 		}, d.Envelope.RequestID)
 		return nil
 	}
