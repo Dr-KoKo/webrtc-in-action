@@ -96,4 +96,20 @@ fi
   done
 )
 
+# 2c. Backend cmd/ MUST NOT import internal/modes/* directly.
+#     cmd/signaling/main.go uses internal/app to wire mode handlers;
+#     internal/app is the ONLY package allowed to import a mode pkg.
+#     Use {{.Imports}} (direct only), not -deps (transitive — would
+#     pick up modes via internal/app and false-positive).
+(
+  cd signaling
+  if go list -f '{{range .Imports}}{{println .}}{{end}}' ./cmd/... 2>/dev/null \
+    | grep -E '/internal/modes/' >/dev/null; then
+    echo "VIOLATION: signaling cmd/ directly imports internal/modes/" >&2
+    go list -f '{{.ImportPath}}: {{range .Imports}}{{println .}}{{end}}' ./cmd/... 2>/dev/null \
+      | grep -E '/internal/modes/' >&2 || true
+    exit 1
+  fi
+)
+
 echo "Boundary audit clean."
