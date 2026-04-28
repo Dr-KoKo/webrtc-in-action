@@ -392,3 +392,87 @@ describe("mesh contract — non-existence invariants", () => {
     ).toThrow();
   });
 });
+
+// F-1: contract §3.1 / §3.2 / §3.3 list `requestId` as required for
+// the admission family (`join_room`, `join_accepted`, `join_rejected`).
+// All other taggedSchema types leave `requestId` optional. Verify both
+// ends of that boundary.
+describe("mesh contract — admission family requires requestId (F-1)", () => {
+  const PEER = "11111111-1111-4111-8111-111111111111";
+
+  it("rejects join_room without requestId", () => {
+    expect(() =>
+      meshClientMessageSchema.parse({
+        v: 2,
+        type: "join_room",
+        roomId: "demo",
+        // requestId omitted
+        payload: {},
+      }),
+    ).toThrow();
+  });
+
+  it("rejects join_accepted without requestId", () => {
+    expect(() =>
+      meshServerMessageSchema.parse({
+        v: 2,
+        type: "join_accepted",
+        roomId: "demo",
+        // requestId omitted
+        payload: {
+          peerId: PEER,
+          admissionIndex: 1,
+          iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }],
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects join_rejected without requestId", () => {
+    expect(() =>
+      meshServerMessageSchema.parse({
+        v: 2,
+        type: "join_rejected",
+        roomId: "demo",
+        // requestId omitted
+        payload: {
+          result: "join_rejected_room_full",
+          reason: "room_full",
+          message: "full",
+        },
+      }),
+    ).toThrow();
+  });
+
+  // Negative-of-negative: non-admission types still parse without
+  // requestId, proving the override is admission-family-scoped.
+  it("accepts mesh_roster_update without requestId (server-originated)", () => {
+    expect(() =>
+      meshServerMessageSchema.parse({
+        v: 2,
+        type: "mesh_roster_update",
+        roomId: "demo",
+        // requestId omitted — should be fine
+        payload: {
+          serverSeq: 1,
+          subjectPeerId: PEER,
+          admissionIndex: 1,
+          presence: "joined",
+          reason: "admitted",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts leave_room without requestId (client-originated)", () => {
+    expect(() =>
+      meshClientMessageSchema.parse({
+        v: 2,
+        type: "leave_room",
+        roomId: "demo",
+        // requestId omitted — should be fine
+        payload: {},
+      }),
+    ).not.toThrow();
+  });
+});

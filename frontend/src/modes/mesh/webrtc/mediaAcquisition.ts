@@ -58,6 +58,29 @@ export function MeshMediaController() {
     const triggerKey = `${local.peerId ?? "anon"}#${acquireGenRef.current}`;
     if (lastTriggerRef.current === triggerKey) return;
     lastTriggerRef.current = triggerKey;
+
+    // F-3: defensive `roomId` guard. Reachable only via reducer bug —
+    // the FSM only enters `joined` after MESH_JOIN_REQUESTED stored a
+    // roomId. Walk the FSM joined → acquiring-media → media-error so
+    // the user sees the banner and lastTriggerRef state is consistent.
+    // Dispatching MESH_MEDIA_FAILED directly from `joined` would be
+    // silently dropped by the reducer guard (must be in
+    // acquiring-media to fail), causing a deadlock with no banner.
+    if (!local.roomId) {
+      dispatch({ type: "MESH_MEDIA_ACQUIRE_STARTED" });
+      dispatch({ type: "MESH_MEDIA_FAILED", detail: "missing roomId" });
+      dispatch({
+        type: "MESH_EVENT_APPEND",
+        entry: makeMeshEventEntry({
+          scope: "local",
+          type: "media_failed_sent",
+          summary: "media-acquire aborted: roomId absent at effect entry",
+        }),
+      });
+      return;
+    }
+    const roomId = local.roomId;
+
     const myGen = acquireGenRef.current;
     void (async () => {
       dispatch({ type: "MESH_MEDIA_ACQUIRE_STARTED" });
@@ -73,27 +96,32 @@ export function MeshMediaController() {
       // If a reset / new admission happened since we started, drop.
       if (myGen !== acquireGenRef.current) return;
       if (outcome.ok) {
-        // Park the stream in a ref + module-local cache so M6+ can
-        // attach the same tracks to every PC.
+        // Publish the stream FIRST so LocalPreview renders the live
+        // self-tile immediately. Stream publication is local-only;
+        // the FSM transition (MESH_MEDIA_READY) is gated on the wire
+        // send — see F-2 below.
         streamRef.current = outcome.stream;
         publishLocalStream(outcome.stream);
-        dispatch({ type: "MESH_MEDIA_READY" });
-        dispatch({
-          type: "MESH_EVENT_APPEND",
-          entry: makeMeshEventEntry({
-            scope: "local",
-            type: "media_ready_sent",
-            summary: "media acquired; sending media_ready",
-          }),
-        });
         try {
           client.send({
             v: MESH_CONTRACT_VERSION,
             type: "media_ready",
-            roomId: local.roomId ?? "",
+            roomId,
             payload: { mediaCapabilities: { audio: true, video: true } },
           });
         } catch (err) {
+          // F-2: send failed → server doesn't know we're media-ready.
+          // Stop the just-acquired tracks (read from outcome.stream,
+          // not streamRef.current — explicit), clear the published
+          // stream, and walk the FSM acquiring-media → media-error
+          // so the banner appears. The user can Retry; M11 covers
+          // signaling-loss UX (EC-012).
+          for (const t of outcome.stream.getTracks()) {
+            try { t.stop(); } catch { /* already ended */ }
+          }
+          streamRef.current = null;
+          publishLocalStream(null);
+          dispatch({ type: "MESH_MEDIA_FAILED", detail: "ws send failed" });
           dispatch({
             type: "MESH_EVENT_APPEND",
             entry: makeMeshEventEntry({
@@ -102,9 +130,50 @@ export function MeshMediaController() {
               summary: `failed to send media_ready: ${(err as Error).message ?? "unknown"}`,
             }),
           });
+          return;
         }
+        // Send succeeded → commit FSM transition. media_ready_sent log
+        // entry fires AFTER send (gated on success), not before.
+        dispatch({ type: "MESH_MEDIA_READY" });
+        dispatch({
+          type: "MESH_EVENT_APPEND",
+          entry: makeMeshEventEntry({
+            scope: "local",
+            type: "media_ready_sent",
+            summary: "media acquired; media_ready sent",
+          }),
+        });
       } else {
         const detail = outcome.detail ?? outcome.reason;
+        try {
+          client.send({
+            v: MESH_CONTRACT_VERSION,
+            type: "media_failed",
+            roomId,
+            payload: {
+              reason: outcome.reason,
+              ...(outcome.detail ? { detail: outcome.detail } : {}),
+            },
+          });
+        } catch (err) {
+          // F-2 failure-path mirror: send failed but the local user
+          // already failed acquisition — FSM still must reflect that.
+          // Server will catch up via Pong-timeout if we never told it.
+          dispatch({
+            type: "MESH_MEDIA_FAILED",
+            ...(detail !== undefined ? { detail } : {}),
+          });
+          dispatch({
+            type: "MESH_EVENT_APPEND",
+            entry: makeMeshEventEntry({
+              scope: "local",
+              type: "signaling_error",
+              summary: `failed to send media_failed: ${(err as Error).message ?? "unknown"}`,
+            }),
+          });
+          return;
+        }
+        // Send succeeded → commit FSM transition + log.
         dispatch({
           type: "MESH_MEDIA_FAILED",
           ...(detail !== undefined ? { detail } : {}),
@@ -114,30 +183,10 @@ export function MeshMediaController() {
           entry: makeMeshEventEntry({
             scope: "local",
             type: "media_failed_sent",
-            summary: `media acquisition failed (${outcome.reason})`,
+            summary: `media acquisition failed (${outcome.reason}); media_failed sent`,
             detail: { reason: outcome.reason, detail: outcome.detail },
           }),
         });
-        try {
-          client.send({
-            v: MESH_CONTRACT_VERSION,
-            type: "media_failed",
-            roomId: local.roomId ?? "",
-            payload: {
-              reason: outcome.reason,
-              ...(outcome.detail ? { detail: outcome.detail } : {}),
-            },
-          });
-        } catch (err) {
-          dispatch({
-            type: "MESH_EVENT_APPEND",
-            entry: makeMeshEventEntry({
-              scope: "local",
-              type: "signaling_error",
-              summary: `failed to send media_failed: ${(err as Error).message ?? "unknown"}`,
-            }),
-          });
-        }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps

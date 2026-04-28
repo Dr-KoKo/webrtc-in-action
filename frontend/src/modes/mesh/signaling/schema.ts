@@ -368,9 +368,19 @@ const taggedSchema = <T extends z.ZodTypeAny, L extends string>(
     payload,
   });
 
+// Admission family (§3.1 / §3.2 / §3.3) require requestId — the
+// request carries it to correlate; the server echoes it on
+// join_accepted / join_rejected. The other taggedSchema types leave
+// requestId optional. `.extend({ requestId })` upgrades the optional
+// shape to required (Zod-3 merge semantics replace the existing key).
+const taggedRequestSchema = <T extends z.ZodTypeAny, L extends string>(
+  type: L,
+  payload: T,
+) => taggedSchema(type, payload).extend({ requestId: uuidSchema });
+
 // Client → server messages.
 export const meshClientMessageSchema = z.discriminatedUnion("type", [
-  taggedSchema("join_room", joinRoomPayloadSchema),
+  taggedRequestSchema("join_room", joinRoomPayloadSchema),
   taggedSchema("media_ready", mediaReadyPayloadSchema),
   taggedSchema("media_failed", mediaFailedPayloadSchema),
   taggedSchema("pair_offer", pairOfferPayloadSchema),
@@ -386,8 +396,8 @@ export type MeshClientMessage = z.infer<typeof meshClientMessageSchema>;
 
 // Server → client messages.
 export const meshServerMessageSchema = z.discriminatedUnion("type", [
-  taggedSchema("join_accepted", joinAcceptedPayloadSchema),
-  taggedSchema("join_rejected", joinRejectedPayloadSchema),
+  taggedRequestSchema("join_accepted", joinAcceptedPayloadSchema),
+  taggedRequestSchema("join_rejected", joinRejectedPayloadSchema),
   taggedSchema("mesh_roster_snapshot", meshRosterSnapshotPayloadSchema),
   taggedSchema("mesh_roster_update", meshRosterUpdatePayloadSchema),
   taggedSchema("participant_released", participantReleasedPayloadSchema),
