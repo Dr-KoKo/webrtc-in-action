@@ -29,24 +29,38 @@ fail() {
   exit 1
 }
 
-# 1a. Frontend shared/ MUST NOT import @/modes/*.
-if grep -RInE '@/modes/' frontend/src/shared/ >/dev/null; then
+# 1a. Frontend shared/ MUST NOT import @/modes/*. Match
+#     `from "@/modes/...` so comment mentions don't trigger the gate.
+if grep -RInE 'from[[:space:]]+"@/modes/' frontend/src/shared/ >/dev/null; then
   fail "frontend src/shared/ imports @/modes/" \
-    grep -RInE '@/modes/' frontend/src/shared/
+    grep -RInE 'from[[:space:]]+"@/modes/' frontend/src/shared/
 fi
 
 # 1b. Frontend cross-mode imports forbidden.
 for m in "${FRONT_MODES[@]}"; do
   for other in "${FRONT_MODES[@]}"; do
     [ "$m" = "$other" ] && continue
-    if grep -RInE "@/modes/$other" "frontend/src/modes/$m/" >/dev/null; then
+    if grep -RInE "from[[:space:]]+\"@/modes/$other" "frontend/src/modes/$m/" >/dev/null; then
       fail "frontend mode $m imports @/modes/$other" \
-        grep -RInE "@/modes/$other" "frontend/src/modes/$m/"
+        grep -RInE "from[[:space:]]+\"@/modes/$other" "frontend/src/modes/$m/"
     fi
   done
 done
 
-# 1c. Frontend: relative imports must not escape a mode/shared subdir.
+# 1c. Frontend app/ MUST NOT import a mode entry component except
+#     through the modes.tsx registry. Only modes.tsx is allowed to
+#     import from @/modes/<id>/... directly. Match `from "@/modes/...`
+#     so comment-text mentions of @/modes/* don't trigger the gate.
+while IFS= read -r f; do
+  base=$(basename "$f")
+  [ "$base" = "modes.tsx" ] && continue
+  if grep -E 'from[[:space:]]+"@/modes/' "$f" >/dev/null; then
+    fail "frontend app/$base imports @/modes/* (only modes.tsx may)" \
+      grep -nE 'from[[:space:]]+"@/modes/' "$f"
+  fi
+done < <(find frontend/src/app -type f \( -name '*.ts' -o -name '*.tsx' \))
+
+# 1d. Frontend: relative imports must not escape a mode/shared subdir.
 #     Inside src/modes/<m>/, any `from "(../){3,}"` is leaving the mode.
 #     Inside src/shared/, any `from "(../){2,}"` is leaving shared.
 if grep -RInE 'from "(\.\./){3,}' frontend/src/modes/ >/dev/null; then
