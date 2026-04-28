@@ -96,7 +96,7 @@ Suppose we add `sfu` (Selective Forwarding Unit, contract v3):
      { id: "sfu", label: "SFU mode", path: "/sfu/:roomId", component: SfuApp, signalingPath: "/ws/sfu" }
      ```
 3. **Backend**:
-   - Create `signaling/internal/modes/sfu/` with the handler + protocol files.
+   - Create `signaling/internal/modes/sfu/` with the handler + protocol files. The `handler.go` is a `wsserver.Mode` adapter — see `signaling/internal/modes/{onetoone,mesh}/handler.go` as templates: a `Handler` struct holding the room manager + ICE config, `NewHandler` returning `*Handler` and constructing a private `*wsserver.Server`, `ServeHTTP` delegating to it, and a per-WS struct (e.g. `sfuConn`) implementing `wsserver.SessionHandler` (and the mode's own `Conn` interface if the room manager broadcasts to it).
    - Wire `mux.Handle("/ws/sfu", sfu.NewHandler(...))` inside `internal/app/routes.go`.
 4. **Tests**: `signaling/tests/modes/sfu/` for Go protocol-flow tests; `frontend/src/modes/sfu/tests/` for Vitest reducer / dispatcher specs.
 5. **Boundary audit**: append `sfu` to the `FRONT_MODES` and `BACK_MODES` arrays in `scripts/audit-boundaries.sh`. Without this, cross-mode-imports involving `sfu` would slip past the gate.
@@ -114,6 +114,7 @@ The boundary audit is heuristic-by-design (regex over imports + `go list -deps`)
 - Backend `internal/shared/logging/` — slog setup.
 - Backend `internal/shared/heartbeat/` (Commit B) — parameterized over `Labels` so each mode keeps its event-name + message text.
 - Backend `internal/shared/config/` (Commit B) — tag-less `IceServer` + `LoadFromEnv()`.
+- Backend `internal/shared/wsserver/` — WebSocket session lifecycle (Accept, conn-id, heartbeat goroutine launch, write serialization, read loop, error classification, teardown ordering). Identical across modes; lifted so each mode's `handler.go` opens with topology (admission, roster, dispatch) instead of ~100 lines of WebSocket bookkeeping. Modes implement `wsserver.Mode.NewSession` returning a `wsserver.SessionHandler`. Mode-specific decode/dispatch error log fields (`code`, `type`) stay on the mode side.
 
 **Explicitly NOT in `shared/`** (kept mode-owned because abstracting hurts more than it helps):
 

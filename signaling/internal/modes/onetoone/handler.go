@@ -6,8 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,16 +14,19 @@ import (
 	"webrtc-lab/signaling/internal/modes/onetoone/room"
 	"webrtc-lab/signaling/internal/shared/config"
 	"webrtc-lab/signaling/internal/shared/heartbeat"
+	"webrtc-lab/signaling/internal/shared/wsserver"
 )
 
-// Handler is the /ws upgrader + per-connection dispatcher.
+// Handler is the /ws upgrader for the 001 1:1 contract. It owns
+// the room manager and ICE config; the WebSocket session lifecycle
+// (Accept, conn-id, heartbeat, read loop, write mutex, error
+// classification, teardown) lives in internal/shared/wsserver. Each
+// session's mode-specific state lives on oneToOneConn below.
 //
-// Phase 4 scope (on top of Phase 3 admission): two-phase join with
-// media readiness (media_ready / media_failed / participant_released /
-// ready_for_offer), role assignment by admissionOrder, and the first
-// stateful relays (offer / answer) with callPhase advancement. ICE
-// candidate and media_state relay + browser RTCPeerConnection remain
-// out of scope here (Phase 7+).
+// NewHandler returns *Handler so existing tests can mutate
+// h.Heartbeat AFTER construction (heartbeat_test.go:62) — the
+// wsserver Config carries &h.Heartbeat so those mutations reach
+// the running server.
 type Handler struct {
 	Log           *slog.Logger
 	Heartbeat     heartbeat.Config
@@ -38,32 +39,56 @@ type Handler struct {
 	// public STUN fallback is used so a fresh clone works on localhost.
 	IceServers []IceServer
 
-	connSeq atomic.Uint64
+	server *wsserver.Server
 }
 
-// NewHandler returns a Handler with a fresh RoomManager and sensible
-// defaults from env.
+// NewHandler returns a Handler with a fresh RoomManager and
+// sensible defaults from env.
 func NewHandler(log *slog.Logger) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Handler{
+	h := &Handler{
 		Log:        log,
 		Heartbeat:  heartbeat.LoadFromEnv(),
 		Rooms:      room.NewRoomManager(),
 		IceServers: iceServersFromConfig(config.LoadIceServersFromEnv()),
 		AcceptOptions: &websocket.AcceptOptions{
-			// Dev convenience: allow WS from any origin so the Vite dev
-			// server on a different port can connect. Phase 13 tightens
-			// this for production.
+			// Dev convenience: allow WS from any origin so the Vite
+			// dev server on a different port can connect. Phase 13
+			// tightens this for production.
 			InsecureSkipVerify: true,
 		},
 	}
+	h.server = wsserver.New(h, wsserver.Config{
+		Logger:          log,
+		Heartbeat:       &h.Heartbeat,
+		HeartbeatLabels: oneToOneHeartbeatLabels,
+		Accept:          h.AcceptOptions,
+		ConnIDPrefix:    "c-",
+		Connect:         wsserver.LogLine{Event: "ws_connected", Message: "websocket connected"},
+		Disconnect:      wsserver.LogLine{Event: "ws_disconnected", Message: "websocket disconnected"},
+		AcceptFailed:    wsserver.LogLine{Event: "ws_accept_failed", Message: "websocket accept failed"},
+	})
+	return h
 }
 
-// iceServersFromConfig converts the shared internal IceServer struct
-// (no JSON tags) to this mode's wire-payload type with v1 contract
-// JSON tags.
+// ServeHTTP delegates to the wsserver.Server built at NewHandler
+// time. The transport plumbing lives there so this file opens with
+// the 1:1 lesson — admission, ready-for-offer pairing, presence
+// changes — instead of WebSocket bookkeeping.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.server.ServeHTTP(w, r)
+}
+
+// NewSession satisfies wsserver.Mode — one call per accepted WS.
+func (h *Handler) NewSession(sess wsserver.Session, log *slog.Logger) (wsserver.SessionHandler, error) {
+	return &oneToOneConn{sess: sess, handler: h, log: log}, nil
+}
+
+// iceServersFromConfig converts the shared internal IceServer
+// struct (no JSON tags) to this mode's wire-payload type with v1
+// contract JSON tags.
 func iceServersFromConfig(in []config.IceServer) []IceServer {
 	out := make([]IceServer, len(in))
 	for i, s := range in {
@@ -76,150 +101,95 @@ func iceServersFromConfig(in []config.IceServer) []IceServer {
 	return out
 }
 
-// connCtx carries per-WS mutable state. Wrapped in a struct so the
-// room.Conn adapter and the read/write paths can share a single
-// writeMu.
-type connCtx struct {
-	conn     *websocket.Conn
-	writeMu  sync.Mutex
-	connID   string
+// oneToOneConn is the per-WS 001 state. Implements
+// wsserver.SessionHandler. Transport-level fields (the
+// *websocket.Conn, write mutex, conn-id) live on the wrapped
+// wsserver.Session; this struct keeps only the 001 protocol state.
+type oneToOneConn struct {
+	sess     wsserver.Session
+	handler  *Handler
+	log      *slog.Logger
 	peerID   string
 	roomID   string
 	released atomic.Bool // flipped true once the slot has been released
 }
 
-// sendJSON marshals v as a text frame, serialized by the conn's
-// writeMu. Returns an error if the underlying Write fails.
-func (c *connCtx) sendJSON(ctx context.Context, v any) error {
+// sendJSON marshals v as a text frame and forwards to
+// wsserver.Session, which serializes the write under its mutex.
+func (c *oneToOneConn) sendJSON(ctx context.Context, v any) error {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	return c.conn.Write(writeCtx, websocket.MessageText, raw)
+	return c.sess.Send(ctx, raw)
 }
 
-// roomConn adapts a *connCtx to the room.Conn interface used by the
-// room package to send messages to a participant.
+// HandleFrame is the wsserver-side dispatch entry point. Decodes
+// the envelope; on decode failure writes a typed `error` frame
+// back, logs the mode-specific `code` field, and returns nil so
+// the read loop continues. Dispatch errors are already surfaced
+// to the client via writeError inside the per-type handlers; we
+// log and return nil for the same continue-on-non-fatal reason.
+func (c *oneToOneConn) HandleFrame(ctx context.Context, frame []byte) error {
+	decoded, derr := Decode(frame)
+	if derr != nil {
+		var de *DecodeError
+		errors.As(derr, &de)
+		c.handler.writeError(ctx, c, de, "")
+		c.handler.Log.Debug("decode error",
+			slog.String("conn_id", c.sess.ID()),
+			slog.String("code", string(de.Code)),
+		)
+		return nil
+	}
+	if err := c.handler.dispatch(ctx, c, decoded); err != nil {
+		c.handler.Log.Debug("dispatch error",
+			slog.String("conn_id", c.sess.ID()),
+			slog.String("type", string(decoded.Envelope.Type)),
+			slog.String("error", err.Error()),
+		)
+	}
+	return nil
+}
+
+// OnDisconnect runs once during teardown. The transportReason
+// argument names the wire-level cause (peer_close / read_error /
+// etc.) but is intentionally NOT forwarded into the room cleanup,
+// which uses the domain reason "disconnect" for non-graceful
+// exits — preserving the semantics of pre-refactor handler.go:172
+// where releaseAndNotify was always called with reason="disconnect"
+// regardless of how the read loop terminated. Returns the optional
+// `peer_id` slog.Attr that gets merged into the disconnect log
+// line for admitted connections (matches pre-refactor lines
+// 182-184).
+func (c *oneToOneConn) OnDisconnect(transportReason string) []slog.Attr {
+	_ = transportReason
+	if c.peerID != "" && !c.released.Load() {
+		c.handler.releaseAndNotify(context.Background(), c, "disconnect")
+	}
+	if c.peerID != "" {
+		return []slog.Attr{slog.String("peer_id", c.peerID)}
+	}
+	return nil
+}
+
+// roomConn adapts a *oneToOneConn to the room.Conn interface used
+// by the room package to send messages to a participant. The
+// per-session base context (cancelled at teardown) is read from
+// the wrapped wsserver.Session at send time — replaces the
+// pre-refactor baseCtx field captured at admission.
 type roomConn struct {
-	ctx *connCtx
-	// baseCtx is a context suitable for writes — typically r.Context()
-	// of the serving request. Captured at adapter creation.
-	baseCtx context.Context
+	c *oneToOneConn
 }
 
 func (r *roomConn) SendJSON(v any) error {
-	return r.ctx.sendJSON(r.baseCtx, v)
-}
-
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, h.AcceptOptions)
-	if err != nil {
-		h.Log.Warn("websocket accept failed",
-			slog.String("event", "ws_accept_failed"),
-			slog.String("remote_addr", r.RemoteAddr),
-			slog.String("error", err.Error()),
-		)
-		return
-	}
-
-	cc := &connCtx{
-		conn:   conn,
-		connID: formatConnID(h.connSeq.Add(1)),
-	}
-
-	h.Log.Info("websocket connected",
-		slog.String("event", "ws_connected"),
-		slog.String("conn_id", cc.connID),
-		slog.String("remote_addr", r.RemoteAddr),
-	)
-
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-
-	// Heartbeat goroutine.
-	heartbeatDone := make(chan error, 1)
-	go func() {
-		heartbeatDone <- heartbeat.Run(ctx, conn, h.Heartbeat, h.Log, cc.connID, oneToOneHeartbeatLabels)
-	}()
-
-	readErr := h.readLoop(ctx, cc)
-
-	// Whichever side terminated first, stop the other.
-	cancel()
-	hbErr := <-heartbeatDone
-
-	reason := "closed"
-	switch {
-	case readErr != nil:
-		reason = classifyReadError(readErr)
-	case hbErr != nil && !errors.Is(hbErr, context.Canceled):
-		var herr *heartbeat.HeartbeatError
-		if errors.As(hbErr, &herr) {
-			reason = herr.Reason
-		} else {
-			reason = "heartbeat_error"
-		}
-	}
-
-	// Post-disconnect cleanup: if the connection was admitted and not
-	// already released by an explicit leave_room, release the slot and
-	// notify the remaining peer.
-	if cc.peerID != "" && !cc.released.Load() {
-		h.releaseAndNotify(context.Background(), cc, "disconnect")
-	}
-
-	_ = conn.Close(websocket.StatusNormalClosure, "bye")
-
-	logAttrs := []any{
-		slog.String("event", "ws_disconnected"),
-		slog.String("conn_id", cc.connID),
-		slog.String("reason", reason),
-	}
-	if cc.peerID != "" {
-		logAttrs = append(logAttrs, slog.String("peer_id", cc.peerID))
-	}
-	h.Log.Info("websocket disconnected", logAttrs...)
-}
-
-func (h *Handler) readLoop(ctx context.Context, cc *connCtx) error {
-	for {
-		_, raw, err := cc.conn.Read(ctx)
-		if err != nil {
-			return err
-		}
-
-		decoded, derr := Decode(raw)
-		if derr != nil {
-			var de *DecodeError
-			errors.As(derr, &de)
-			h.writeError(ctx, cc, de, "")
-			h.Log.Debug("decode error",
-				slog.String("conn_id", cc.connID),
-				slog.String("code", string(de.Code)),
-			)
-			continue
-		}
-
-		if err := h.dispatch(ctx, cc, decoded); err != nil {
-			// dispatch errors are already surfaced to the client via
-			// writeError; log and continue.
-			h.Log.Debug("dispatch error",
-				slog.String("conn_id", cc.connID),
-				slog.String("type", string(decoded.Envelope.Type)),
-				slog.String("error", err.Error()),
-			)
-		}
-	}
+	return r.c.sendJSON(r.c.sess.BaseContext(), v)
 }
 
 // dispatch routes a decoded envelope to the correct handler for the
 // current phase. Types not yet wired are rejected with an `error`
 // frame so a malformed client cannot drive state we have not built.
-func (h *Handler) dispatch(ctx context.Context, cc *connCtx, d *Decoded) error {
+func (h *Handler) dispatch(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
 	switch d.Envelope.Type {
 	case TypeJoinRoom:
 		return h.handleJoinRoom(ctx, cc, d)
@@ -250,14 +220,14 @@ func (h *Handler) dispatch(ctx context.Context, cc *connCtx, d *Decoded) error {
 		// failures. Log and drop — the server treats these as
 		// informational.
 		h.Log.Debug("client-reported error",
-			slog.String("conn_id", cc.connID),
+			slog.String("conn_id", cc.sess.ID()),
 		)
 		return nil
 	}
 	return nil
 }
 
-func (h *Handler) handleJoinRoom(ctx context.Context, cc *connCtx, d *Decoded) error {
+func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
 	if cc.peerID != "" {
 		h.writeError(ctx, cc, &DecodeError{
 			Code:    CodeAlreadyJoined,
@@ -277,7 +247,7 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *connCtx, d *Decoded) e
 		return nil
 	}
 
-	outcome := h.Rooms.Admit(roomID, &roomConn{ctx: cc, baseCtx: ctx})
+	outcome := h.Rooms.Admit(roomID, &roomConn{c: cc})
 
 	switch outcome.Result {
 	case room.JoinRejectedInvalidRoom:
@@ -327,7 +297,7 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *connCtx, d *Decoded) e
 	}
 	if err := cc.sendJSON(ctx, env); err != nil {
 		h.Log.Warn("join_accepted send failed",
-			slog.String("conn_id", cc.connID), slog.String("error", err.Error()))
+			slog.String("conn_id", cc.sess.ID()), slog.String("error", err.Error()))
 	}
 
 	// Broadcast the admission event to both reserved participants (§3.4,
@@ -337,7 +307,7 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *connCtx, d *Decoded) e
 
 	h.Log.Info("peer admitted",
 		slog.String("event", "peer_admitted"),
-		slog.String("conn_id", cc.connID),
+		slog.String("conn_id", cc.sess.ID()),
 		slog.String("peer_id", cc.peerID),
 		slog.String("room_id", cc.roomID),
 		slog.Int("admission_order", admissionOrder),
@@ -345,7 +315,7 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *connCtx, d *Decoded) e
 	return nil
 }
 
-func (h *Handler) handleLeaveRoom(ctx context.Context, cc *connCtx, d *Decoded) error {
+func (h *Handler) handleLeaveRoom(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &DecodeError{
 			Code:    CodeNotInRoom,
@@ -363,7 +333,7 @@ func (h *Handler) handleLeaveRoom(ctx context.Context, cc *connCtx, d *Decoded) 
 	// double-release via cc.released.
 	cc.peerID = ""
 	cc.roomID = ""
-	_ = cc.conn.Close(websocket.StatusNormalClosure, "graceful_leave")
+	_ = cc.sess.Close(websocket.StatusNormalClosure, "graceful_leave")
 	return nil
 }
 
@@ -440,7 +410,7 @@ func classifyDeparture(p *room.Participant, reason string) departureClassificati
 // releaseAndNotify(_, cc, "disconnect"). Classification + emit logic
 // is therefore shared across graceful leave_room, WS-close, and
 // heartbeat-timeout paths — one source of truth.
-func (h *Handler) releaseAndNotify(_ context.Context, cc *connCtx, reason string) {
+func (h *Handler) releaseAndNotify(_ context.Context, cc *oneToOneConn, reason string) {
 	roomID := cc.roomID
 	peerID := cc.peerID
 
@@ -560,7 +530,7 @@ func (h *Handler) broadcastPresence(_ context.Context, r *room.Room, subject *ro
 // sendJoinRejected centralizes the join_rejected send so both the
 // pre-admit room-ID validator and the RoomManager rejection paths use
 // the same envelope shape.
-func (h *Handler) sendJoinRejected(ctx context.Context, cc *connCtx, roomID, requestID string, result JoinRejectedResult, reason JoinRejectedReason, message string) {
+func (h *Handler) sendJoinRejected(ctx context.Context, cc *oneToOneConn, roomID, requestID string, result JoinRejectedResult, reason JoinRejectedReason, message string) {
 	payload, _ := json.Marshal(JoinRejectedPayload{
 		Result:  result,
 		Reason:  reason,
@@ -577,7 +547,7 @@ func (h *Handler) sendJoinRejected(ctx context.Context, cc *connCtx, roomID, req
 	_ = cc.sendJSON(ctx, env)
 }
 
-func (h *Handler) writeError(ctx context.Context, cc *connCtx, de *DecodeError, correlates string) {
+func (h *Handler) writeError(ctx context.Context, cc *oneToOneConn, de *DecodeError, correlates string) {
 	payload, _ := json.Marshal(ErrorPayload{
 		Code:       de.Code,
 		Message:    de.Message,
@@ -619,25 +589,6 @@ func toWireRoomReadiness(c room.CallReadiness) RoomReadiness {
 }
 
 // ---------------------------------------------------------------------
-// Small helpers
-// ---------------------------------------------------------------------
-
-func classifyReadError(err error) string {
-	status := websocket.CloseStatus(err)
-	if status != -1 {
-		return "peer_close"
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return "ctx_done"
-	}
-	return "read_error"
-}
-
-func formatConnID(n uint64) string {
-	return "c-" + strconv.FormatUint(n, 10)
-}
-
-// ---------------------------------------------------------------------
 // Phase 4 — media-ready pairing + role assignment
 // ---------------------------------------------------------------------
 
@@ -646,7 +597,7 @@ func formatConnID(n uint64) string {
 // media_ready), and — if the room reaches paired call-readiness —
 // assigns roles by admissionOrder and emits ready_for_offer to both
 // peers exactly once per pairing attempt (contract §§3.5, 3.7).
-func (h *Handler) handleMediaReady(ctx context.Context, cc *connCtx, d *Decoded) error {
+func (h *Handler) handleMediaReady(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &DecodeError{
 			Code:    CodeNotInRoom,
@@ -704,7 +655,7 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *connCtx, d *Decoded)
 
 	h.Log.Info("media ready",
 		slog.String("event", "media_ready"),
-		slog.String("conn_id", cc.connID),
+		slog.String("conn_id", cc.sess.ID()),
 		slog.String("peer_id", cc.peerID),
 		slog.String("room_id", cc.roomID),
 		slog.Bool("roles_assigned", assignRoles),
@@ -719,7 +670,7 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *connCtx, d *Decoded)
 // another `join_room` (contract §§3.6, 3.13 "Server-side retry
 // support"). No `peer_left` is emitted — pending-media releases are
 // pre-pairing by definition.
-func (h *Handler) handleMediaFailed(ctx context.Context, cc *connCtx, d *Decoded) error {
+func (h *Handler) handleMediaFailed(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &DecodeError{
 			Code:    CodeNotInRoom,
@@ -778,7 +729,7 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *connCtx, d *Decoded
 	}
 	if err := cc.sendJSON(ctx, relEnv); err != nil {
 		h.Log.Warn("participant_released send failed",
-			slog.String("conn_id", cc.connID),
+			slog.String("conn_id", cc.sess.ID()),
 			slog.String("error", err.Error()))
 	}
 
@@ -798,7 +749,7 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *connCtx, d *Decoded
 
 	h.Log.Info("media failed",
 		slog.String("event", "media_failed"),
-		slog.String("conn_id", cc.connID),
+		slog.String("conn_id", cc.sess.ID()),
 		slog.String("reason", detail),
 	)
 	return nil
@@ -866,12 +817,12 @@ func (h *Handler) sendReadyForOffer(_ context.Context, rm *room.Room, participan
 // and state (mediaReadiness × callPhase), relays it to the remote
 // peer with envelope.from = sender peerId, and advances the sender's
 // CallPhase role-assigned → negotiating (§§3.8, C.2).
-func (h *Handler) handleOffer(ctx context.Context, cc *connCtx, d *Decoded) error {
+func (h *Handler) handleOffer(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
 	return h.handleSDPRelay(ctx, cc, d, TypeOffer)
 }
 
 // handleAnswer mirrors handleOffer for §3.9.
-func (h *Handler) handleAnswer(ctx context.Context, cc *connCtx, d *Decoded) error {
+func (h *Handler) handleAnswer(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
 	return h.handleSDPRelay(ctx, cc, d, TypeAnswer)
 }
 
@@ -883,7 +834,7 @@ func (h *Handler) handleAnswer(ctx context.Context, cc *connCtx, d *Decoded) err
 // Importantly, the server NEVER parses payload.sdp.sdp — the inbound
 // payload bytes are forwarded verbatim on the new envelope with only
 // envelope.from / envelope.to / envelope.ts overwritten. NFR-003.
-func (h *Handler) handleSDPRelay(ctx context.Context, cc *connCtx, d *Decoded, t Type) error {
+func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *Decoded, t Type) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &DecodeError{
 			Code:    CodeNotInRoom,
@@ -1012,7 +963,7 @@ func (h *Handler) handleSDPRelay(ctx context.Context, cc *connCtx, d *Decoded, t
 // by IceCandidatePayload.Validate() (decoded before dispatch); a
 // DecodeError(Code: CodeMalformed) flows through `writeError` to the
 // sender without ever reaching this function.
-func (h *Handler) handleIceCandidate(ctx context.Context, cc *connCtx, d *Decoded) error {
+func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &DecodeError{
 			Code:    CodeNotInRoom,
@@ -1127,7 +1078,7 @@ func (h *Handler) handleIceCandidate(ctx context.Context, cc *connCtx, d *Decode
 // Full-triplet validation (microphone, camera, screenShare all
 // required) is enforced at decode time by MediaStatePayload.Validate():
 // a missing field decodes to "" which fails the enum switch.
-func (h *Handler) handleMediaState(ctx context.Context, cc *connCtx, d *Decoded) error {
+func (h *Handler) handleMediaState(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &DecodeError{
 			Code:    CodeNotInRoom,
