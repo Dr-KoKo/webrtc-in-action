@@ -17,14 +17,15 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
+
+	"webrtc-lab/signaling/internal/shared/config"
+	"webrtc-lab/signaling/internal/shared/heartbeat"
 )
 
 // Handler is the `/ws/mesh` upgrader + per-connection dispatcher.
@@ -37,7 +38,7 @@ import (
 // M5+.
 type Handler struct {
 	Log           *slog.Logger
-	Heartbeat     HeartbeatConfig
+	Heartbeat     heartbeat.Config
 	Manager       *MeshRoomManager
 	AcceptOptions *websocket.AcceptOptions
 
@@ -53,8 +54,8 @@ func NewHandler(log *slog.Logger) *Handler {
 	}
 	return &Handler{
 		Log:       log,
-		Heartbeat: LoadHeartbeatConfig(),
-		Manager:   NewMeshRoomManager(ManagerConfig{IceServers: loadIceServersFromEnv()}),
+		Heartbeat: heartbeat.LoadFromEnv(),
+		Manager:   NewMeshRoomManager(ManagerConfig{IceServers: iceServersFromConfig(config.LoadIceServersFromEnv())}),
 		AcceptOptions: &websocket.AcceptOptions{
 			// Dev convenience: mirror 001's allow-any-origin policy so the
 			// Vite dev server can connect through its `/ws` proxy.
@@ -63,35 +64,19 @@ func NewHandler(log *slog.Logger) *Handler {
 	}
 }
 
-// loadIceServersFromEnv reads VITE_STUN_URLS / VITE_TURN_* identical
-// to the 001 server. The mesh and 001 endpoints share the same env
-// keys so a single configuration governs both. The list is relayed to
-// peers in `join_accepted` and per-pair instructions; TURN credentials
-// MUST NEVER appear in logs (NFR-003).
-func loadIceServersFromEnv() []IceServer {
-	var servers []IceServer
-	if raw := os.Getenv("VITE_STUN_URLS"); raw != "" {
-		var urls []string
-		for _, part := range strings.Split(raw, ",") {
-			if t := strings.TrimSpace(part); t != "" {
-				urls = append(urls, t)
-			}
-		}
-		if len(urls) > 0 {
-			servers = append(servers, IceServer{URLs: urls})
+// iceServersFromConfig converts the shared internal IceServer struct
+// (no JSON tags) to this mode's wire-payload type with v2 contract
+// JSON tags.
+func iceServersFromConfig(in []config.IceServer) []IceServer {
+	out := make([]IceServer, len(in))
+	for i, s := range in {
+		out[i] = IceServer{
+			URLs:       s.URLs,
+			Username:   s.Username,
+			Credential: s.Credential,
 		}
 	}
-	if len(servers) == 0 {
-		servers = append(servers, IceServer{URLs: []string{"stun:stun.l.google.com:19302"}})
-	}
-	if turn := os.Getenv("VITE_TURN_URL"); turn != "" {
-		servers = append(servers, IceServer{
-			URLs:       []string{turn},
-			Username:   os.Getenv("VITE_TURN_USERNAME"),
-			Credential: os.Getenv("VITE_TURN_CREDENTIAL"),
-		})
-	}
-	return servers
+	return out
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +106,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	heartbeatDone := make(chan error, 1)
 	go func() {
-		heartbeatDone <- runHeartbeat(ctx, conn, h.Heartbeat, h.Log, cc.connID)
+		heartbeatDone <- heartbeat.Run(ctx, conn, h.Heartbeat, h.Log, cc.connID, meshHeartbeatLabels)
 	}()
 
 	readErr := h.readLoop(ctx, cc)
@@ -134,7 +119,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case readErr != nil:
 		reason = classifyReadError(readErr)
 	case hbErr != nil && !errors.Is(hbErr, context.Canceled):
-		var herr *HeartbeatError
+		var herr *heartbeat.HeartbeatError
 		if errors.As(hbErr, &herr) {
 			reason = herr.Reason
 		} else {

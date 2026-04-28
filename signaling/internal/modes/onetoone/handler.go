@@ -6,9 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,6 +14,8 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/onetoone/room"
+	"webrtc-lab/signaling/internal/shared/config"
+	"webrtc-lab/signaling/internal/shared/heartbeat"
 )
 
 // Handler is the /ws upgrader + per-connection dispatcher.
@@ -28,7 +28,7 @@ import (
 // out of scope here (Phase 7+).
 type Handler struct {
 	Log           *slog.Logger
-	Heartbeat     HeartbeatConfig
+	Heartbeat     heartbeat.Config
 	Rooms         *room.RoomManager
 	AcceptOptions *websocket.AcceptOptions
 
@@ -49,9 +49,9 @@ func NewHandler(log *slog.Logger) *Handler {
 	}
 	return &Handler{
 		Log:        log,
-		Heartbeat:  LoadHeartbeatConfig(),
+		Heartbeat:  heartbeat.LoadFromEnv(),
 		Rooms:      room.NewRoomManager(),
-		IceServers: loadIceServers(),
+		IceServers: iceServersFromConfig(config.LoadIceServersFromEnv()),
 		AcceptOptions: &websocket.AcceptOptions{
 			// Dev convenience: allow WS from any origin so the Vite dev
 			// server on a different port can connect. Phase 13 tightens
@@ -61,37 +61,19 @@ func NewHandler(log *slog.Logger) *Handler {
 	}
 }
 
-// loadIceServers reads VITE_STUN_URLS / VITE_TURN_URL / VITE_TURN_USERNAME /
-// VITE_TURN_CREDENTIAL from env and produces the RTCIceServer list
-// relayed in `ready_for_offer`. TURN credentials are never logged
-// (contract §3.7 explicitly forbids it).
-func loadIceServers() []IceServer {
-	var servers []IceServer
-	if raw := strings.TrimSpace(os.Getenv("VITE_STUN_URLS")); raw != "" {
-		urls := strings.Split(raw, ",")
-		cleaned := urls[:0]
-		for _, u := range urls {
-			if t := strings.TrimSpace(u); t != "" {
-				cleaned = append(cleaned, t)
-			}
-		}
-		if len(cleaned) > 0 {
-			servers = append(servers, IceServer{URLs: cleaned})
+// iceServersFromConfig converts the shared internal IceServer struct
+// (no JSON tags) to this mode's wire-payload type with v1 contract
+// JSON tags.
+func iceServersFromConfig(in []config.IceServer) []IceServer {
+	out := make([]IceServer, len(in))
+	for i, s := range in {
+		out[i] = IceServer{
+			URLs:       s.URLs,
+			Username:   s.Username,
+			Credential: s.Credential,
 		}
 	}
-	if len(servers) == 0 {
-		servers = append(servers, IceServer{
-			URLs: []string{"stun:stun.l.google.com:19302"},
-		})
-	}
-	if turn := strings.TrimSpace(os.Getenv("VITE_TURN_URL")); turn != "" {
-		servers = append(servers, IceServer{
-			URLs:       []string{turn},
-			Username:   os.Getenv("VITE_TURN_USERNAME"),
-			Credential: os.Getenv("VITE_TURN_CREDENTIAL"),
-		})
-	}
-	return servers
+	return out
 }
 
 // connCtx carries per-WS mutable state. Wrapped in a struct so the
@@ -161,7 +143,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Heartbeat goroutine.
 	heartbeatDone := make(chan error, 1)
 	go func() {
-		heartbeatDone <- runHeartbeat(ctx, conn, h.Heartbeat, h.Log, cc.connID)
+		heartbeatDone <- heartbeat.Run(ctx, conn, h.Heartbeat, h.Log, cc.connID, oneToOneHeartbeatLabels)
 	}()
 
 	readErr := h.readLoop(ctx, cc)
@@ -175,7 +157,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case readErr != nil:
 		reason = classifyReadError(readErr)
 	case hbErr != nil && !errors.Is(hbErr, context.Canceled):
-		var herr *HeartbeatError
+		var herr *heartbeat.HeartbeatError
 		if errors.As(hbErr, &herr) {
 			reason = herr.Reason
 		} else {
