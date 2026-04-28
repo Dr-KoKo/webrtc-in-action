@@ -227,3 +227,45 @@ func TestEmptyRoomGarbageCollected(t *testing.T) {
 		t.Fatalf("expected empty registry after last leave; got %d rooms", h.Manager.RoomCount())
 	}
 }
+
+// TestSnapshotServerSeqStrictlyGreaterThanPriorEmissions — §3.4
+// conformance hardening (B-1). The snapshot's ServerSeq must be
+// > 0 after the first admission AND the next mesh_roster_update
+// must be > snapshot.ServerSeq. Together these guarantee the
+// emitted seq is unambiguous regardless of whether the snapshot is
+// treated as a "fresh emission" or a "re-emission of the most
+// recent value."
+func TestSnapshotServerSeqStrictlyGreaterThanPriorEmissions(t *testing.T) {
+	h := mesh.NewHandler(silentLogger())
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const roomID = "snapshot-seq"
+
+	// Admit A. Read join_accepted, snapshot, then A's own joined-update.
+	connA, _, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
+	defer connA.CloseNow()
+	snap := readUntilType(t, connA, ctx, mesh.TypeMeshRosterSnapshot)
+	var snapPayload mesh.MeshRosterSnapshotPayload
+	if err := json.Unmarshal(snap.Payload, &snapPayload); err != nil {
+		t.Fatalf("snapshot unmarshal failed: %v", err)
+	}
+	if snapPayload.ServerSeq == 0 {
+		t.Fatalf("snapshot.ServerSeq = 0; want > 0 (snapshot must bump rosterSeq for §3.4 conformance)")
+	}
+
+	// First mesh_roster_update for A's own admission must be strictly
+	// greater than the snapshot's seq.
+	upd := readUntilType(t, connA, ctx, mesh.TypeMeshRosterUpdate)
+	var updPayload mesh.MeshRosterUpdatePayload
+	if err := json.Unmarshal(upd.Payload, &updPayload); err != nil {
+		t.Fatalf("update unmarshal failed: %v", err)
+	}
+	if updPayload.ServerSeq <= snapPayload.ServerSeq {
+		t.Fatalf("update.ServerSeq = %d, want > snapshot.ServerSeq = %d",
+			updPayload.ServerSeq, snapPayload.ServerSeq)
+	}
+}

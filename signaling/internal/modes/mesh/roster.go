@@ -19,11 +19,20 @@ package mesh
 // §A.6 note); the server emits them only via pair lifecycle messages,
 // not via the roster snapshot.
 //
+// The snapshot bumps `rosterSeq` so its emitted seq is strictly
+// greater than any prior emission. Subsequent `mesh_roster_update`
+// broadcasts continue to bump and remain strictly greater than the
+// snapshot — closing the §3.4 ambiguity around "most recent emitted
+// value at the time of admission" by treating the snapshot itself as
+// a fresh emission. Today the client roster reducer's REPLACE
+// semantic on snapshot already neutralizes the ambiguity, but this
+// keeps the wire shape unambiguous regardless of client behavior.
+//
 // Caller must hold the room lock.
 func BuildRosterSnapshot(r *MeshRoom) MeshRosterSnapshotPayload {
 	parts := r.ParticipantsSnapshot()
 	out := MeshRosterSnapshotPayload{
-		ServerSeq:    r.CurrentRosterSeq(),
+		ServerSeq:    r.nextRosterSeq(),
 		Participants: make([]RosterParticipant, 0, len(parts)),
 	}
 	for _, p := range parts {
