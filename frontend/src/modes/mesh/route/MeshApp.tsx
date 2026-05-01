@@ -23,6 +23,10 @@ import { MeshEventLogPanel } from "../components/MeshEventLogPanel";
 import { MediaErrorBanner } from "../components/MediaErrorBanner";
 import { LocalPreview } from "../components/LocalPreview";
 import { MeshMediaController } from "../webrtc/mediaAcquisition";
+import { RemoteTile } from "../components/RemoteTile";
+import { MeshCostSummary } from "../components/MeshCostSummary";
+import { selectRosterAsArray } from "../state/roster";
+import { selectPairByRemotePeerId } from "../state/pairs";
 
 function resolveMeshSignalingUrl(): string {
   const override = import.meta.env.VITE_MESH_SIGNALING_URL as
@@ -47,8 +51,9 @@ export function MeshApp() {
 
 function MeshAppLayout({ roomId }: { roomId: string }) {
   const client = useMeshSignalingClient();
-  const { local } = useMeshState();
+  const { local, roster, pairs } = useMeshState();
   const signalingUrl = resolveMeshSignalingUrl();
+  const remotes = selectRosterAsArray(roster);
   return (
     <main className="mesh-app" data-testid="mesh-app">
       <header className="mesh-app__header">
@@ -75,6 +80,26 @@ function MeshAppLayout({ roomId }: { roomId: string }) {
         />
         <LocalPreview />
         <MeshRoster />
+        <MeshCostSummary />
+        <section
+          className="mesh-app__remote-tiles"
+          data-testid="mesh-remote-tiles"
+        >
+          <h2>Remote peers</h2>
+          {remotes.length === 0 ? (
+            <p data-testid="mesh-remote-tiles-empty">(no remote peers yet)</p>
+          ) : (
+            remotes.map((p) => (
+              <RemoteTile
+                key={p.peerId}
+                peerId={p.peerId}
+                admissionIndex={p.admissionIndex}
+                presence={p.presence}
+                pair={selectPairByRemotePeerId(pairs, p.peerId) ?? null}
+              />
+            ))
+          )}
+        </section>
         <MeshEventLogPanel />
       </div>
     </main>

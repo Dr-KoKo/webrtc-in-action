@@ -29,22 +29,31 @@ import {
   type MeshEventLogAction,
   type MeshEventLogSlice,
 } from "./eventLog";
+import {
+  initialMeshPairsSlice,
+  meshPairsReducer,
+  type MeshPairsAction,
+  type MeshPairsSlice,
+} from "./pairs";
 
 export interface MeshRootState {
   local: MeshLocalParticipant;
   roster: MeshRosterSlice;
   eventLog: MeshEventLogSlice;
+  pairs: MeshPairsSlice;
 }
 
 export type MeshRootAction =
   | MeshLocalAction
   | MeshRosterAction
-  | MeshEventLogAction;
+  | MeshEventLogAction
+  | MeshPairsAction;
 
 export const initialMeshRootState: MeshRootState = {
   local: initialMeshLocalParticipant,
   roster: initialMeshRosterSlice,
   eventLog: initialMeshEventLogSlice,
+  pairs: initialMeshPairsSlice,
 };
 
 function isRosterAction(a: MeshRootAction): a is MeshRosterAction {
@@ -59,6 +68,15 @@ function isEventLogAction(a: MeshRootAction): a is MeshEventLogAction {
   return a.type === "MESH_EVENT_APPEND" || a.type === "MESH_EVENT_LOG_RESET";
 }
 
+function isPairsAction(a: MeshRootAction): a is MeshPairsAction {
+  return (
+    a.type === "MESH_PAIR_REGISTERED" ||
+    a.type === "MESH_PAIR_VIEW_PATCHED" ||
+    a.type === "MESH_PAIR_REMOVED" ||
+    a.type === "MESH_PAIRS_RESET"
+  );
+}
+
 export function meshRootReducer(
   state: MeshRootState,
   action: MeshRootAction,
@@ -71,6 +89,9 @@ export function meshRootReducer(
       ...state,
       eventLog: meshEventLogReducer(state.eventLog, action),
     };
+  }
+  if (isPairsAction(action)) {
+    return { ...state, pairs: meshPairsReducer(state.pairs, action) };
   }
   return { ...state, local: meshLocalReducer(state.local, action) };
 }

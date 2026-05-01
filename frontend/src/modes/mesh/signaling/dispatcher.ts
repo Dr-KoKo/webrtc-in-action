@@ -333,7 +333,38 @@ function dispatchValidated(deps: DispatcherDeps, msg: MeshServerMessage): void {
       }
       return;
     }
-    case "pair_ice_candidate":
+    case "pair_ice_candidate": {
+      const manager = deps.getPairManager?.() ?? null;
+      const pairId = msg.payload.pairId;
+      if (manager) {
+        void manager.handlePairIceCandidate({
+          pairId,
+          pairEpoch: msg.payload.pairEpoch,
+          candidate: msg.payload.candidate as RTCIceCandidateInit | null,
+        });
+      } else {
+        const subjectPeerId = msg.from;
+        dispatch({
+          type: "MESH_EVENT_APPEND",
+          entry: subjectPeerId
+            ? makeMeshEventEntry({
+                scope: "pair",
+                type: "future_phase_message",
+                summary: `pair_ice_candidate received for pair ${pairId} (no PairManager wired)`,
+                peerId: subjectPeerId,
+                pairId,
+                detail: { type: msg.type, pairEpoch: msg.payload.pairEpoch },
+              })
+            : makeMeshEventEntry({
+                scope: "room",
+                type: "future_phase_message",
+                summary: `pair_ice_candidate received for pair ${pairId} (no PairManager wired)`,
+                detail: { type: msg.type, pairEpoch: msg.payload.pairEpoch },
+              }),
+        });
+      }
+      return;
+    }
     case "pair_failed": {
       const subjectPeerId = msg.from;
       const pairId = msg.payload.pairId;

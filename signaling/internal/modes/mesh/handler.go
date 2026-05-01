@@ -222,6 +222,8 @@ func (h *Handler) dispatch(ctx context.Context, cc *meshConn, d *Decoded) error 
 		return h.handlePairOffer(ctx, cc, d)
 	case TypePairAnswer:
 		return h.handlePairAnswer(ctx, cc, d)
+	case TypePairIceCandidate:
+		return h.handlePairIceCandidate(ctx, cc, d)
 	case TypeError:
 		// Clients may send `error` back as informational; log + drop.
 		h.Log.Debug("mesh client error reported",

@@ -37,6 +37,24 @@ import type {
   MeshPairRole,
   MeshPairState,
 } from "./pairContext";
+import { createIceBuffer, type BufferedIceCandidate } from "./iceBuffer";
+import type { MeshPairsAction } from "../state/pairs";
+
+type PairViewPatch = Extract<
+  MeshPairsAction,
+  { type: "MESH_PAIR_VIEW_PATCHED" }
+>["patch"];
+
+// WireIceCandidate matches the v2 contract `pair_ice_candidate.candidate`
+// payload shape (signaling-protocol.md §3.12). The browser's
+// RTCIceCandidateInit has `candidate` typed as optional; the contract
+// requires a non-empty string. We narrow at the wire boundary.
+interface WireIceCandidate {
+  candidate: string;
+  sdpMid?: string;
+  sdpMLineIndex?: number;
+  usernameFragment?: string;
+}
 
 // PeerConnectionFactory — pluggable for tests. Production passes
 // `(cfg) => new RTCPeerConnection(cfg)`.
@@ -89,6 +107,13 @@ export interface PairAnswerInput {
   readonly sdp: RTCSessionDescriptionInit;
 }
 
+export interface PairIceCandidateInput {
+  readonly pairId: string;
+  readonly pairEpoch: number;
+  // `null` = end-of-candidates (contract §3.12).
+  readonly candidate: RTCIceCandidateInit | null;
+}
+
 export interface MeshPairManager {
   readonly handleNegotiationInstruction: (
     input: PairNegotiationInstructionInput,
@@ -98,6 +123,9 @@ export interface MeshPairManager {
   ) => Promise<MeshPairContext[]>;
   readonly handlePairOffer: (input: PairOfferInput) => Promise<void>;
   readonly handlePairAnswer: (input: PairAnswerInput) => Promise<void>;
+  readonly handlePairIceCandidate: (
+    input: PairIceCandidateInput,
+  ) => Promise<void>;
   readonly getContext: (pairId: string) => MeshPairContext | undefined;
   readonly listContexts: () => MeshPairContext[];
   readonly snapshotContext: (pairId: string) => Readonly<MeshPairContext> | null;
@@ -222,31 +250,156 @@ export function createMeshPairManager(
       dc: null,
       senders,
       state: "new",
+      iceBuffer: createIceBuffer(),
+      remoteDescriptionApplied: false,
+      endOfLocalCandidatesSent: false,
+      endOfRemoteCandidatesReceived: false,
     };
     pairs.set(ctx.pairId, ctx);
 
+    // Register the pair view in the React store BEFORE we wire any
+    // listener that might dispatch a patch (handlers fire synchronously
+    // on some browsers as soon as setLocalDescription mutates state).
+    deps.dispatch({
+      type: "MESH_PAIR_REGISTERED",
+      pairId: ctx.pairId,
+      pairEpoch: ctx.pairEpoch,
+      role: ctx.role,
+      remotePeerId: ctx.remotePeerId,
+      remoteAdmissionIndex: ctx.remoteAdmissionIndex,
+    });
+
     pc.onsignalingstatechange = () => {
+      const value = pc.signalingState;
       appendEvent({
         scope: "pair",
         type: "future_phase_message",
-        summary: `signalingState changed → ${pc.signalingState} (pair ${ctx.pairId})`,
+        summary: `signaling state changed → ${value} (pair ${ctx.pairId})`,
         peerId: ctx.remotePeerId,
         pairId: ctx.pairId,
         detail: {
           kind: "signaling_state_change",
-          signalingState: pc.signalingState,
+          direction: "system",
+          signalingState: value,
           pairEpoch: ctx.pairEpoch,
         },
       });
-      if (pc.signalingState === "stable" && ctx.state !== "stable") {
+      patchPairView(ctx, { signalingState: value });
+      if (value === "stable" && ctx.state !== "stable") {
         ctx.state = "stable";
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      const value = pc.iceConnectionState;
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `ICE state changed → ${value} (pair ${ctx.pairId})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "ice_connection_state_change",
+          direction: "system",
+          iceConnectionState: value,
+          pairEpoch: ctx.pairEpoch,
+        },
+      });
+      patchPairView(ctx, { iceConnectionState: value });
+    };
+
+    pc.onicegatheringstatechange = () => {
+      const value = pc.iceGatheringState;
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `ICE gathering state changed → ${value} (pair ${ctx.pairId})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "ice_gathering_state_change",
+          direction: "system",
+          iceGatheringState: value,
+          pairEpoch: ctx.pairEpoch,
+        },
+      });
+      patchPairView(ctx, { iceGatheringState: value });
+    };
+
+    pc.onconnectionstatechange = () => {
+      const value = pc.connectionState;
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `connection state changed → ${value} (pair ${ctx.pairId})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "connection_state_change",
+          direction: "system",
+          connectionState: value,
+          pairEpoch: ctx.pairEpoch,
+        },
+      });
+      patchPairView(ctx, { connectionState: value });
+    };
+
+    pc.onicecandidate = (event: RTCPeerConnectionIceEvent) => {
+      // event.candidate === null is the canonical end-of-candidates
+      // signal. We forward it to the remote as `candidate: null` per
+      // contract §3.12. We MUST NOT emit `candidate: ""`; the browser
+      // shouldn't produce that, but if `toJSON` somehow returns an
+      // empty `candidate` string we drop the event defensively.
+      if (!event.candidate) {
+        sendLocalCandidate(ctx, null);
+        return;
+      }
+      const init = event.candidate.toJSON();
+      if (!init.candidate) {
+        return;
+      }
+      const wire: WireIceCandidate = { candidate: init.candidate };
+      if (init.sdpMid !== undefined && init.sdpMid !== null) {
+        wire.sdpMid = init.sdpMid;
+      }
+      if (init.sdpMLineIndex !== undefined && init.sdpMLineIndex !== null) {
+        wire.sdpMLineIndex = init.sdpMLineIndex;
+      }
+      if (
+        init.usernameFragment !== undefined &&
+        init.usernameFragment !== null
+      ) {
+        wire.usernameFragment = init.usernameFragment;
+      }
+      sendLocalCandidate(ctx, wire);
+    };
+
+    pc.ontrack = (event: RTCTrackEvent) => {
+      const stream = event.streams && event.streams[0] ? event.streams[0] : null;
+      const trackKind = event.track?.kind ?? "unknown";
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `remote track received (${trackKind}, pair ${ctx.pairId})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "remote_track_received",
+          direction: "remote",
+          trackKind,
+          pairEpoch: ctx.pairEpoch,
+        },
+      });
+      if (stream) {
+        patchPairView(ctx, { remoteStream: stream });
       }
     };
 
     if (ctx.role === "offerer") {
       // FR-050 — DataChannel MUST be created before the offer so the
       // SDP carries the data m-line.
-      createOffererDataChannel(ctx);
+      const dc = createOffererDataChannel(ctx);
+      wireDataChannelLifecycle(ctx, dc);
       await emitOffer(ctx);
     } else {
       attachAnswererDataChannelHandler(ctx, (dc) => {
@@ -258,15 +411,106 @@ export function createMeshPairManager(
           pairId: ctx.pairId,
           detail: {
             kind: "datachannel_attached",
+            direction: "remote",
             label: dc.label,
             readyState: dc.readyState,
           },
         });
+        wireDataChannelLifecycle(ctx, dc);
       });
     }
 
     return ctx;
   }
+
+  function patchPairView(ctx: MeshPairContext, patch: PairViewPatch): void {
+    deps.dispatch({
+      type: "MESH_PAIR_VIEW_PATCHED",
+      pairId: ctx.pairId,
+      patch,
+    });
+  }
+
+  // wireDataChannelLifecycle — emit DataChannel state-change events
+  // and patch the pair view's `dataChannelState` pill. M7 only
+  // observes; M8 attaches `onmessage` for chat semantics.
+  function wireDataChannelLifecycle(
+    ctx: MeshPairContext,
+    dc: RTCDataChannel,
+  ): void {
+    patchPairView(ctx, { dataChannelState: dc.readyState });
+    const refresh = (eventLabel: string) => {
+      const value = dc.readyState;
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `${eventLabel} → ${value} (pair ${ctx.pairId})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "data_channel_state_change",
+          direction: "system",
+          event: eventLabel,
+          dataChannelState: value,
+          pairEpoch: ctx.pairEpoch,
+        },
+      });
+      patchPairView(ctx, { dataChannelState: value });
+    };
+    dc.onopen = () => refresh("DataChannel opened");
+    dc.onclose = () => refresh("DataChannel closed");
+    dc.onclosing = () => refresh("DataChannel closing");
+    dc.onerror = () => refresh("DataChannel error");
+  }
+
+  function sendLocalCandidate(
+    ctx: MeshPairContext,
+    candidate: WireIceCandidate | null,
+  ): void {
+    if (candidate === null) {
+      if (ctx.endOfLocalCandidatesSent) return;
+      ctx.endOfLocalCandidatesSent = true;
+    }
+    deps.send({
+      v: MESH_CONTRACT_VERSION,
+      type: "pair_ice_candidate",
+      roomId: deps.roomId,
+      to: ctx.remotePeerId,
+      payload: {
+        pairId: ctx.pairId,
+        pairEpoch: ctx.pairEpoch,
+        candidate,
+      },
+    });
+    if (candidate === null) {
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `ICE end-of-candidates sent (pair ${ctx.pairId})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "ice_eoc_sent",
+          direction: "local",
+          pairEpoch: ctx.pairEpoch,
+        },
+      });
+    } else {
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `ICE candidate sent (pair ${ctx.pairId})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "ice_candidate_sent",
+          direction: "local",
+          pairEpoch: ctx.pairEpoch,
+        },
+      });
+    }
+  }
+
 
   async function emitOffer(ctx: MeshPairContext): Promise<void> {
     transitionState(ctx, "creating-offer", "creating offer");
@@ -339,6 +583,8 @@ export function createMeshPairManager(
     });
     transitionState(ctx, "have-remote-offer", "offer received");
     await ctx.pc.setRemoteDescription(input.sdp);
+    ctx.remoteDescriptionApplied = true;
+    await flushIceBuffer(ctx);
     transitionState(ctx, "creating-answer", "creating answer");
     const answer = await ctx.pc.createAnswer();
     await ctx.pc.setLocalDescription(answer);
@@ -406,9 +652,153 @@ export function createMeshPairManager(
     });
     transitionState(ctx, "have-remote-answer", "answer received");
     await ctx.pc.setRemoteDescription(input.sdp);
+    ctx.remoteDescriptionApplied = true;
+    await flushIceBuffer(ctx);
     if (ctx.pc.signalingState === "stable") {
       ctx.state = "stable";
     }
+  }
+
+  async function flushIceBuffer(ctx: MeshPairContext): Promise<void> {
+    if (ctx.iceBuffer.size() === 0) return;
+    const drained: number[] = [];
+    await ctx.iceBuffer.drain(async (cand) => {
+      drained.push(0);
+      await applyRemoteCandidate(ctx, cand, "flushed");
+    });
+    appendEvent({
+      scope: "pair",
+      type: "future_phase_message",
+      summary: `ICE buffer flushed (${drained.length} candidate${drained.length === 1 ? "" : "s"}, pair ${ctx.pairId})`,
+      peerId: ctx.remotePeerId,
+      pairId: ctx.pairId,
+      detail: {
+        kind: "ice_buffer_flushed",
+        direction: "system",
+        count: drained.length,
+        pairEpoch: ctx.pairEpoch,
+      },
+    });
+  }
+
+  async function applyRemoteCandidate(
+    ctx: MeshPairContext,
+    candidate: BufferedIceCandidate,
+    source: "live" | "flushed",
+  ): Promise<void> {
+    try {
+      // Per W3C, calling addIceCandidate() with no argument signals
+      // end-of-candidates. Some browsers also accept an empty object.
+      // We pass `undefined` for null so we never emit `candidate: ""`.
+      if (candidate === null) {
+        await ctx.pc.addIceCandidate();
+      } else {
+        await ctx.pc.addIceCandidate(candidate);
+      }
+    } catch (err) {
+      appendEvent({
+        scope: "pair",
+        type: "error_occurred",
+        summary: `addIceCandidate failed (pair ${ctx.pairId}, source=${source})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "ice_candidate_apply_failed",
+          direction: "system",
+          source,
+          pairEpoch: ctx.pairEpoch,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      });
+      return;
+    }
+    if (candidate === null) {
+      ctx.endOfRemoteCandidatesReceived = true;
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `ICE end-of-candidates received (pair ${ctx.pairId})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "ice_eoc_received",
+          direction: "remote",
+          source,
+          pairEpoch: ctx.pairEpoch,
+        },
+      });
+    } else {
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `ICE candidate received (pair ${ctx.pairId})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "ice_candidate_received",
+          direction: "remote",
+          source,
+          pairEpoch: ctx.pairEpoch,
+        },
+      });
+    }
+  }
+
+  async function handlePairIceCandidate(
+    input: PairIceCandidateInput,
+  ): Promise<void> {
+    const ctx = pairs.get(input.pairId);
+    if (!ctx) {
+      appendEvent({
+        scope: "room",
+        type: "error_occurred",
+        summary: `pair_ice_candidate received for unknown pair ${input.pairId} — ignored`,
+        detail: {
+          kind: "ice_candidate_unknown_pair",
+          direction: "remote",
+          pairId: input.pairId,
+          pairEpoch: input.pairEpoch,
+        },
+      });
+      return;
+    }
+    if (input.pairEpoch !== ctx.pairEpoch) {
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `pair_stale_message_dropped: pair_ice_candidate for pair ${ctx.pairId} (received epoch=${input.pairEpoch}, current=${ctx.pairEpoch})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "pair_stale_message_dropped",
+          direction: "remote",
+          inboundType: "pair_ice_candidate",
+          receivedEpoch: input.pairEpoch,
+          currentEpoch: ctx.pairEpoch,
+        },
+      });
+      return;
+    }
+    if (!ctx.remoteDescriptionApplied) {
+      ctx.iceBuffer.push(input.candidate);
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: input.candidate === null
+          ? `ICE end-of-candidates buffered (pair ${ctx.pairId})`
+          : `ICE candidate buffered (pair ${ctx.pairId})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "ice_candidate_buffered",
+          direction: "remote",
+          endOfCandidates: input.candidate === null,
+          pairEpoch: ctx.pairEpoch,
+        },
+      });
+      return;
+    }
+    await applyRemoteCandidate(ctx, input.candidate, "live");
   }
 
   // handleNewcomerInstructions — T051 / L18: when a newcomer's
@@ -457,6 +847,10 @@ export function createMeshPairManager(
       dc: ctx.dc,
       senders: ctx.senders,
       state: ctx.state,
+      iceBuffer: ctx.iceBuffer,
+      remoteDescriptionApplied: ctx.remoteDescriptionApplied,
+      endOfLocalCandidatesSent: ctx.endOfLocalCandidatesSent,
+      endOfRemoteCandidatesReceived: ctx.endOfRemoteCandidatesReceived,
     });
   }
 
@@ -467,6 +861,8 @@ export function createMeshPairManager(
       } catch {
         // ignore — already closed
       }
+      ctx.iceBuffer.clear();
+      deps.dispatch({ type: "MESH_PAIR_REMOVED", pairId: ctx.pairId });
     }
     pairs.clear();
   }
@@ -476,6 +872,7 @@ export function createMeshPairManager(
     handleNewcomerInstructions,
     handlePairOffer,
     handlePairAnswer,
+    handlePairIceCandidate,
     getContext,
     listContexts,
     snapshotContext,

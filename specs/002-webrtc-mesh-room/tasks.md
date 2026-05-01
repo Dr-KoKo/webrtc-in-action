@@ -514,56 +514,56 @@ Tasks that **MUST be complete** before each pivotal point:
 
 **Goal**: ICE candidates are exchanged per pair (with end-of-candidates `null`); per-pair candidates are buffered until SRD completes; remote video / audio render per peer; **all four lifecycle states** (`connectionState`, `iceConnectionState`, `iceGatheringState`, `signalingState`) plus `dataChannel.readyState` are visible per remote peer (FR-023, FR-064; Constitution Principle V mandate).
 
-- [ ] T054 [frontend][webrtc] [M7] Per-pair ICE buffer — `frontend/src/features/mesh/webrtc/iceBuffer.ts`
+- [X] T054 [frontend][webrtc] [M7] Per-pair ICE buffer — `frontend/src/features/mesh/webrtc/iceBuffer.ts`
     - Purpose: each `PairContext` gets its own `iceBuffer`; inbound candidates queue if `pc.remoteDescription === null`, else apply via `addIceCandidate`.
     - Files: new file; extension hook in `pairManager.ts`.
     - Dependencies: T046.
     - DoD: out-of-order ICE arrival (candidates before SDP) is correctly buffered + flushed; end-of-candidates (`candidate: null`) is forwarded as-is.
     - Verify: `iceBuffer.spec.ts`.
 
-- [ ] T055 [server] [M7] Pair ICE relay + epoch check — `signaling/internal/mesh/handler.go`
+- [X] T055 [server] [M7] Pair ICE relay + epoch check — `signaling/internal/mesh/handler.go`
     - Purpose: relay `pair_ice_candidate` envelope-and-payload after `pairId` + `pairEpoch` validation; do not parse the `candidate` string.
     - Files: extend handler.
     - Dependencies: T016, T049.
     - DoD: the test asserts the server forwards the body byte-for-byte (no parsing); rejects `candidate: ""` as `malformed`.
     - Verify: `mesh_ice_relay_test.go`.
 
-- [ ] T056 [frontend][webrtc] [M7] Wire `onicecandidate` + send loop — `frontend/src/features/mesh/webrtc/pairManager.ts`
+- [X] T056 [frontend][webrtc] [M7] Wire `onicecandidate` + send loop — `frontend/src/features/mesh/webrtc/pairManager.ts`
     - Purpose: emit one `pair_ice_candidate` per local candidate (incl. final `null`).
     - Files: extend pairManager.
     - Dependencies: T046, T054.
     - DoD: ICE trickle reaches the answerer; both endpoints' `iceConnectionState` reaches `connected` (or `completed`) within SC-003's bound on localhost.
     - Verify: `chrome://webrtc-internals` shows candidate exchanges; quickstart §4.2 SC-001 + SC-003 met.
 
-- [ ] T057 [frontend][P] [M7] `RemoteTile` component with five state pills — `frontend/src/features/mesh/components/RemoteTile.tsx`
+- [X] T057 [frontend][P] [M7] `RemoteTile` component with five state pills — `frontend/src/features/mesh/components/RemoteTile.tsx`
     - Purpose: display per-peer `connectionState`, `iceConnectionState`, `iceGatheringState`, `signalingState`, `dataChannel.readyState` (5 pills updating live).
     - Files: new component.
     - Dependencies: T046, T036.
     - DoD: 4-browser run shows all five pills updating per remote peer; **L13 demonstrable** (two pairs in different states observed simultaneously).
     - Verify: quickstart §4.2 manual; SC-010 walkthrough confirms L13.
 
-- [ ] T058 [frontend][P] [M7] Remote media rendering on `ontrack` — `frontend/src/features/mesh/components/RemoteTile.tsx`
+- [X] T058 [frontend][P] [M7] Remote media rendering on `ontrack` — `frontend/src/features/mesh/components/RemoteTile.tsx`
     - Purpose: attach incoming `MediaStream` to the tile's `<video>` / `<audio>`; event-log entry `remote track received` with `pairId`.
     - Files: extend `RemoteTile.tsx`.
     - Dependencies: T056, T057.
     - DoD: in a 4-browser run, every remote tile shows live audio + video.
     - Verify: quickstart §4.2 SC-001.
 
-- [ ] T059 [frontend][P] [M7] Mesh cost summary panel — `frontend/src/features/mesh/components/MeshCostSummary.tsx`, `frontend/src/features/mesh/state/cost.ts`
+- [X] T059 [frontend][P] [M7] Mesh cost summary panel — `frontend/src/features/mesh/components/MeshCostSummary.tsx`, `frontend/src/features/mesh/state/cost.ts`
     - Purpose: live cost summary per FR-070, FR-071, NFR-007; renders the L14 surface.
     - Files: 2 new files.
     - Dependencies: T034, T046.
     - DoD: at `N ∈ {1, 2, 3, 4}` the panel reads `(0/0/0/0/0/0)`, `(1/1/1/2/0/1/0/0/0)`, `(2/2/2/4/0/2/0/0/0)`, `(3/3/3/6/0/3/0/0/0)` (PCs / DCs / audio / video / total / connected / connecting / failed); room-wide pair total grows as `N × (N−1) / 2`.
     - Verify: `costSummary.spec.ts` (T097).
 
-- [ ] T060 [frontend][P] [M7] Per-pair event log entries for lifecycle transitions — `frontend/src/features/mesh/webrtc/pairManager.ts`
+- [X] T060 [frontend][P] [M7] Per-pair event log entries for lifecycle transitions — `frontend/src/features/mesh/webrtc/pairManager.ts`
     - Purpose: emit `connection state changed`, `ICE state changed`, `ICE gathering state changed`, `signaling state changed`, `DataChannel opened` event-log entries — each with `pairId`.
     - Files: extend pairManager + eventLog selectors.
     - Dependencies: T046, T035.
     - DoD: per-pair entries are visible and filterable in the event-log panel; FR-061 invariant holds.
     - Verify: `eventLog.spec.ts` (T097); manual filter `pair:<pairId>` in the UI.
 
-- [ ] T061 [test] [M7] M7 acceptance — manual quickstart §4.2 — `quickstart.md §4.2`
+- [X] T061 [test] [M7] M7 acceptance — manual quickstart §4.2 — `quickstart.md §4.2`
     - Purpose: 4-browser mesh; SC-001 + SC-003 met; **L13** demonstrable.
     - Files: none (execution-only checklist).
     - Dependencies: T054–T060.

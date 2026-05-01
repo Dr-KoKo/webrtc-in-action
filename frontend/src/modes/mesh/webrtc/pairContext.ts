@@ -14,6 +14,8 @@
 // future M7 ICE wiring) so they can read `signalingState` /
 // `connectionState` without owning the lifecycle.
 
+import type { IceBuffer } from "./iceBuffer";
+
 export type MeshPairRole = "offerer" | "answerer";
 
 export type MeshPairState =
@@ -43,4 +45,17 @@ export interface MeshPairContext {
   // joined the room.
   readonly senders: ReadonlyArray<RTCRtpSender>;
   state: MeshPairState;
+  // M7 — per-pair ICE buffer; holds inbound remote candidates that
+  // arrive before pc.setRemoteDescription completes. Drained in order
+  // once SRD resolves. `null` (end-of-candidates) is preserved.
+  readonly iceBuffer: IceBuffer;
+  // Has setRemoteDescription resolved on this pc? Lets the inbound
+  // ICE handler decide buffer-vs-apply without inspecting the pc
+  // (some test fakes treat `remoteDescription` as undefined).
+  remoteDescriptionApplied: boolean;
+  // Has the local candidate stream signaled end-of-candidates to the
+  // remote? (event.candidate === null on pc.onicecandidate.)
+  endOfLocalCandidatesSent: boolean;
+  // Did the remote signal end-of-candidates to us?
+  endOfRemoteCandidatesReceived: boolean;
 }

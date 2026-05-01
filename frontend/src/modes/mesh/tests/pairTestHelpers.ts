@@ -49,7 +49,21 @@ export class FakeRTCPeerConnection {
   public remoteDescription: RTCSessionDescription | null = null;
   public ondatachannel: ((event: RTCDataChannelEvent) => void) | null = null;
   public onsignalingstatechange: (() => void) | null = null;
+  public oniceconnectionstatechange: (() => void) | null = null;
+  public onicegatheringstatechange: (() => void) | null = null;
+  public onconnectionstatechange: (() => void) | null = null;
+  public onicecandidate:
+    | ((event: { candidate: RTCIceCandidate | null }) => void)
+    | null = null;
+  public ontrack: ((event: RTCTrackEvent) => void) | null = null;
   public connectionState: RTCPeerConnectionState = "new";
+  public iceConnectionState: RTCIceConnectionState = "new";
+  public iceGatheringState: RTCIceGatheringState = "new";
+  // Each entry is the value passed to addIceCandidate. `undefined`
+  // (or `null`) means end-of-candidates.
+  public readonly addedIceCandidates: Array<RTCIceCandidateInit | null | undefined> = [];
+  // When set, addIceCandidate throws this error on its next call.
+  public addIceCandidateNextError: Error | null = null;
   private _spy: FakePCSpy;
   // Public so a peer instance can deliver a synthetic data-channel.
   public deliverDataChannel(dc: FakeRTCDataChannel): void {
@@ -60,6 +74,18 @@ export class FakeRTCPeerConnection {
 
   constructor(_cfg: RTCConfiguration | undefined, spy: FakePCSpy) {
     this._spy = spy;
+  }
+
+  async addIceCandidate(
+    candidate?: RTCIceCandidateInit | null,
+  ): Promise<void> {
+    this._spy.callOrder.push("addIceCandidate");
+    if (this.addIceCandidateNextError) {
+      const err = this.addIceCandidateNextError;
+      this.addIceCandidateNextError = null;
+      throw err;
+    }
+    this.addedIceCandidates.push(candidate ?? null);
   }
 
   addTrack(track: MediaStreamTrack, _stream?: MediaStream): RTCRtpSender {
