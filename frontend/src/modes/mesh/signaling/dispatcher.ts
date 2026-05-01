@@ -31,6 +31,7 @@ import {
 import type { MeshRootAction } from "../state";
 import { makeMeshEventEntry } from "../state/eventLog";
 import type { MeshSignalingClient } from "./client";
+import type { MeshPairManager } from "../webrtc/pairManager";
 
 interface DispatcherDeps {
   dispatch: Dispatch<MeshRootAction>;
@@ -47,6 +48,10 @@ interface DispatcherDeps {
   // dispatcher uses this to decide whether to ignore a pair instruction
   // arriving before media-ready (M5 hard boundary).
   getLocalFsm?: () => string;
+  // M6 PairManager. When present, pair_negotiation_instruction /
+  // pair_offer / pair_answer are routed to it for SDP negotiation.
+  // Absent during M4/M5 unit tests that exercise dispatcher-only paths.
+  getPairManager?: () => MeshPairManager | null;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -226,20 +231,19 @@ function dispatchValidated(deps: DispatcherDeps, msg: MeshServerMessage): void {
     }
     case "pair_negotiation_instruction":
     case "pair_reconnect_instruction": {
-      // M6+ creates the PC. M5 hard boundary: a pair instruction
-      // received while the local participant is not media-ready MUST
-      // NOT create a PC; we log it as an error so the audit trail
-      // surfaces the violation.
+      // M5 hard boundary: a pair instruction received while the local
+      // participant is not media-ready MUST NOT create a PC.
       const fsm = deps.getLocalFsm?.();
       const isReady = fsm === "media-ready" || fsm === "in-room";
       const subjectPeerId = msg.payload.remotePeer.peerId;
+      const manager = isReady ? deps.getPairManager?.() ?? null : null;
       dispatch({
         type: "MESH_EVENT_APPEND",
         entry: makeMeshEventEntry({
           scope: "pair",
           type: isReady ? "future_phase_message" : "error_occurred",
           summary: isReady
-            ? `pair instruction received for pair ${msg.payload.pairId} (M6+ wires PC)`
+            ? `pair instruction received for pair ${msg.payload.pairId} (role=${msg.payload.role}, epoch=${msg.payload.pairEpoch})`
             : `pair instruction received before media-ready — ignored (pair ${msg.payload.pairId})`,
           peerId: subjectPeerId,
           pairId: msg.payload.pairId,
@@ -251,10 +255,84 @@ function dispatchValidated(deps: DispatcherDeps, msg: MeshServerMessage): void {
           },
         }),
       });
+      if (manager && msg.type === "pair_negotiation_instruction") {
+        void manager.handleNewcomerInstructions([
+          {
+            pairId: msg.payload.pairId,
+            pairEpoch: msg.payload.pairEpoch,
+            role: msg.payload.role,
+            remotePeerId: msg.payload.remotePeer.peerId,
+            remoteAdmissionIndex: msg.payload.remotePeer.admissionIndex,
+            iceServers: msg.payload.iceServers as RTCIceServer[],
+          },
+        ]);
+      }
       return;
     }
-    case "pair_offer":
-    case "pair_answer":
+    case "pair_offer": {
+      const manager = deps.getPairManager?.() ?? null;
+      const subjectPeerId = msg.from;
+      const pairId = msg.payload.pairId;
+      if (manager) {
+        void manager.handlePairOffer({
+          pairId,
+          pairEpoch: msg.payload.pairEpoch,
+          sdp: msg.payload.sdp as RTCSessionDescriptionInit,
+        });
+      } else {
+        dispatch({
+          type: "MESH_EVENT_APPEND",
+          entry: subjectPeerId
+            ? makeMeshEventEntry({
+                scope: "pair",
+                type: "future_phase_message",
+                summary: `pair_offer received for pair ${pairId} (no PairManager wired)`,
+                peerId: subjectPeerId,
+                pairId,
+                detail: { type: msg.type, pairEpoch: msg.payload.pairEpoch },
+              })
+            : makeMeshEventEntry({
+                scope: "room",
+                type: "future_phase_message",
+                summary: `pair_offer received for pair ${pairId} (no PairManager wired)`,
+                detail: { type: msg.type, pairEpoch: msg.payload.pairEpoch },
+              }),
+        });
+      }
+      return;
+    }
+    case "pair_answer": {
+      const manager = deps.getPairManager?.() ?? null;
+      const subjectPeerId = msg.from;
+      const pairId = msg.payload.pairId;
+      if (manager) {
+        void manager.handlePairAnswer({
+          pairId,
+          pairEpoch: msg.payload.pairEpoch,
+          sdp: msg.payload.sdp as RTCSessionDescriptionInit,
+        });
+      } else {
+        dispatch({
+          type: "MESH_EVENT_APPEND",
+          entry: subjectPeerId
+            ? makeMeshEventEntry({
+                scope: "pair",
+                type: "future_phase_message",
+                summary: `pair_answer received for pair ${pairId} (no PairManager wired)`,
+                peerId: subjectPeerId,
+                pairId,
+                detail: { type: msg.type, pairEpoch: msg.payload.pairEpoch },
+              })
+            : makeMeshEventEntry({
+                scope: "room",
+                type: "future_phase_message",
+                summary: `pair_answer received for pair ${pairId} (no PairManager wired)`,
+                detail: { type: msg.type, pairEpoch: msg.payload.pairEpoch },
+              }),
+        });
+      }
+      return;
+    }
     case "pair_ice_candidate":
     case "pair_failed": {
       const subjectPeerId = msg.from;

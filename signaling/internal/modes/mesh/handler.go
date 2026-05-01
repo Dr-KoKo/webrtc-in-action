@@ -218,6 +218,10 @@ func (h *Handler) dispatch(ctx context.Context, cc *meshConn, d *Decoded) error 
 		return h.handleMediaReady(ctx, cc, d)
 	case TypeMediaFailed:
 		return h.handleMediaFailed(ctx, cc, d)
+	case TypePairOffer:
+		return h.handlePairOffer(ctx, cc, d)
+	case TypePairAnswer:
+		return h.handlePairAnswer(ctx, cc, d)
 	case TypeError:
 		// Clients may send `error` back as informational; log + drop.
 		h.Log.Debug("mesh client error reported",
@@ -502,6 +506,10 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *meshConn, d *Decoded
 
 	// Broadcast roster update presence:media-ready (FR-012b).
 	h.broadcastRosterUpdate(rm, subject, PresenceMediaReady, RosterReasonMediaReady)
+	// Pair eligibility evaluator (T045 / §3.9). Emits one
+	// `pair_negotiation_instruction` to each endpoint of every NEW
+	// pair the subject formed with already-media-ready peers.
+	h.EvaluateAndEmitInstructions(rm, subject)
 	h.Log.Info("mesh peer media-ready",
 		slog.String("event", "mesh_peer_media_ready"),
 		slog.String("conn_id", cc.sess.ID()),

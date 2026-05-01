@@ -22,8 +22,14 @@ import {
 } from "./client";
 import { useMeshDispatch, useMeshState } from "../state";
 import { makeMeshEventEntry, type MeshEventType } from "../state/eventLog";
+import {
+  createMeshPairManager,
+  type MeshPairManager,
+} from "../webrtc/pairManager";
+import { subscribeLocalStream } from "../webrtc/mediaAcquisition";
 
 const MeshSignalingContext = createContext<MeshSignalingClient | null>(null);
+const MeshPairManagerContext = createContext<MeshPairManager | null>(null);
 
 function transportToEventType(transport: MeshTransportState): MeshEventType {
   switch (transport) {
@@ -58,6 +64,41 @@ export function MeshSignalingProvider({
   const stateRef = useRef(state);
   stateRef.current = state;
 
+  // PairManager — created lazily on the first pair_negotiation_instruction
+  // (it needs the localPeerId + room context which only exist after
+  // join_accepted). The factory is rebuilt if peerId/roomId change.
+  const pairManagerRef = useRef<MeshPairManager | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  useEffect(() => {
+    return subscribeLocalStream((s) => {
+      localStreamRef.current = s;
+    });
+  }, []);
+
+  function ensurePairManager(): MeshPairManager | null {
+    if (pairManagerRef.current) return pairManagerRef.current;
+    const localPeerId = stateRef.current.local.peerId;
+    const roomId = stateRef.current.local.roomId;
+    if (!localPeerId || !roomId) return null;
+    const stream = localStreamRef.current;
+    if (!stream) return null;
+    pairManagerRef.current = createMeshPairManager({
+      roomId,
+      localPeerId,
+      dispatch,
+      send: (m) => client.send(m),
+      mediaSource: {
+        getTracks: () => {
+          const s = localStreamRef.current;
+          return s ? s.getTracks() : [];
+        },
+        getStream: () => localStreamRef.current,
+      },
+      peerConnectionFactory: (cfg) => new RTCPeerConnection(cfg),
+    });
+    return pairManagerRef.current;
+  }
+
   const dispatcher = useMemo(
     () =>
       createMeshDispatcher({
@@ -66,7 +107,11 @@ export function MeshSignalingProvider({
         getSelfPeerId: () => stateRef.current.local.peerId,
         getRosterServerSeq: () => stateRef.current.roster.serverSeq,
         getLocalFsm: () => stateRef.current.local.fsm,
+        getPairManager: () => ensurePairManager(),
       }),
+    // Including dispatch/client in deps is enough — ensurePairManager
+    // closes over refs and is stable across renders by reading them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [dispatch, client],
   );
 
@@ -91,18 +136,27 @@ export function MeshSignalingProvider({
 
   // Tear down the socket on unmount so navigating away from `/mesh/*`
   // releases the slot. Best-effort `leave_room` send is owned by the
-  // M11 cleanup path; M4/M5 just close the WS.
+  // M11 cleanup path; M4/M5 just close the WS. M6 also closes any
+  // open RTCPeerConnections so DTLS / STUN bindings drain.
   useEffect(() => {
     return () => {
+      pairManagerRef.current?.closeAll();
+      pairManagerRef.current = null;
       client.close();
     };
   }, [client]);
 
   return (
     <MeshSignalingContext.Provider value={client}>
-      {children}
+      <MeshPairManagerContext.Provider value={pairManagerRef.current}>
+        {children}
+      </MeshPairManagerContext.Provider>
     </MeshSignalingContext.Provider>
   );
+}
+
+export function useMeshPairManager(): MeshPairManager | null {
+  return useContext(MeshPairManagerContext);
 }
 
 export function useMeshSignalingClient(): MeshSignalingClient {

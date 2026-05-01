@@ -445,63 +445,63 @@ Tasks that **MUST be complete** before each pivotal point:
 
 **Goal**: when two peers reach `media-ready`, the server issues a per-pair `pair_negotiation_instruction` with `role` + `pairId` + `pairEpoch=1`; both endpoints negotiate via `pair_offer` / `pair_answer`. The offerer creates the DataChannel **before** the offer (FR-050). Stale `pairEpoch` messages are rejected. ICE comes in M7.
 
-- [ ] T045 [server] [M6] Pair eligibility evaluator + instruction emission — `signaling/internal/mesh/pairing.go`
+- [X] T045 [server] [M6] Pair eligibility evaluator + instruction emission — `signaling/internal/mesh/pairing.go`
     - Purpose: when a participant transitions to `media-ready`, for each existing `media-ready+` peer create a `Pair` (state `Pairing`) at `pairEpoch=1` and emit `pair_negotiation_instruction` to both endpoints. Existing `connected` / `connecting` pairs MUST NOT receive any new instruction (FR-022a).
     - Files: `signaling/internal/mesh/pairing.go` (new).
     - Dependencies: T026, T027, T040.
     - DoD: 4-browser run where the 4th becomes media-ready emits exactly 3 `pair_negotiation_instruction` pairs (6 unicast envelopes — one per side); **no instructions for existing pairs**.
     - Verify: `mesh_pair_instruction_test.go` (T053).
 
-- [ ] T046 [frontend][webrtc] [M6] `PairContext` + `PairManager` — `frontend/src/features/mesh/webrtc/{pairContext,pairManager}.ts`
+- [X] T046 [frontend][webrtc] [M6] `PairContext` + `PairManager` — `frontend/src/features/mesh/webrtc/{pairContext,pairManager}.ts`
     - Purpose: data-model §B.3; `Map<pairId, PairContext>`; on `pair_negotiation_instruction`, allocate a fresh `RTCPeerConnection`, attach the same local audio + video senders (count invariant `2 × (N − 1)`).
     - Files: 2 new files.
     - Dependencies: T039, T031, T032.
     - DoD: per-pair allocation is idempotent (a duplicate instruction for the same pair + same epoch is no-op + log entry); senders are the SAME local `MediaStreamTrack`s reused across pairs.
     - Verify: `pair.spec.ts` (T053).
 
-- [ ] T047 [frontend][webrtc] [M6] DataChannel ownership rule — `frontend/src/features/mesh/webrtc/dataChannel.ts`
+- [X] T047 [frontend][webrtc] [M6] DataChannel ownership rule — `frontend/src/features/mesh/webrtc/dataChannel.ts`
     - Purpose: FR-050 — offerer calls `pc.createDataChannel("mesh-chat", { ordered: true })` BEFORE `createOffer`; answerer registers `pc.ondatachannel`.
     - Files: new file.
     - Dependencies: T046.
     - DoD: offerer-side DC exists at the moment of `createOffer`; SDP offer has a data m-line; answerer-side DC arrives via `ondatachannel`.
     - Verify: a unit test using a JSDOM-shimmed PC asserts the order; manual SDP inspection in `chrome://webrtc-internals` shows data m-line in the offer.
 
-- [ ] T048 [frontend][webrtc] [M6] Offer/Answer handlers — `frontend/src/features/mesh/webrtc/pairManager.ts`
+- [X] T048 [frontend][webrtc] [M6] Offer/Answer handlers — `frontend/src/features/mesh/webrtc/pairManager.ts`
     - Purpose: offerer: `createOffer` → `setLocalDescription` → emit `pair_offer { pairId, pairEpoch, sdp }`. Answerer: on `pair_offer`, `setRemoteDescription` → `createAnswer` → `setLocalDescription` → emit `pair_answer`.
     - Files: extend pairManager.
     - Dependencies: T046, T047.
     - DoD: both endpoints reach `signalingState === "stable"` after answer is applied.
     - Verify: in a 2-window run, both browsers' Inspector shows `signalingState=stable`; event log records `offer created`, `offer received`, `answer created`, `answer received` with `pairId`.
 
-- [ ] T049 [server] [M6] Pair offer/answer relay + epoch validation — `signaling/internal/mesh/handler.go`, `signaling/internal/mesh/pair.go`
+- [X] T049 [server] [M6] Pair offer/answer relay + epoch validation — `signaling/internal/mesh/handler.go`, `signaling/internal/mesh/pair.go`
     - Purpose: validate `pairId` + `pairEpoch` on inbound `pair_offer` / `pair_answer`; relay envelope-and-payload to the matched `to`; reject stale epochs with `error stale_pair_epoch` (do NOT forward stale).
     - Files: extend handler + pair.
     - Dependencies: T016, T026.
     - DoD: server forwards exactly one offer + one answer per `(pairId, pairEpoch)`; a stale-epoch offer is dropped and the sender receives `error stale_pair_epoch`.
     - Verify: `mesh_pair_epoch_test.go` (T053).
 
-- [ ] T050 [frontend][webrtc] [M6] Client-side stale-epoch guard — `frontend/src/features/mesh/webrtc/pairManager.ts`
+- [X] T050 [frontend][webrtc] [M6] Client-side stale-epoch guard — `frontend/src/features/mesh/webrtc/pairManager.ts`
     - Purpose: every inbound pair message validates `payload.pairEpoch === PairContext.pairEpoch` for the pair; smaller ⇒ drop + emit `pair_stale_message_dropped` event-log entry.
     - Files: extend pairManager.
     - Dependencies: T046.
     - DoD: a synthetic stale `pair_offer` (e.g., from an old failed attempt) does not call `setRemoteDescription`; event log shows the drop.
     - Verify: `pairEpoch.spec.ts` (T053).
 
-- [ ] T051 [frontend][P] [M6] Existing-pair stability guard (L18 invariant) — `frontend/src/features/mesh/webrtc/pairManager.ts`
+- [X] T051 [frontend][P] [M6] Existing-pair stability guard (L18 invariant) — `frontend/src/features/mesh/webrtc/pairManager.ts`
     - Purpose: FR-022a — when a newcomer's `pair_negotiation_instruction` arrives, the existing `PairContext` entries (those without the newcomer) MUST NOT have any state change emitted by the manager.
     - Files: extend pairManager (defensive guard + test scaffold).
     - Dependencies: T046, T048.
     - DoD: `pairManager.handleNewcomerInstructions(...)` only allocates new `PairContext` entries; existing entries' `pc`, `dc`, and `states` references are byte-identical before and after.
     - Verify: `existingPairStability.spec.ts` snapshots pre/post state.
 
-- [ ] T052 [P] [server][test] [M6] Server unit tests — `signaling/tests/mesh/mesh_pair_instruction_test.go`, `mesh_pair_epoch_test.go`
+- [X] T052 [P] [server][test] [M6] Server unit tests — `signaling/tests/mesh/mesh_pair_instruction_test.go`, `mesh_pair_epoch_test.go`
     - Purpose: assert pair instructions are emitted only for new pairs and stale-epoch messages are rejected.
     - Files: 2 new test files.
     - Dependencies: T045, T049.
     - DoD: `mesh_pair_instruction_test.go` covers a 4-participant scenario where the 4th joins last and only 3 instruction pairs are emitted; `mesh_pair_epoch_test.go` covers a stale offer.
     - Verify: `go test ./tests/mesh/`.
 
-- [ ] T053 [P] [frontend][test] [M6] Frontend unit tests — `frontend/src/features/mesh/tests/{pair,pairEpoch,existingPairStability}.spec.ts`
+- [X] T053 [P] [frontend][test] [M6] Frontend unit tests — `frontend/src/features/mesh/tests/{pair,pairEpoch,existingPairStability}.spec.ts`
     - Purpose: cover T046–T051.
     - Files: 3 spec files.
     - Dependencies: T046–T051.
