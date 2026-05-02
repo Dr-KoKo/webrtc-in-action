@@ -75,6 +75,18 @@ interface TrackedSender {
   readonly sender: RTCRtpSender;
 }
 
+// Module-scoped publication of the currently-active screen-share track,
+// if any. M11 reconnect rebuilds query this so a fresh PairContext
+// allocated mid-share attaches the same screen track as its outgoing
+// video source (per T085 step 11). Set by the controller on start /
+// stop / dispose; cleared back to `null` whenever no controller has an
+// active share.
+let activeScreenTrack: MediaStreamTrack | null = null;
+
+export function getActiveScreenTrack(): MediaStreamTrack | null {
+  return activeScreenTrack;
+}
+
 export function createScreenShareController(
   deps: ScreenShareDeps,
 ): ScreenShareController {
@@ -258,6 +270,7 @@ export function createScreenShareController(
 
     active = true;
     starting = false;
+    activeScreenTrack = newTrack;
 
     deps.dispatch({ type: "MESH_LOCAL_MEDIA_SCREEN_SHARE_STARTED" });
     appendEvent({
@@ -356,6 +369,7 @@ export function createScreenShareController(
     screenTrack = null;
     active = false;
     stopping = false;
+    activeScreenTrack = null;
 
     deps.dispatch({ type: "MESH_LOCAL_MEDIA_SCREEN_SHARE_STOPPED" });
     appendEvent({
@@ -402,6 +416,7 @@ export function createScreenShareController(
     active = false;
     starting = false;
     stopping = false;
+    activeScreenTrack = null;
   }
 
   return { start, stop, isActive, dispose };

@@ -25,6 +25,7 @@ function makeView(overrides: Partial<MeshPairView> = {}): MeshPairView {
     signalingState: "stable",
     dataChannelState: "open",
     remoteStream: null,
+    reconnectRequested: false,
     ...overrides,
   };
 }

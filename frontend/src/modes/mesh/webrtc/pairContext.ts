@@ -58,4 +58,13 @@ export interface MeshPairContext {
   endOfLocalCandidatesSent: boolean;
   // Did the remote signal end-of-candidates to us?
   endOfRemoteCandidatesReceived: boolean;
+  // M11 — set true when the local peer has emitted a `pair_failed` for
+  // this attempt OR when an inbound `pair_failed` from the remote was
+  // applied. Prevents double-emission on subsequent `connectionstate`
+  // transitions (e.g. failed → closed during local close).
+  failedReported: boolean;
+  // M11 — set true between local `reconnectPair(pairId)` and the
+  // server's response (`pair_reconnect_instruction` or an error with
+  // matching pairId). Used to disable the per-pair Reconnect button.
+  reconnectRequested: boolean;
 }

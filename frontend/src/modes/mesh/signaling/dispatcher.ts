@@ -266,6 +266,16 @@ function dispatchValidated(deps: DispatcherDeps, msg: MeshServerMessage): void {
             iceServers: msg.payload.iceServers as RTCIceServer[],
           },
         ]);
+      } else if (manager && msg.type === "pair_reconnect_instruction") {
+        // M11 / T085 — fresh-attempt rebuild for one pair only.
+        void manager.handlePairReconnectInstruction({
+          pairId: msg.payload.pairId,
+          pairEpoch: msg.payload.pairEpoch,
+          role: msg.payload.role,
+          remotePeerId: msg.payload.remotePeer.peerId,
+          remoteAdmissionIndex: msg.payload.remotePeer.admissionIndex,
+          iceServers: msg.payload.iceServers as RTCIceServer[],
+        });
       }
       return;
     }
@@ -366,9 +376,26 @@ function dispatchValidated(deps: DispatcherDeps, msg: MeshServerMessage): void {
       return;
     }
     case "pair_failed": {
+      // M11 / T081 — inbound `pair_failed` from the remote endpoint.
+      // Routed to the manager so ONLY the matching PairContext is
+      // marked failed (FR-025); other pairs are not touched. When no
+      // PairManager is wired (M4/M5 unit-test contexts) we fall back
+      // to a logged-only event so dispatcher tests still pass.
       const subjectPeerId = msg.from;
       const pairId = msg.payload.pairId;
-      const baseSummary = `received ${msg.type} for pair ${pairId} (future phase)`;
+      const manager = deps.getPairManager?.() ?? null;
+      if (manager) {
+        manager.handlePairFailed({
+          pairId,
+          pairEpoch: msg.payload.pairEpoch,
+          reason: msg.payload.reason,
+          ...(msg.payload.detail !== undefined
+            ? { detail: msg.payload.detail }
+            : {}),
+        });
+        return;
+      }
+      const baseSummary = `received ${msg.type} for pair ${pairId} (no PairManager wired)`;
       dispatch({
         type: "MESH_EVENT_APPEND",
         entry: subjectPeerId
@@ -378,13 +405,21 @@ function dispatchValidated(deps: DispatcherDeps, msg: MeshServerMessage): void {
               summary: baseSummary,
               peerId: subjectPeerId,
               pairId,
-              detail: { type: msg.type, pairEpoch: msg.payload.pairEpoch },
+              detail: {
+                type: msg.type,
+                pairEpoch: msg.payload.pairEpoch,
+                reason: msg.payload.reason,
+              },
             })
           : makeMeshEventEntry({
               scope: "room",
               type: "future_phase_message",
               summary: baseSummary,
-              detail: { type: msg.type, pairEpoch: msg.payload.pairEpoch },
+              detail: {
+                type: msg.type,
+                pairEpoch: msg.payload.pairEpoch,
+                reason: msg.payload.reason,
+              },
             }),
       });
       return;
@@ -463,13 +498,30 @@ function dispatchValidated(deps: DispatcherDeps, msg: MeshServerMessage): void {
       return;
     }
     case "error": {
+      // M11 / T083 — pair-scoped errors (the server returns
+      // `stale_pair_epoch` / `malformed` etc. with `context.pairId`
+      // when a `reconnect_pair` request loses a simultaneous-click
+      // race or names a pair that is not in the failed state). Clear
+      // the per-pair `reconnectRequested` flag so the Reconnect button
+      // becomes clickable again.
+      const ctx = msg.payload.context;
+      const pairId =
+        ctx && typeof ctx === "object" && typeof ctx["pairId"] === "string"
+          ? (ctx["pairId"] as string)
+          : undefined;
+      if (pairId) {
+        const manager = deps.getPairManager?.() ?? null;
+        manager?.clearReconnectRequested(pairId);
+      }
       dispatch({
         type: "MESH_EVENT_APPEND",
         entry: makeMeshEventEntry({
           scope: "room",
           type: "error_occurred",
           summary: `server error: ${msg.payload.message}`,
-          detail: { code: msg.payload.code },
+          detail: pairId
+            ? { code: msg.payload.code, pairId }
+            : { code: msg.payload.code },
         }),
       });
       return;

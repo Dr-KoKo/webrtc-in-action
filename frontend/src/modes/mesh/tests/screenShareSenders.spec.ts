@@ -137,6 +137,8 @@ function makeFakePair(pairId: string, remotePeerId: string): FakePairBundle {
     remoteDescriptionApplied: true,
     endOfLocalCandidatesSent: false,
     endOfRemoteCandidatesReceived: false,
+    failedReported: false,
+    reconnectRequested: false,
   };
   return { ctx, audioSender, videoSender, pcInstrumentation };
 }

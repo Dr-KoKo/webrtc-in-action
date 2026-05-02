@@ -727,56 +727,56 @@ Tasks that **MUST be complete** before each pivotal point:
 
 **Goal**: a single pair failure surfaces as a `failed` tile + partial-mesh badge **without disturbing other pairs**; per-pair Reconnect rebuilds only that pair under a new `pairEpoch`; ICE restart proper stays out of scope.
 
-- [ ] T081 [frontend][webrtc] [M11] Pair `connectionState === "failed"` handler — `frontend/src/features/mesh/webrtc/pairManager.ts`
+- [X] T081 [frontend][webrtc] [M11] Pair `connectionState === "failed"` handler — `frontend/src/features/mesh/webrtc/pairManager.ts`
     - Purpose: on local detection of failure, update `PairContext.states.connection`, emit `pair_failed` outbound, transition the matching `RemoteParticipant.presence` to `failed`.
     - Files: extend pairManager.
     - Dependencies: T046, T060.
     - DoD: failure on one pair sets only that pair's state; other pair contexts untouched (FR-025).
     - Verify: `failureIsolation.spec.ts`.
 
-- [ ] T082 [frontend][P] [M11] `PartialMeshBadge` — `frontend/src/features/mesh/components/PartialMeshBadge.tsx`
+- [X] T082 [frontend][P] [M11] `PartialMeshBadge` — `frontend/src/features/mesh/components/PartialMeshBadge.tsx`
     - Purpose: FR-065 — show a "partial mesh" badge when ≥1 pair is `failed` AND ≥1 pair is `connected`.
     - Files: new component; small extension to `MeshApp.tsx`.
     - Dependencies: T034, T081.
     - DoD: badge renders only in the partial-failure window; no whole-room failure state ever entered (Spec FR-065).
     - Verify: manual; spec covers the truth table.
 
-- [ ] T083 [frontend][P] [M11] Per-pair Reconnect button — `frontend/src/features/mesh/components/RemoteTile.tsx`, `frontend/src/features/mesh/components/ReconnectButton.tsx`
+- [X] T083 [frontend][P] [M11] Per-pair Reconnect button — `frontend/src/features/mesh/components/RemoteTile.tsx`, `frontend/src/features/mesh/components/ReconnectButton.tsx`
     - Purpose: FR-026 — visible only when this pair's state is `failed`; click sends `reconnect_pair { pairId, observedEpoch }`.
     - Files: extend tile; new button.
     - Dependencies: T081.
     - DoD: button appears only on failed tiles; click triggers the outbound message.
     - Verify: manual; spec.
 
-- [ ] T084 [server] [M11] `reconnect_pair` handler + epoch increment — `signaling/internal/mesh/reconnect.go`
+- [X] T084 [server] [M11] `reconnect_pair` handler + epoch increment — `signaling/internal/mesh/reconnect.go`
     - Purpose: validate `pairId` + state `failed` + `observedEpoch == currentEpoch`; increment `pairEpoch[pairId]` by `+1`; emit `pair_reconnect_instruction` to both endpoints. Per-`PairId` mutex serializes simultaneous-click races (R-M3).
     - Files: new file; small extension to handler.
     - Dependencies: T026, T049.
     - DoD: simultaneous reconnect clicks produce **one** fresh attempt; the loser receives `error stale_pair_epoch`.
     - Verify: `mesh_reconnect_test.go`.
 
-- [ ] T085 [frontend][webrtc] [M11] Client-side reconnect tear-down + rebuild — `frontend/src/features/mesh/webrtc/pairManager.ts`
+- [X] T085 [frontend][webrtc] [M11] Client-side reconnect tear-down + rebuild — `frontend/src/features/mesh/webrtc/pairManager.ts`
     - Purpose: on `pair_reconnect_instruction`, tear down the existing `PairContext` for the pair (close DC, close PC, drop refs, clear `iceBuffer`); construct a fresh `PairContext` under the new `pairEpoch`; run the same flow as M6 (offerer creates DC + offer). **Affects only that pair** (other `PairContext`s untouched).
     - Files: extend pairManager.
     - Dependencies: T046, T084.
     - DoD: clicking Reconnect on one tile resolves to `connected` again under the new epoch; the event log shows `peer pair fresh attempt started` with bumped `pairEpoch`; **no other pair flickers** (asserted by snapshot).
     - Verify: `reconnect.spec.ts`.
 
-- [ ] T086 [P][test][server] [M11] `mesh_reconnect_test.go` + `mesh_pair_epoch_test.go` (extend) — `signaling/tests/mesh/`
+- [X] T086 [P][test][server] [M11] `mesh_reconnect_test.go` + `mesh_pair_epoch_test.go` (extend) — `signaling/tests/mesh/`
     - Purpose: cover happy-path reconnect, simultaneous-click race, and stale-epoch rejection in a 4-participant scenario.
     - Files: extend / new tests.
     - Dependencies: T084.
     - DoD: race produces one fresh attempt; stale-epoch returns `error stale_pair_epoch`; no other pair is touched on the server.
     - Verify: `go test ./tests/mesh/`.
 
-- [ ] T087 [P][test][frontend] [M11] `reconnect.spec.ts` + `failureIsolation.spec.ts` — `frontend/src/features/mesh/tests/`
+- [X] T087 [P][test][frontend] [M11] `reconnect.spec.ts` + `failureIsolation.spec.ts` — `frontend/src/features/mesh/tests/`
     - Purpose: cover T081–T085.
     - Files: 2 spec files.
     - Dependencies: T081–T085.
     - DoD: specs green; **L15 demonstrable** in the spec asserts.
     - Verify: `npx vitest run features/mesh/tests/`.
 
-- [ ] T088 [test] [M11] M11 acceptance — quickstart §4.6 manual; SC-007.
+- [X] T088 [test] [M11] M11 acceptance — quickstart §4.6 manual; SC-007.
     - Purpose: induce a pair failure; observe per-pair `failed` + partial-mesh badge; click Reconnect; observe fresh PC + `pairEpoch` bump in the event log; observe other pairs unaffected.
     - Files: none new; execution-only.
     - Dependencies: T081–T087.

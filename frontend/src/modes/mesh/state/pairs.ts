@@ -30,6 +30,10 @@ export interface MeshPairView {
   readonly signalingState: RTCSignalingState;
   readonly dataChannelState: DataChannelDisplayState;
   readonly remoteStream: MediaStream | null;
+  // M11 — true after the local peer dispatched `reconnect_pair` and
+  // before the server's response (instruction or error) for this pair.
+  // The Reconnect button uses this to disable itself.
+  readonly reconnectRequested: boolean;
 }
 
 export interface MeshPairsSlice {
@@ -61,6 +65,7 @@ export type MeshPairsAction =
           | "signalingState"
           | "dataChannelState"
           | "remoteStream"
+          | "reconnectRequested"
         >
       >;
     }
@@ -86,6 +91,7 @@ export function meshPairsReducer(
         signalingState: "stable",
         dataChannelState: "pending",
         remoteStream: null,
+        reconnectRequested: false,
       };
       return {
         byPairId: { ...state.byPairId, [action.pairId]: view },

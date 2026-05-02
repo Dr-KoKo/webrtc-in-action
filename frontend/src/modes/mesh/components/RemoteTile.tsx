@@ -26,6 +26,7 @@ import {
   defaultRemoteMediaState,
   type RemoteMediaState,
 } from "../state/roster";
+import { ReconnectButton } from "./ReconnectButton";
 
 const PRESENCE_LABEL: Record<Presence, string> = {
   joined: "joined",
@@ -158,6 +159,14 @@ export function RemoteTile({
           testId={`mesh-remote-tile-${peerId}-screen-share`}
         />
       </ul>
+      {pair ? (
+        <div
+          className="mesh-remote-tile__actions"
+          data-testid={`mesh-remote-tile-${peerId}-actions`}
+        >
+          <ReconnectButton pair={pair} />
+        </div>
+      ) : null}
     </article>
   );
 }

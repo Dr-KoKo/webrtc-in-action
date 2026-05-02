@@ -40,6 +40,7 @@ import type {
 } from "./pairContext";
 import { createIceBuffer, type BufferedIceCandidate } from "./iceBuffer";
 import type { MeshPairsAction } from "../state/pairs";
+import { getActiveScreenTrack } from "./screenShare";
 
 type PairViewPatch = Extract<
   MeshPairsAction,
@@ -115,6 +116,36 @@ export interface PairIceCandidateInput {
   readonly candidate: RTCIceCandidateInit | null;
 }
 
+// PairFailedReason — mirror of the v2 contract enum (§3.16). Kept as a
+// string union so the manager can emit / receive without depending on
+// the Zod schema at runtime.
+export type PairFailedReason =
+  | "ice_failure"
+  | "dtls_failure"
+  | "transport_drop"
+  | "connection_state_failed"
+  | "application";
+
+export interface PairFailedInput {
+  readonly pairId: string;
+  readonly pairEpoch: number;
+  readonly reason: PairFailedReason;
+  readonly detail?: string;
+}
+
+// PairReconnectInstructionInput — same shape as the negotiation
+// instruction (contract §3.15 reuses §3.9's payload). Distinct type so
+// the manager's reconnect path is a separate code branch from initial
+// allocation.
+export interface PairReconnectInstructionInput {
+  readonly pairId: string;
+  readonly pairEpoch: number;
+  readonly role: MeshPairRole;
+  readonly remotePeerId: string;
+  readonly remoteAdmissionIndex: number;
+  readonly iceServers: RTCIceServer[];
+}
+
 export interface MeshChatSendablePairView {
   readonly pairId: string;
   readonly remotePeerId: string;
@@ -133,6 +164,26 @@ export interface MeshPairManager {
   readonly handlePairIceCandidate: (
     input: PairIceCandidateInput,
   ) => Promise<void>;
+  // M11 — inbound pair_failed (relay from the remote endpoint). Marks
+  // ONLY the matching PairContext failed; never touches other pairs.
+  readonly handlePairFailed: (input: PairFailedInput) => void;
+  // M11 — inbound pair_reconnect_instruction. Tears down the existing
+  // PairContext for `pairId` (closes DC, closes PC, drops refs, clears
+  // iceBuffer), then allocates a fresh PairContext under the new
+  // pairEpoch and re-runs the M6 offer/answer flow. Other PairContexts
+  // are untouched.
+  readonly handlePairReconnectInstruction: (
+    input: PairReconnectInstructionInput,
+  ) => Promise<MeshPairContext | null>;
+  // M11 — request server-side reconnect for a single failed pair. Sends
+  // `reconnect_pair { pairId, observedEpoch }` over /ws/mesh, sets
+  // `reconnectRequested` on the pair view (button uses this to disable
+  // itself), and appends a `peer pair reconnect requested` event.
+  readonly reconnectPair: (pairId: string) => void;
+  // M11 — clear the in-flight reconnect flag for a specific pair after
+  // the server replies with an error (`stale_pair_epoch`, etc.). Called
+  // by the dispatcher's error arm when `context.pairId` is present.
+  readonly clearReconnectRequested: (pairId: string) => void;
   readonly getContext: (pairId: string) => MeshPairContext | undefined;
   readonly listContexts: () => MeshPairContext[];
   // listChatPairs — sender-facing snapshot of pair_id / remote_peer_id /
@@ -204,11 +255,18 @@ export function createMeshPairManager(
   // allocateContext — idempotent per (pairId + pairEpoch). A duplicate
   // instruction with the same epoch returns the existing context
   // without creating a second pc / dc / sender set.
+  //
+  // M11: when called via `handlePairReconnectInstruction`, `mode` is
+  // "reconnect" and the caller has already torn down the previous
+  // PairContext for `pairId`. The mode flag selects the outgoing video
+  // source (current screen track if active, else camera) and skips the
+  // duplicate-instruction short-circuit.
   async function allocateContext(
     input: PairNegotiationInstructionInput,
+    mode: "fresh" | "reconnect" = "fresh",
   ): Promise<MeshPairContext | null> {
     const existing = pairs.get(input.pairId);
-    if (existing) {
+    if (existing && mode === "fresh") {
       if (existing.pairEpoch === input.pairEpoch) {
         appendEvent({
           scope: "pair",
@@ -224,13 +282,14 @@ export function createMeshPairManager(
         });
         return existing;
       }
-      // A higher epoch is a reconnect (M11 territory). M6 explicitly
-      // does not implement reconnect; log and bail without mutating
-      // existing state so we don't accidentally tear down a live pair.
+      // A higher epoch is a reconnect — but it should arrive as
+      // pair_reconnect_instruction, not pair_negotiation_instruction.
+      // Treat as a protocol nit; log and bail without mutating existing
+      // state so we don't accidentally tear down a live pair.
       appendEvent({
         scope: "pair",
         type: "future_phase_message",
-        summary: `pair_negotiation_instruction with higher epoch arrived (M11 reconnect not yet wired) — ignored`,
+        summary: `pair_negotiation_instruction with higher epoch arrived for live pair — ignored (use pair_reconnect_instruction)`,
         peerId: existing.remotePeerId,
         pairId: existing.pairId,
         detail: {
@@ -244,13 +303,33 @@ export function createMeshPairManager(
 
     const pc = deps.peerConnectionFactory({ iceServers: input.iceServers });
     const stream = deps.mediaSource.getStream();
-    const tracks = deps.mediaSource.getTracks();
+    const allTracks = deps.mediaSource.getTracks();
     const senders: RTCRtpSender[] = [];
-    for (const track of tracks) {
+    const addOne = (track: MediaStreamTrack): void => {
       const sender = stream
         ? pc.addTrack(track, stream)
         : pc.addTrack(track);
       senders.push(sender);
+    };
+    // For initial allocation we attach every track the local stream
+    // exposes (M6 contract). For M11 reconnect we re-attach audio
+    // tracks as-is and substitute the outgoing video source: an
+    // active screen-share track if one is published (T085 step 11),
+    // otherwise the local camera track (or none when the camera is
+    // off / unavailable, producing the camera-off placeholder on
+    // remote tiles).
+    if (mode === "fresh") {
+      for (const t of allTracks) addOne(t);
+    } else {
+      const audioTracks = allTracks.filter((t) => t.kind === "audio");
+      const videoTracks = allTracks.filter((t) => t.kind === "video");
+      for (const t of audioTracks) addOne(t);
+      const screenTrack = getActiveScreenTrack();
+      if (screenTrack) {
+        addOne(screenTrack);
+      } else {
+        for (const t of videoTracks) addOne(t);
+      }
     }
 
     const ctx: MeshPairContext = {
@@ -267,6 +346,8 @@ export function createMeshPairManager(
       remoteDescriptionApplied: false,
       endOfLocalCandidatesSent: false,
       endOfRemoteCandidatesReceived: false,
+      failedReported: false,
+      reconnectRequested: false,
     };
     pairs.set(ctx.pairId, ctx);
 
@@ -355,6 +436,17 @@ export function createMeshPairManager(
         },
       });
       patchPairView(ctx, { connectionState: value });
+      // M11 / T081 — local detection of pair failure.
+      // Mark ONLY this PairContext failed, emit one outbound
+      // `pair_failed` envelope, append the canonical event-log entry.
+      // Other PairContexts, local media tracks, and DataChannels for
+      // healthy pairs are all left untouched (FR-025). Auto-reconnect
+      // is explicitly out of scope — the user must click Reconnect.
+      if (value === "failed" && !ctx.failedReported) {
+        ctx.failedReported = true;
+        ctx.state = "failed";
+        emitOutboundPairFailed(ctx, "connection_state_failed", "connectionState=failed");
+      }
     };
 
     pc.onicecandidate = (event: RTCPeerConnectionIceEvent) => {
@@ -822,6 +914,313 @@ export function createMeshPairManager(
     await applyRemoteCandidate(ctx, input.candidate, "live");
   }
 
+  // M11 / T081 — emit one outbound `pair_failed` envelope to the other
+  // endpoint of the pair. Idempotent at the per-attempt level via
+  // `ctx.failedReported`; the caller checks-and-sets that flag.
+  function emitOutboundPairFailed(
+    ctx: MeshPairContext,
+    reason: PairFailedReason,
+    detail: string,
+  ): void {
+    try {
+      deps.send({
+        v: MESH_CONTRACT_VERSION,
+        type: "pair_failed",
+        roomId: deps.roomId,
+        to: ctx.remotePeerId,
+        payload: {
+          pairId: ctx.pairId,
+          pairEpoch: ctx.pairEpoch,
+          reason,
+          detail,
+        },
+      });
+    } catch (err) {
+      appendEvent({
+        scope: "local",
+        type: "signaling_error",
+        summary: `failed to send pair_failed for pair ${ctx.pairId}: ${
+          (err as Error).message ?? "unknown"
+        }`,
+      });
+    }
+    appendEvent({
+      scope: "pair",
+      type: "future_phase_message",
+      summary: `peer pair failed (pair ${ctx.pairId}, reason=${reason})`,
+      peerId: ctx.remotePeerId,
+      pairId: ctx.pairId,
+      detail: {
+        kind: "peer_pair_failed",
+        direction: "local",
+        pairId: ctx.pairId,
+        remotePeerId: ctx.remotePeerId,
+        reason,
+        detailText: detail,
+        connectionState: "failed",
+        pairEpoch: ctx.pairEpoch,
+      },
+    });
+  }
+
+  // M11 / T081 — inbound `pair_failed` from the remote endpoint (server
+  // relays C→S→C). Marks ONLY the matching PairContext failed; never
+  // touches other PairContexts, the local roster, or media tracks.
+  // Stale pairEpoch is dropped + logged (`stale_pair_message_dropped`).
+  function handlePairFailed(input: PairFailedInput): void {
+    const ctx = pairs.get(input.pairId);
+    if (!ctx) {
+      appendEvent({
+        scope: "room",
+        type: "error_occurred",
+        summary: `pair_failed received for unknown pair ${input.pairId} — ignored`,
+        detail: {
+          kind: "pair_failed_unknown_pair",
+          pairId: input.pairId,
+          pairEpoch: input.pairEpoch,
+          reason: input.reason,
+        },
+      });
+      return;
+    }
+    if (input.pairEpoch !== ctx.pairEpoch) {
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `pair_stale_message_dropped: pair_failed for pair ${ctx.pairId} (received epoch=${input.pairEpoch}, current=${ctx.pairEpoch})`,
+        peerId: ctx.remotePeerId,
+        pairId: ctx.pairId,
+        detail: {
+          kind: "pair_stale_message_dropped",
+          direction: "remote",
+          inboundType: "pair_failed",
+          receivedEpoch: input.pairEpoch,
+          currentEpoch: ctx.pairEpoch,
+        },
+      });
+      return;
+    }
+    ctx.state = "failed";
+    ctx.failedReported = true;
+    patchPairView(ctx, { connectionState: "failed" });
+    appendEvent({
+      scope: "pair",
+      type: "future_phase_message",
+      summary: `peer pair failed (received from remote, pair ${ctx.pairId}, reason=${input.reason})`,
+      peerId: ctx.remotePeerId,
+      pairId: ctx.pairId,
+      detail: {
+        kind: "peer_pair_failed",
+        direction: "remote",
+        pairId: ctx.pairId,
+        remotePeerId: ctx.remotePeerId,
+        reason: input.reason,
+        detailText: input.detail,
+        connectionState: "failed",
+        pairEpoch: ctx.pairEpoch,
+      },
+    });
+  }
+
+  // M11 / T083 — user clicked Reconnect on a failed remote tile. Sends
+  // exactly one `reconnect_pair { pairId, observedEpoch }` to the
+  // server; the manager flips `reconnectRequested` so the button
+  // disables itself until the server replies (with
+  // pair_reconnect_instruction OR a pair-scoped error). Idempotent —
+  // a second click while a request is in flight is a no-op.
+  function reconnectPair(pairId: string): void {
+    const ctx = pairs.get(pairId);
+    if (!ctx) {
+      appendEvent({
+        scope: "room",
+        type: "error_occurred",
+        summary: `reconnectPair called for unknown pair ${pairId} — ignored`,
+        detail: { kind: "reconnect_pair_unknown_pair", pairId },
+      });
+      return;
+    }
+    if (ctx.state !== "failed") {
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `reconnectPair ignored: pair ${pairId} not in failed state (state=${ctx.state})`,
+        peerId: ctx.remotePeerId,
+        pairId,
+        detail: {
+          kind: "reconnect_pair_not_failed",
+          state: ctx.state,
+          pairEpoch: ctx.pairEpoch,
+        },
+      });
+      return;
+    }
+    if (ctx.reconnectRequested) {
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `reconnectPair ignored: already in flight for pair ${pairId}`,
+        peerId: ctx.remotePeerId,
+        pairId,
+        detail: {
+          kind: "reconnect_pair_in_flight",
+          pairEpoch: ctx.pairEpoch,
+        },
+      });
+      return;
+    }
+    ctx.reconnectRequested = true;
+    patchPairView(ctx, { reconnectRequested: true });
+    try {
+      deps.send({
+        v: MESH_CONTRACT_VERSION,
+        type: "reconnect_pair",
+        roomId: deps.roomId,
+        payload: {
+          pairId: ctx.pairId,
+          observedEpoch: ctx.pairEpoch,
+        },
+      });
+    } catch (err) {
+      // Roll the flag back on send failure so the user can retry.
+      ctx.reconnectRequested = false;
+      patchPairView(ctx, { reconnectRequested: false });
+      appendEvent({
+        scope: "local",
+        type: "signaling_error",
+        summary: `failed to send reconnect_pair for pair ${pairId}: ${
+          (err as Error).message ?? "unknown"
+        }`,
+      });
+      return;
+    }
+    appendEvent({
+      scope: "pair",
+      type: "future_phase_message",
+      summary: `peer pair reconnect requested (pair ${pairId}, observedEpoch=${ctx.pairEpoch})`,
+      peerId: ctx.remotePeerId,
+      pairId,
+      detail: {
+        kind: "peer_pair_reconnect_requested",
+        observedEpoch: ctx.pairEpoch,
+      },
+    });
+  }
+
+  function clearReconnectRequested(pairId: string): void {
+    const ctx = pairs.get(pairId);
+    if (!ctx) return;
+    if (!ctx.reconnectRequested) return;
+    ctx.reconnectRequested = false;
+    patchPairView(ctx, { reconnectRequested: false });
+  }
+
+  // M11 / T085 — server replied with pair_reconnect_instruction. Tear
+  // down ONLY the affected pair (close DC, close PC, drop refs, clear
+  // iceBuffer) and rebuild a fresh PairContext under the new pairEpoch.
+  // Local MediaStreamTracks keep running; other PairContexts are
+  // strictly untouched (FR-025 / L18). The fresh PairContext re-runs
+  // the M6/M7 lifecycle for that pair.
+  async function handlePairReconnectInstruction(
+    input: PairReconnectInstructionInput,
+  ): Promise<MeshPairContext | null> {
+    const existing = pairs.get(input.pairId);
+    if (!existing) {
+      // No prior context — the server should not normally emit a
+      // reconnect_instruction for a pair we never had, but allocate
+      // defensively under the new epoch so the lifecycle still runs.
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `pair_reconnect_instruction for unknown pair ${input.pairId} — allocating fresh PairContext`,
+        peerId: input.remotePeerId,
+        pairId: input.pairId,
+        detail: {
+          kind: "pair_reconnect_instruction_no_prior",
+          newEpoch: input.pairEpoch,
+        },
+      });
+      const fresh = await allocateContext(input, "reconnect");
+      return fresh;
+    }
+    if (input.pairEpoch <= existing.pairEpoch) {
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `pair_stale_message_dropped: pair_reconnect_instruction for pair ${input.pairId} (received epoch=${input.pairEpoch}, current=${existing.pairEpoch})`,
+        peerId: existing.remotePeerId,
+        pairId: existing.pairId,
+        detail: {
+          kind: "pair_stale_message_dropped",
+          direction: "remote",
+          inboundType: "pair_reconnect_instruction",
+          receivedEpoch: input.pairEpoch,
+          currentEpoch: existing.pairEpoch,
+        },
+      });
+      return null;
+    }
+    appendEvent({
+      scope: "pair",
+      type: "future_phase_message",
+      summary: `peer pair fresh attempt started (pair ${input.pairId}, new epoch ${input.pairEpoch})`,
+      peerId: existing.remotePeerId,
+      pairId: existing.pairId,
+      detail: {
+        kind: "peer_pair_fresh_attempt_started",
+        previousEpoch: existing.pairEpoch,
+        newEpoch: input.pairEpoch,
+        role: input.role,
+      },
+    });
+    // Tear down old DC, PC, refs, iceBuffer. Local MediaStreamTracks
+    // are NOT stopped (the rebuild re-attaches them).
+    try {
+      existing.dc?.close();
+    } catch {
+      // already closed / never opened — fine.
+    }
+    try {
+      existing.pc.close();
+    } catch {
+      // already closed — fine.
+    }
+    existing.iceBuffer.clear();
+    existing.state = "closed";
+    pairs.delete(existing.pairId);
+    appendEvent({
+      scope: "pair",
+      type: "future_phase_message",
+      summary: `old PairContext torn down (pair ${input.pairId}, previous epoch=${existing.pairEpoch})`,
+      peerId: existing.remotePeerId,
+      pairId: existing.pairId,
+      detail: {
+        kind: "pair_old_context_torn_down",
+        previousEpoch: existing.pairEpoch,
+      },
+    });
+    // Drop the React view entry so the reducer accepts the fresh
+    // MESH_PAIR_REGISTERED dispatched inside allocateContext (which is
+    // idempotent for an existing pairId — see meshPairsReducer).
+    deps.dispatch({ type: "MESH_PAIR_REMOVED", pairId: input.pairId });
+    const fresh = await allocateContext(input, "reconnect");
+    if (fresh) {
+      appendEvent({
+        scope: "pair",
+        type: "future_phase_message",
+        summary: `new PairContext created (pair ${input.pairId}, epoch ${fresh.pairEpoch}, role=${fresh.role})`,
+        peerId: fresh.remotePeerId,
+        pairId: fresh.pairId,
+        detail: {
+          kind: "pair_new_context_created",
+          pairEpoch: fresh.pairEpoch,
+          role: fresh.role,
+          previousEpoch: existing.pairEpoch,
+        },
+      });
+    }
+    return fresh;
+  }
+
   // handleNewcomerInstructions — T051 / L18: when a newcomer's
   // instructions arrive in a batch, allocate only the new pairs.
   // Existing PairContext entries (pc, dc, senders, state, pairEpoch)
@@ -882,6 +1281,8 @@ export function createMeshPairManager(
       remoteDescriptionApplied: ctx.remoteDescriptionApplied,
       endOfLocalCandidatesSent: ctx.endOfLocalCandidatesSent,
       endOfRemoteCandidatesReceived: ctx.endOfRemoteCandidatesReceived,
+      failedReported: ctx.failedReported,
+      reconnectRequested: ctx.reconnectRequested,
     });
   }
 
@@ -899,11 +1300,15 @@ export function createMeshPairManager(
   }
 
   return {
-    handleNegotiationInstruction: allocateContext,
+    handleNegotiationInstruction: (input) => allocateContext(input, "fresh"),
     handleNewcomerInstructions,
     handlePairOffer,
     handlePairAnswer,
     handlePairIceCandidate,
+    handlePairFailed,
+    handlePairReconnectInstruction,
+    reconnectPair,
+    clearReconnectRequested,
     getContext,
     listContexts,
     listChatPairs,

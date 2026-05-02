@@ -25,6 +25,7 @@ import { LocalPreview } from "../components/LocalPreview";
 import { MeshMediaController } from "../webrtc/mediaAcquisition";
 import { RemoteTile } from "../components/RemoteTile";
 import { MeshCostSummary } from "../components/MeshCostSummary";
+import { PartialMeshBadge } from "../components/PartialMeshBadge";
 import { MeshChat } from "../components/MeshChat";
 import { MeshControls } from "../components/MeshControls";
 import { selectRosterAsArray } from "../state/roster";
@@ -84,6 +85,7 @@ function MeshAppLayout({ roomId }: { roomId: string }) {
         <MeshControls />
         <MeshRoster />
         <MeshCostSummary />
+        <PartialMeshBadge />
         <section
           className="mesh-app__remote-tiles"
           data-testid="mesh-remote-tiles"
