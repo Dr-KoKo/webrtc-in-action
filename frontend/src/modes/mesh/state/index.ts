@@ -87,6 +87,8 @@ function isLocalMediaAction(a: MeshRootAction): a is MeshLocalMediaAction {
   return (
     a.type === "MESH_LOCAL_MEDIA_MIC_TOGGLED" ||
     a.type === "MESH_LOCAL_MEDIA_CAMERA_TOGGLED" ||
+    a.type === "MESH_LOCAL_MEDIA_SCREEN_SHARE_STARTED" ||
+    a.type === "MESH_LOCAL_MEDIA_SCREEN_SHARE_STOPPED" ||
     a.type === "MESH_LOCAL_MEDIA_RESET"
   );
 }

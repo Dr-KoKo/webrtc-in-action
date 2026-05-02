@@ -679,35 +679,35 @@ Tasks that **MUST be complete** before each pivotal point:
 
 **Goal**: any participant can start / stop screen share via `replaceTrack`; multiple concurrent sharers; sender count remains `2 × (N − 1)`. **No room-level mutex. No `screen_share_busy`.**
 
-- [ ] T075 [frontend][webrtc] [M10] Screen share start — `frontend/src/features/mesh/webrtc/screenShare.ts`
+- [X] T075 [frontend][webrtc] [M10] Screen share start — `frontend/src/features/mesh/webrtc/screenShare.ts`
     - Purpose: `getDisplayMedia({ video: true })`; `replaceTrack(screenTrack)` across every active outbound video sender; emit one `pair_media_state { screenShare: "active" }`; record `local track replaced (camera→screen)` per pair.
     - Files: new file; extension hook in `MeshControls.tsx`.
     - Dependencies: T046, T070.
     - DoD: sharing on one peer replaces the outgoing video track on every connected pair (`N − 1` calls), with one signaling fan-out.
     - Verify: `screenShareSenders.spec.ts`.
 
-- [ ] T076 [frontend][P][webrtc] [M10] Screen share stop (app + browser-native) — `frontend/src/features/mesh/webrtc/screenShare.ts`
+- [X] T076 [frontend][P][webrtc] [M10] Screen share stop (app + browser-native) — `frontend/src/features/mesh/webrtc/screenShare.ts`
     - Purpose: handle in-app Stop button + `screenTrack.onended` (browser-native stop); `replaceTrack(cameraTrack ?? null)`; emit one `pair_media_state { screenShare: "inactive" }`.
     - Files: extend `screenShare.ts`.
     - Dependencies: T075.
     - DoD: both stop paths revert correctly; sender count remains `2 × (N − 1)`.
     - Verify: quickstart §4.5 (stop in-app) + §5.6 (browser-native stop).
 
-- [ ] T077 [frontend][P][webrtc] [M10] Sender-count invariant helper — `frontend/src/features/mesh/webrtc/senders.ts`
+- [X] T077 [frontend][P][webrtc] [M10] Sender-count invariant helper — `frontend/src/features/mesh/webrtc/senders.ts`
     - Purpose: assert `outgoingMediaSenders === 2 × (N − 1)` across screen toggles; the MVP MUST NOT use `addTransceiver` for screen share.
     - Files: extend `senders.ts`.
     - Dependencies: T046, T075.
     - DoD: invariant holds across start / stop cycles; no `addTransceiver` call exists in the screen-share code path.
     - Verify: `screenShareSenders.spec.ts`; grep `addTransceiver` returns no matches under `features/mesh/webrtc/`.
 
-- [ ] T078 [frontend][P][webrtc] [M10] No room-level current-sharer concept — `frontend/src/features/mesh/webrtc/screenShare.ts`
+- [X] T078 [frontend][P][webrtc] [M10] No room-level current-sharer concept — `frontend/src/features/mesh/webrtc/screenShare.ts`
     - Purpose: FR-041 — multiple participants sharing concurrently is first-class; no mutex, no auto-stop, no prompt.
     - Files: defensive structure check (a code-search test) + manual quickstart §4.5 step.
     - Dependencies: T075.
     - DoD: no shared `currentSharer` variable / store / hook exists; manual run with 2 sharers passes (each viewer's tile-of-B and tile-of-C independently render their respective screens).
     - Verify: `concurrentScreenShare.spec.ts` + quickstart §4.5.
 
-- [ ] T079 [test][P] [M10] `screenShareSenders.spec.ts` + `concurrentScreenShare.spec.ts` — `frontend/src/features/mesh/tests/`
+- [X] T079 [test][P] [M10] `screenShareSenders.spec.ts` + `concurrentScreenShare.spec.ts` — `frontend/src/features/mesh/tests/`
     - Purpose: spec coverage for T075–T078 invariants.
     - Files: 2 new spec files.
     - Dependencies: T075–T078.

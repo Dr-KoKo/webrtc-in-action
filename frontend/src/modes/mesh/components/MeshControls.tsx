@@ -1,26 +1,33 @@
-// MeshControls (M9 / T069 + T070) — mic + camera toggles.
+// MeshControls (M9 / T069 + T070; M10 / T075 + T076 add screen share).
 //
 // Behavior:
-//   - Each click flips `track.enabled` on the local stream (no
-//     replaceTrack, no createOffer, no setLocalDescription, no PC
-//     recreation).
-//   - Each click also dispatches the local-media reducer + sends
-//     EXACTLY ONE `pair_media_state` to /ws/mesh. The server fans out
-//     N − 1 envelopes (FR-032). The client never iterates pairs.
+//   - mic / camera click flips `track.enabled` in place (no replaceTrack,
+//     no createOffer, no PC recreation) and emits ONE `pair_media_state`.
+//   - Share screen click → getDisplayMedia → replaceTrack across every
+//     active outbound video sender → emit ONE `pair_media_state`.
+//   - Stop sharing click → replaceTrack(cameraTrack ?? null) across every
+//     tracked outbound video sender → emit ONE `pair_media_state`.
+//   - Browser-native "Stop sharing" (`screenTrack.onended`) drives the
+//     same cleanup path via the shared screen-share controller, so
+//     remote tiles update within ~2 s without an in-app click.
 //   - Buttons are disabled until the local participant is media-ready
-//     so a stray click before `getUserMedia` resolves can't force a
+//     so a stray click before `getUserMedia` resolves cannot force a
 //     no-op send.
 //
-// M9 hard boundary:
-//   - No screen-share button. The triple's `screenShare` field stays
-//     "inactive" — M10 owns getDisplayMedia.
-//   - No renegotiation. No `pc.createOffer`. No new RTCPeerConnection.
+// M10 hard boundary:
+//   - No `addTransceiver`, no `addTrack` in the screen-share path.
+//   - No room-level current-sharer concept — multiple participants MAY
+//     share concurrently. Stopping one peer's share does NOT mutate
+//     another peer's screen-share state.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { subscribeLocalStream } from "../webrtc/mediaAcquisition";
 import { setLocalTrackEnabled } from "../webrtc/senders";
-import { useMeshDispatch, useMeshState } from "../state";
-import { useMeshSignalingClient } from "../signaling/provider";
+import { useMeshDispatch, useMeshState, type MeshRootState } from "../state";
+import {
+  useMeshPairManager,
+  useMeshSignalingClient,
+} from "../signaling/provider";
 import { makeMeshEventEntry } from "../state/eventLog";
 import {
   MESH_CONTRACT_VERSION,
@@ -29,6 +36,11 @@ import {
   type PairMediaStatePayload,
   type ScreenShareState,
 } from "../signaling/schema";
+import {
+  createScreenShareController,
+  type ScreenShareController,
+} from "../webrtc/screenShare";
+import type { MeshPairManager } from "../webrtc/pairManager";
 
 interface PairMediaStateSnapshot {
   readonly microphone: MicState;
@@ -40,6 +52,7 @@ export function MeshControls() {
   const dispatch = useMeshDispatch();
   const state = useMeshState();
   const client = useMeshSignalingClient();
+  const pairManager = useMeshPairManager();
   const [hasStream, setHasStream] = useState<boolean>(false);
 
   useEffect(() => {
@@ -58,13 +71,48 @@ export function MeshControls() {
   const camera = state.localMedia.camera;
   const screenShare = state.localMedia.screenShare;
 
+  // Refs keep the screen-share controller's getters fresh across
+  // renders without recreating the controller each time. The
+  // controller closure is built once at first render that produces
+  // a usable signaling client.
+  const stateRef = useRef<MeshRootState>(state);
+  stateRef.current = state;
+  const pairManagerRef = useRef<MeshPairManager | null>(pairManager);
+  pairManagerRef.current = pairManager;
+  const sendRef = useRef(client.send.bind(client));
+  sendRef.current = client.send.bind(client);
+
+  const controllerRef = useRef<ScreenShareController | null>(null);
+  if (controllerRef.current === null) {
+    controllerRef.current = createScreenShareController({
+      dispatch,
+      send: (m) => sendRef.current(m),
+      getRoomId: () => stateRef.current.local.roomId ?? null,
+      getPairContexts: () => pairManagerRef.current?.listContexts() ?? [],
+      getCameraTrack: () => {
+        const s = currentLocalStream();
+        if (!s) return null;
+        const tracks = s.getVideoTracks();
+        return tracks[0] ?? null;
+      },
+      getCameraState: () => stateRef.current.localMedia.camera,
+      getMicState: () => stateRef.current.localMedia.microphone,
+    });
+  }
+  // Tear down the controller (release any active screen track) on
+  // unmount. The store's `MESH_LOCAL_MEDIA_RESET` already takes care of
+  // the React state on Leave; this drops the underlying MediaStream.
+  useEffect(() => {
+    return () => {
+      controllerRef.current?.dispose();
+    };
+  }, []);
+
   const sendMediaState = (snapshot: PairMediaStateSnapshot) => {
     if (!roomId) return;
     const payload: PairMediaStatePayload = {
       microphone: snapshot.microphone,
       camera: snapshot.camera,
-      // M9 must not start screen sharing — pass through whatever the
-      // local slice currently holds (always "inactive" until M10).
       screenShare: snapshot.screenShare,
     };
     try {
@@ -136,6 +184,21 @@ export function MeshControls() {
     sendMediaState({ microphone: mic, camera: next, screenShare });
   };
 
+  const onShareScreenClick = () => {
+    if (!canToggle) return;
+    const ctrl = controllerRef.current;
+    if (!ctrl) return;
+    if (screenShare === "active") {
+      void ctrl.stop("app");
+    } else {
+      void ctrl.start();
+    }
+  };
+
+  const screenLabel = useMemo(() => {
+    return screenShare === "active" ? "Stop sharing" : "Share screen";
+  }, [screenShare]);
+
   return (
     <section
       className="mesh-controls"
@@ -163,6 +226,16 @@ export function MeshControls() {
           data-state={camera}
         >
           camera: {camera}
+        </button>
+        <button
+          type="button"
+          onClick={onShareScreenClick}
+          disabled={!canToggle}
+          aria-pressed={screenShare === "active"}
+          data-testid="mesh-controls-screen-share-button"
+          data-state={screenShare}
+        >
+          {screenLabel}
         </button>
         <span
           className="mesh-controls__indicator"
