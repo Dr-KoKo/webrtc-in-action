@@ -12,9 +12,13 @@
 //     and rejects `candidate: ""` as `malformed`.
 //   - `reconnect_pair` carries `pairId` + `observedEpoch`.
 
-package mesh
+package protocol
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+)
 
 // PairRole — §3.9 / §3.15. The participant with the lower
 // `admissionIndex` of the pair is `offerer`.
@@ -49,14 +53,18 @@ type IceCandidateInit struct {
 	UsernameFragment *string `json:"usernameFragment,omitempty"`
 }
 
-// pairIdentity is embedded in every pairwise payload. Validating
-// requires both `pairId` and `pairEpoch` to be present.
-type pairIdentity struct {
+// PairIdentity is embedded in every pairwise payload. Validating
+// requires both `pairId` and `pairEpoch` to be present. Exported so
+// callers in the signaling layer can construct pair payloads with
+// the embedded-struct literal form (`PairIdentity: PairIdentity{...}`)
+// — the fields are promoted onto the outer payload, so direct field
+// access (`payload.PairID`) is also valid.
+type PairIdentity struct {
 	PairID    string `json:"pairId"`
 	PairEpoch uint64 `json:"pairEpoch"`
 }
 
-func (p pairIdentity) validate(label string) *ProtocolError {
+func (p PairIdentity) validate(label string) *ProtocolError {
 	if p.PairID == "" {
 		return &ProtocolError{Code: CodeMalformed, Message: label + ".pairId required"}
 	}
@@ -72,7 +80,7 @@ func (p pairIdentity) validate(label string) *ProtocolError {
 // ---------------------------------------------------------------------
 
 type PairNegotiationInstructionPayload struct {
-	pairIdentity
+	PairIdentity
 	Role       PairRole      `json:"role"`
 	RemotePeer RemotePeerRef `json:"remotePeer"`
 	IceServers []IceServer   `json:"iceServers"`
@@ -99,7 +107,7 @@ func (p *PairNegotiationInstructionPayload) UnmarshalJSON(data []byte) error {
 }
 
 func (p *PairNegotiationInstructionPayload) Validate() error {
-	if err := p.pairIdentity.validate("pair_negotiation_instruction"); err != nil {
+	if err := p.PairIdentity.validate("pair_negotiation_instruction"); err != nil {
 		return err
 	}
 	switch p.Role {
@@ -134,7 +142,7 @@ func (p *PairReconnectInstructionPayload) Validate() error {
 // ---------------------------------------------------------------------
 
 type PairOfferPayload struct {
-	pairIdentity
+	PairIdentity
 	SDP SDPBody `json:"sdp"`
 }
 
@@ -155,7 +163,7 @@ func (p *PairOfferPayload) UnmarshalJSON(data []byte) error {
 }
 
 func (p *PairOfferPayload) Validate() error {
-	if err := p.pairIdentity.validate("pair_offer"); err != nil {
+	if err := p.PairIdentity.validate("pair_offer"); err != nil {
 		return err
 	}
 	if p.SDP.Type != "offer" {
@@ -172,7 +180,7 @@ func (p *PairOfferPayload) Validate() error {
 // ---------------------------------------------------------------------
 
 type PairAnswerPayload struct {
-	pairIdentity
+	PairIdentity
 	SDP SDPBody `json:"sdp"`
 }
 
@@ -193,7 +201,7 @@ func (p *PairAnswerPayload) UnmarshalJSON(data []byte) error {
 }
 
 func (p *PairAnswerPayload) Validate() error {
-	if err := p.pairIdentity.validate("pair_answer"); err != nil {
+	if err := p.PairIdentity.validate("pair_answer"); err != nil {
 		return err
 	}
 	if p.SDP.Type != "answer" {
@@ -214,7 +222,7 @@ func (p *PairAnswerPayload) Validate() error {
 // "candidate: <init>" (normal). The empty-string form `candidate: ""`
 // is rejected as malformed (§3.12).
 type PairIceCandidatePayload struct {
-	pairIdentity
+	PairIdentity
 	Candidate        *IceCandidateInit `json:"candidate"`
 	candidatePresent bool              `json:"-"`
 }
@@ -253,7 +261,7 @@ func (p *PairIceCandidatePayload) UnmarshalJSON(data []byte) error {
 }
 
 func (p *PairIceCandidatePayload) Validate() error {
-	if err := p.pairIdentity.validate("pair_ice_candidate"); err != nil {
+	if err := p.PairIdentity.validate("pair_ice_candidate"); err != nil {
 		return err
 	}
 	if !p.candidatePresent {
@@ -282,10 +290,10 @@ type CameraState string
 type ScreenShareState string
 
 const (
-	MicOn   MicState = "on"
-	MicOff  MicState = "off"
-	CamOn   CameraState = "on"
-	CamOff  CameraState = "off"
+	MicOn          MicState         = "on"
+	MicOff         MicState         = "off"
+	CamOn          CameraState      = "on"
+	CamOff         CameraState      = "off"
 	ScreenActive   ScreenShareState = "active"
 	ScreenInactive ScreenShareState = "inactive"
 )
@@ -350,7 +358,7 @@ const (
 )
 
 type PairFailedPayload struct {
-	pairIdentity
+	PairIdentity
 	Reason PairFailedReason `json:"reason"`
 	Detail string           `json:"detail,omitempty"`
 }
@@ -374,7 +382,7 @@ func (p *PairFailedPayload) UnmarshalJSON(data []byte) error {
 }
 
 func (p *PairFailedPayload) Validate() error {
-	if err := p.pairIdentity.validate("pair_failed"); err != nil {
+	if err := p.PairIdentity.validate("pair_failed"); err != nil {
 		return err
 	}
 	switch p.Reason {
@@ -383,4 +391,61 @@ func (p *PairFailedPayload) Validate() error {
 		return nil
 	}
 	return &ProtocolError{Code: CodeMalformed, Message: "pair_failed.reason not in canonical enum"}
+}
+
+// ---------------------------------------------------------------------
+// Pair identity helpers (§1.4)
+// ---------------------------------------------------------------------
+
+// MakePairID returns the canonical "<lo>-<hi>" pair identifier for two
+// admission indices. The participant with the lower index is always the
+// offerer (FR-022). The result is stable regardless of argument order.
+func MakePairID(a, b uint64) string {
+	if a == b {
+		return fmt.Sprintf("%d-%d", a, b)
+	}
+	pair := []uint64{a, b}
+	sort.Slice(pair, func(i, j int) bool { return pair[i] < pair[j] })
+	return fmt.Sprintf("%d-%d", pair[0], pair[1])
+}
+
+// PairLedger exposes the server's current pair-epoch ledger to
+// validators that need to compare an inbound `payload.pairEpoch`
+// against the canonical value (data-model §A.5). MeshRoom (M3)
+// implements this interface; tests can supply a fake.
+type PairLedger interface {
+	CurrentPairEpoch(pairID string) (uint64, bool)
+}
+
+// ValidateStalePairEpoch enforces the §A.5 stale-message rule for the
+// four pairwise connection-attempt messages (`pair_offer`, `pair_answer`,
+// `pair_ice_candidate`, `pair_failed`). Returns
+// `ProtocolError{Code: stale_pair_epoch}` when the inbound epoch is
+// strictly less than the ledger's current value. Equal epochs pass;
+// strictly greater epochs are also rejected because the server is
+// epoch-canonical (clients never raise epochs).
+//
+// `pair_media_state` is exempt — it carries no `pairId`/`pairEpoch`
+// (contract §3.13) and is participant-level metadata.
+func ValidateStalePairEpoch(pairID string, observed uint64, ledger PairLedger) *ProtocolError {
+	current, ok := ledger.CurrentPairEpoch(pairID)
+	if !ok {
+		return &ProtocolError{
+			Code:    CodeStalePairEpoch,
+			Message: fmt.Sprintf("pair %q is unknown to the server", pairID),
+		}
+	}
+	if observed < current {
+		return &ProtocolError{
+			Code:    CodeStalePairEpoch,
+			Message: fmt.Sprintf("pair %q expected epoch %d; got %d", pairID, current, observed),
+		}
+	}
+	if observed > current {
+		return &ProtocolError{
+			Code:    CodeStalePairEpoch,
+			Message: fmt.Sprintf("pair %q expected epoch %d; got higher %d (server is epoch-canonical)", pairID, current, observed),
+		}
+	}
+	return nil
 }

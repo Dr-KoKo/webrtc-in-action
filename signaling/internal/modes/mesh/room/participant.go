@@ -9,7 +9,7 @@
 // trigger pair teardown for every pair the participant was in
 // (data-model §C.4).
 
-package mesh
+package room
 
 import (
 	"errors"
@@ -26,13 +26,6 @@ const (
 	ReadinessLeft       Readiness = "left"
 )
 
-// Conn is the minimum surface the mesh package needs on the underlying
-// WebSocket connection. The handler layer supplies the concrete
-// implementation. Implementations MUST serialize their writes.
-type Conn interface {
-	SendJSON(v any) error
-}
-
 // Participant — one admitted mesh browser session.
 type Participant struct {
 	PeerID         string
@@ -44,15 +37,15 @@ type Participant struct {
 }
 
 // ErrInvalidReadinessTransition is returned by Advance when a
-// transition is not in the FSM diagram. The server maps this to the
-// wire-level `error { code: "unexpected_media_ready" }` for
+// transition is not in the FSM diagram. The signaling layer maps this
+// to the wire-level `error { code: "unexpected_media_ready" }` for
 // media_ready arriving from a non-`joined` state.
 var ErrInvalidReadinessTransition = errors.New("invalid mesh participant readiness transition")
 
 // Advance returns the new readiness for the requested transition or
 // ErrInvalidReadinessTransition if the move is not permitted by the
 // FSM. Idempotent on same-state requests (returns the same value with
-// no error) since the handler may call this from re-entrant paths.
+// no error) since callers may invoke this from re-entrant paths.
 func Advance(from, to Readiness) (Readiness, error) {
 	if from == to {
 		return from, nil

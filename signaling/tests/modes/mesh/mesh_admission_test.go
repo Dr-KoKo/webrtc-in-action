@@ -25,6 +25,8 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // joinAndExpectAccepted dials /ws/mesh, sends a join_room for roomID,
@@ -42,14 +44,14 @@ func joinAndExpectAccepted(t *testing.T, ts *httptest.Server, ctx context.Contex
 	if err != nil {
 		t.Fatalf("read join_accepted failed: %v", err)
 	}
-	var env mesh.Envelope
+	var env protocol.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		t.Fatalf("envelope unmarshal failed: %v", err)
 	}
-	if env.Type != mesh.TypeJoinAccepted {
-		t.Fatalf("type = %q, want %q", env.Type, mesh.TypeJoinAccepted)
+	if env.Type != protocol.TypeJoinAccepted {
+		t.Fatalf("type = %q, want %q", env.Type, protocol.TypeJoinAccepted)
 	}
-	var p mesh.JoinAcceptedPayload
+	var p protocol.JoinAcceptedPayload
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		t.Fatalf("payload unmarshal failed: %v", err)
 	}
@@ -59,15 +61,15 @@ func joinAndExpectAccepted(t *testing.T, ts *httptest.Server, ctx context.Contex
 // drainMeshFrames reads up to n frames within timeout; returns slice.
 // Useful when the order between roster_snapshot and roster_update is
 // not asserted by the specific test.
-func drainMeshFrames(t *testing.T, conn *websocket.Conn, ctx context.Context, n int) []mesh.Envelope {
+func drainMeshFrames(t *testing.T, conn *websocket.Conn, ctx context.Context, n int) []protocol.Envelope {
 	t.Helper()
-	out := make([]mesh.Envelope, 0, n)
+	out := make([]protocol.Envelope, 0, n)
 	for i := 0; i < n; i++ {
 		_, raw, err := conn.Read(ctx)
 		if err != nil {
 			t.Fatalf("read frame %d failed: %v", i, err)
 		}
-		var env mesh.Envelope
+		var env protocol.Envelope
 		if err := json.Unmarshal(raw, &env); err != nil {
 			t.Fatalf("frame %d unmarshal failed: %v", i, err)
 		}
@@ -115,22 +117,22 @@ func TestFourthAdmittedFifthRejectedRoomFull(t *testing.T) {
 	if elapsed > 2*time.Second {
 		t.Errorf("5th rejection took %v; SC-004 budget is 2 s", elapsed)
 	}
-	var env mesh.Envelope
+	var env protocol.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		t.Fatalf("5th envelope unmarshal failed: %v", err)
 	}
-	if env.Type != mesh.TypeJoinRejected {
-		t.Fatalf("5th type = %q, want %q", env.Type, mesh.TypeJoinRejected)
+	if env.Type != protocol.TypeJoinRejected {
+		t.Fatalf("5th type = %q, want %q", env.Type, protocol.TypeJoinRejected)
 	}
-	var rej mesh.JoinRejectedPayload
+	var rej protocol.JoinRejectedPayload
 	if err := json.Unmarshal(env.Payload, &rej); err != nil {
 		t.Fatalf("5th payload unmarshal failed: %v", err)
 	}
-	if rej.Result != mesh.JoinRejectedRoomFull {
-		t.Fatalf("5th result = %q, want %q", rej.Result, mesh.JoinRejectedRoomFull)
+	if rej.Result != protocol.JoinRejectedRoomFull {
+		t.Fatalf("5th result = %q, want %q", rej.Result, protocol.JoinRejectedRoomFull)
 	}
-	if rej.Reason != mesh.ReasonRoomFull {
-		t.Fatalf("5th reason = %q, want %q", rej.Reason, mesh.ReasonRoomFull)
+	if rej.Reason != protocol.ReasonRoomFull {
+		t.Fatalf("5th reason = %q, want %q", rej.Reason, protocol.ReasonRoomFull)
 	}
 
 	for _, c := range conns {
@@ -193,13 +195,13 @@ func TestAdmissionIndexNeverReused(t *testing.T) {
 func TestPairIdUsesAdmissionIndexNotSlotIndex(t *testing.T) {
 	// Verifying the derivation rule itself is sufficient — MakePairID
 	// is the pure function the room uses internally.
-	if got := mesh.MakePairID(1, 2); got != "1-2" {
+	if got := protocol.MakePairID(1, 2); got != "1-2" {
 		t.Fatalf("(A=1, B=2) pairId = %q, want %q", got, "1-2")
 	}
-	if got := mesh.MakePairID(2, 3); got != "2-3" {
+	if got := protocol.MakePairID(2, 3); got != "2-3" {
 		t.Fatalf("(B=2, C=3) pairId = %q, want %q", got, "2-3")
 	}
-	if mesh.MakePairID(1, 2) == mesh.MakePairID(2, 3) {
+	if protocol.MakePairID(1, 2) == protocol.MakePairID(2, 3) {
 		t.Fatal("pairId(A,B) collided with pairId(B,C); admissionIndex monotonicity is broken")
 	}
 
@@ -232,8 +234,8 @@ func TestPairIdUsesAdmissionIndexNotSlotIndex(t *testing.T) {
 	defer connC.CloseNow()
 	defer connB.Close(websocket.StatusNormalClosure, "bye")
 
-	pairOldAB := mesh.MakePairID(idxA, idxB)
-	pairNewBC := mesh.MakePairID(idxB, idxC)
+	pairOldAB := protocol.MakePairID(idxA, idxB)
+	pairNewBC := protocol.MakePairID(idxB, idxC)
 	if pairOldAB == pairNewBC {
 		t.Fatalf("pair recycle collision: old (A,B)=%q == new (B,C)=%q", pairOldAB, pairNewBC)
 	}

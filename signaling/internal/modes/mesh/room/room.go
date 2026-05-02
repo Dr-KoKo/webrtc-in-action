@@ -1,19 +1,19 @@
-// MeshRoom — one mesh room (data-model §A.2). Concurrent-safe via a
+// Room — one mesh room (data-model §A.2). Concurrent-safe via a
 // single per-room mutex composed with the manager-level mutex for
 // registry operations.
 //
 // Capacity invariant: 4 ReservedSlots. The 5th admission attempt
-// returns ErrRoomFull, which the handler maps to
+// returns ErrRoomFull, which the signaling layer maps to
 // join_rejected { result: "join_rejected_room_full" } per contract
 // §3.3.
 //
-// admissionCounter invariant: monotonic per MeshRoom, NEVER reused
+// admissionCounter invariant: monotonic per Room, NEVER reused
 // across the room's lifetime. A freed slot's index value is dropped;
 // the next joiner gets a strictly-greater index. This guarantees
 // `pairId` (derived from sorted admission indices) is unique across
 // all pairs the room ever forms — research §5, plan §10.2.
 
-package mesh
+package room
 
 import (
 	"errors"
@@ -46,22 +46,22 @@ type ReservedSlot struct {
 // ErrRoomFull is returned by Admit when all 4 slots are reserved.
 var ErrRoomFull = errors.New("mesh room is full")
 
-// MeshRoom mirrors data-model §A.2.
-type MeshRoom struct {
+// Room mirrors data-model §A.2.
+type Room struct {
 	mu               sync.Mutex
 	roomID           string
 	slots            [MaxParticipants]ReservedSlot
 	participants     map[string]*Participant // key: peerId
 	admissionCounter uint64                  // monotonic; never reused
-	pairs            *pairLedger
+	pairs            *PairLedger
 	rosterSeq        uint64
 	createdAt        time.Time
 }
 
-// NewMeshRoom constructs an empty MeshRoom. The slots' Index values
-// are set to 0..3 once at construction.
-func NewMeshRoom(id string) *MeshRoom {
-	r := &MeshRoom{
+// NewRoom constructs an empty Room. The slots' Index values are set
+// to 0..3 once at construction.
+func NewRoom(id string) *Room {
+	r := &Room{
 		roomID:       id,
 		participants: make(map[string]*Participant),
 		pairs:        newPairLedger(),
@@ -74,20 +74,20 @@ func NewMeshRoom(id string) *MeshRoom {
 }
 
 // ID returns the room identifier.
-func (r *MeshRoom) ID() string { return r.roomID }
+func (r *Room) ID() string { return r.roomID }
 
 // CreatedAt returns the room's creation timestamp (diagnostic only).
-func (r *MeshRoom) CreatedAt() time.Time { return r.createdAt }
+func (r *Room) CreatedAt() time.Time { return r.createdAt }
 
-// Lock / Unlock expose the room mutex so the handler can compose
-// multiple mutations (admit + snapshot + broadcast) inside one
-// critical section without double-locking. Every method that mutates
-// MeshRoom state assumes this lock is held by the caller.
-func (r *MeshRoom) Lock()   { r.mu.Lock() }
-func (r *MeshRoom) Unlock() { r.mu.Unlock() }
+// Lock / Unlock expose the room mutex so the signaling layer can
+// compose multiple mutations (admit + snapshot + broadcast) inside
+// one critical section without double-locking. Every method that
+// mutates Room state assumes this lock is held by the caller.
+func (r *Room) Lock()   { r.mu.Lock() }
+func (r *Room) Unlock() { r.mu.Unlock() }
 
 // ReservedCount counts the occupied slots. Caller must hold the lock.
-func (r *MeshRoom) ReservedCount() int {
+func (r *Room) ReservedCount() int {
 	n := 0
 	for _, s := range r.slots {
 		if s.State == SlotReserved {
@@ -99,16 +99,16 @@ func (r *MeshRoom) ReservedCount() int {
 
 // IsFull reports whether all 4 slots are reserved (regardless of
 // readiness).
-func (r *MeshRoom) IsFull() bool { return r.ReservedCount() == MaxParticipants }
+func (r *Room) IsFull() bool { return r.ReservedCount() == MaxParticipants }
 
 // IsEmpty reports whether all slots are free.
-func (r *MeshRoom) IsEmpty() bool { return r.ReservedCount() == 0 }
+func (r *Room) IsEmpty() bool { return r.ReservedCount() == 0 }
 
 // Admit reserves the lowest-index free slot, allocates a fresh
 // admissionIndex (= ++admissionCounter), and stores a Participant
 // keyed by peerID. Returns ErrRoomFull when full. Caller must hold
 // the lock.
-func (r *MeshRoom) Admit(peerID string, conn Conn) (*Participant, error) {
+func (r *Room) Admit(peerID string, conn Conn) (*Participant, error) {
 	if r.IsFull() {
 		return nil, ErrRoomFull
 	}
@@ -135,7 +135,7 @@ func (r *MeshRoom) Admit(peerID string, conn Conn) (*Participant, error) {
 // Participant for classification (or nil if unknown). admissionIndex
 // is NOT reused — the next Admit increments admissionCounter again.
 // Caller must hold the lock.
-func (r *MeshRoom) Release(peerID string) *Participant {
+func (r *Room) Release(peerID string) *Participant {
 	p, ok := r.participants[peerID]
 	if !ok {
 		return nil
@@ -152,13 +152,13 @@ func (r *MeshRoom) Release(peerID string) *Participant {
 
 // FindByPeerID returns the Participant with the given peerID or nil.
 // Caller must hold the lock.
-func (r *MeshRoom) FindByPeerID(peerID string) *Participant {
+func (r *Room) FindByPeerID(peerID string) *Participant {
 	return r.participants[peerID]
 }
 
 // ParticipantsSnapshot returns a fresh slice of all current
 // participants in admissionIndex order. Caller must hold the lock.
-func (r *MeshRoom) ParticipantsSnapshot() []*Participant {
+func (r *Room) ParticipantsSnapshot() []*Participant {
 	out := make([]*Participant, 0, len(r.participants))
 	for _, p := range r.participants {
 		out = append(out, p)
@@ -175,22 +175,12 @@ func (r *MeshRoom) ParticipantsSnapshot() []*Participant {
 
 // AdmissionCounter exposes the monotonic counter for tests
 // (TestAdmissionIndexNeverReused). Caller must hold the lock.
-func (r *MeshRoom) AdmissionCounter() uint64 { return r.admissionCounter }
+func (r *Room) AdmissionCounter() uint64 { return r.admissionCounter }
 
-// PairLedger returns the room's pair-epoch ledger. Caller must hold
-// the lock when mutating; reads also need it under the room model's
-// concurrency contract.
-func (r *MeshRoom) PairLedger() PairLedger { return r.pairs }
-
-// nextRosterSeq advances rosterSeq and returns the new value. Caller
-// must hold the lock. Used by every roster broadcast (§A.6) so the
-// monotonic invariant holds across snapshots and updates.
-func (r *MeshRoom) nextRosterSeq() uint64 {
-	r.rosterSeq++
-	return r.rosterSeq
-}
-
-// CurrentRosterSeq returns the most recently emitted serverSeq value
-// (or 0 if no roster broadcast has been emitted yet). Caller must
-// hold the lock.
-func (r *MeshRoom) CurrentRosterSeq() uint64 { return r.rosterSeq }
+// PairLedger returns the room's pair-epoch ledger. The concrete
+// *PairLedger structurally satisfies the protocol.PairLedger
+// interface — callers in the signaling layer can pass the result
+// directly to protocol.ValidateStalePairEpoch without an explicit
+// conversion. Caller must hold the lock when mutating; reads also
+// need it under the room model's concurrency contract.
+func (r *Room) PairLedger() *PairLedger { return r.pairs }

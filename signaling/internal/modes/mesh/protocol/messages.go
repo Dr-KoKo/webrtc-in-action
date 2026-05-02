@@ -1,5 +1,6 @@
-// Admission-family payload structs and validators (contract
-// §3.1–§3.3, §3.8, §3.17, §3.18). Per the contract:
+// Admission-family + media-family payload structs and validators
+// (contract §3.1–§3.3, §3.6, §3.7, §3.8, §3.17, §3.18, §3.19). Per
+// the contract:
 //   - `join_rejected.payload.result` is exactly two values:
 //     `join_rejected_room_full | join_rejected_invalid_room`.
 //     Version mismatch is an `error { code: "unsupported_version" }`,
@@ -7,7 +8,7 @@
 //   - `participant_released.payload.result` is exactly two values:
 //     `participant_released_media_failed | participant_released_disconnect`.
 
-package mesh
+package protocol
 
 // ---------------------------------------------------------------------
 // Shared enums carried across multiple admission-family payloads
@@ -55,16 +56,15 @@ const (
 	PeerLeftDisconnect    PeerLeftReason = "disconnect"
 )
 
-// ---------------------------------------------------------------------
-// IceServer — relayed inside `join_accepted` and `pair_negotiation_instruction`.
-// `urls` is `string | string[]` per the browser RTCIceServer dictionary.
-// ---------------------------------------------------------------------
+// MediaFailedReason — `media_failed.payload.reason` enum (§3.7).
+type MediaFailedReason string
 
-type IceServer struct {
-	URLs       any    `json:"urls"`
-	Username   string `json:"username,omitempty"`
-	Credential string `json:"credential,omitempty"`
-}
+const (
+	MediaFailedPermissionDenied MediaFailedReason = "permission_denied"
+	MediaFailedDeviceNotFound   MediaFailedReason = "device_not_found"
+	MediaFailedDeviceInUse      MediaFailedReason = "device_in_use"
+	MediaFailedOther            MediaFailedReason = "other"
+)
 
 // ---------------------------------------------------------------------
 // §3.1 join_room
@@ -123,6 +123,42 @@ func (p *JoinRejectedPayload) Validate() error {
 		return &ProtocolError{Code: CodeMalformed, Message: "join_rejected.message required"}
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------
+// §3.6 media_ready
+// ---------------------------------------------------------------------
+
+type MediaReadyPayload struct {
+	MediaCapabilities MediaCapabilities `json:"mediaCapabilities"`
+}
+
+func (p *MediaReadyPayload) Validate() error {
+	if !p.MediaCapabilities.Audio || !p.MediaCapabilities.Video {
+		return &ProtocolError{
+			Code:    CodeUnsupportedMediaCapability,
+			Message: "media_ready requires audio=true AND video=true (MVP)",
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------
+// §3.7 media_failed
+// ---------------------------------------------------------------------
+
+type MediaFailedPayload struct {
+	Reason MediaFailedReason `json:"reason"`
+	Detail string            `json:"detail,omitempty"`
+}
+
+func (p *MediaFailedPayload) Validate() error {
+	switch p.Reason {
+	case MediaFailedPermissionDenied, MediaFailedDeviceNotFound,
+		MediaFailedDeviceInUse, MediaFailedOther:
+		return nil
+	}
+	return &ProtocolError{Code: CodeMalformed, Message: "media_failed.reason not in canonical enum"}
 }
 
 // ---------------------------------------------------------------------

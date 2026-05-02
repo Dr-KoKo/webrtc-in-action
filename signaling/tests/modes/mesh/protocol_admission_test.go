@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"webrtc-lab/signaling/internal/modes/mesh"
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 func TestJoinAcceptedRoundTrip(t *testing.T) {
@@ -23,11 +23,11 @@ func TestJoinAcceptedRoundTrip(t *testing.T) {
         "iceServers": [{ "urls": ["stun:stun.l.google.com:19302"] }]
       }
     }`)
-	d, err := mesh.DecodeEnvelope(raw)
+	d, err := protocol.DecodeEnvelope(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	p, ok := d.Message.(*mesh.JoinAcceptedPayload)
+	p, ok := d.Message.(*protocol.JoinAcceptedPayload)
 	if !ok {
 		t.Fatalf("payload type = %T, want *JoinAcceptedPayload", d.Message)
 	}
@@ -37,23 +37,23 @@ func TestJoinAcceptedRoundTrip(t *testing.T) {
 }
 
 func TestJoinRejectedAcceptsRoomFull(t *testing.T) {
-	payload, _ := json.Marshal(mesh.JoinRejectedPayload{
-		Result:  mesh.JoinRejectedRoomFull,
-		Reason:  mesh.ReasonRoomFull,
+	payload, _ := json.Marshal(protocol.JoinRejectedPayload{
+		Result:  protocol.JoinRejectedRoomFull,
+		Reason:  protocol.ReasonRoomFull,
 		Message: "Room 'demo' already has 4 reserved participants.",
 	})
-	if err := mesh.Validate(mesh.TypeJoinRejected, payload); err != nil {
+	if err := protocol.Validate(protocol.TypeJoinRejected, payload); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestJoinRejectedAcceptsInvalidRoom(t *testing.T) {
-	payload, _ := json.Marshal(mesh.JoinRejectedPayload{
-		Result:  mesh.JoinRejectedInvalidRoom,
-		Reason:  mesh.ReasonInvalidRoomID,
+	payload, _ := json.Marshal(protocol.JoinRejectedPayload{
+		Result:  protocol.JoinRejectedInvalidRoom,
+		Reason:  protocol.ReasonInvalidRoomID,
 		Message: "Room ID must match ^[A-Za-z0-9._-]{1,64}$.",
 	})
-	if err := mesh.Validate(mesh.TypeJoinRejected, payload); err != nil {
+	if err := protocol.Validate(protocol.TypeJoinRejected, payload); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -63,12 +63,12 @@ func TestJoinRejectedAcceptsInvalidRoom(t *testing.T) {
 // — version mismatch flows through `error { code: unsupported_version }`.
 func TestJoinRejectedRejectsUnsupportedVersion(t *testing.T) {
 	payload := []byte(`{"result":"join_rejected_unsupported_version","reason":"room_full","message":"x"}`)
-	err := mesh.Validate(mesh.TypeJoinRejected, payload)
+	err := protocol.Validate(protocol.TypeJoinRejected, payload)
 	if err == nil {
 		t.Fatal("expected join_rejected_unsupported_version to be rejected")
 	}
-	var perr *mesh.ProtocolError
-	if !asProtocolError(err, &perr) || perr.Code != mesh.CodeMalformed {
+	var perr *protocol.ProtocolError
+	if !asProtocolError(err, &perr) || perr.Code != protocol.CodeMalformed {
 		t.Fatalf("got %v, want malformed protocol error", err)
 	}
 	if !strings.Contains(perr.Message, "join_rejected.result") {
@@ -89,7 +89,7 @@ func TestJoinRejectedResultEnumIsExactlyTwo(t *testing.T) {
 		if ok == "join_rejected_invalid_room" {
 			payload = []byte(`{"result":"` + ok + `","reason":"invalid_room_id","message":"x"}`)
 		}
-		if err := mesh.Validate(mesh.TypeJoinRejected, payload); err != nil {
+		if err := protocol.Validate(protocol.TypeJoinRejected, payload); err != nil {
 			t.Errorf("expected %q accepted, got %v", ok, err)
 		}
 	}
@@ -101,35 +101,35 @@ func TestJoinRejectedResultEnumIsExactlyTwo(t *testing.T) {
 	}
 	for _, bv := range bad {
 		payload := []byte(`{"result":"` + bv + `","reason":"room_full","message":"x"}`)
-		if err := mesh.Validate(mesh.TypeJoinRejected, payload); err == nil {
+		if err := protocol.Validate(protocol.TypeJoinRejected, payload); err == nil {
 			t.Errorf("expected %q rejected, got nil", bv)
 		}
 	}
 }
 
 func TestPeerLeftRoundTrip(t *testing.T) {
-	payload, _ := json.Marshal(mesh.PeerLeftPayload{
+	payload, _ := json.Marshal(protocol.PeerLeftPayload{
 		PeerID: "11111111-2222-4333-8444-555555555555",
-		Reason: mesh.PeerLeftDisconnect,
+		Reason: protocol.PeerLeftDisconnect,
 	})
-	if err := mesh.Validate(mesh.TypePeerLeft, payload); err != nil {
+	if err := protocol.Validate(protocol.TypePeerLeft, payload); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestParticipantReleasedRoundTrip(t *testing.T) {
-	payload, _ := json.Marshal(mesh.ParticipantReleasedPayload{
-		Result: mesh.ParticipantReleasedMediaFailed,
-		Reason: mesh.ReleasedReasonMediaFailed,
+	payload, _ := json.Marshal(protocol.ParticipantReleasedPayload{
+		Result: protocol.ParticipantReleasedMediaFailed,
+		Reason: protocol.ReleasedReasonMediaFailed,
 		Detail: "camera_permission_denied",
 	})
-	if err := mesh.Validate(mesh.TypeParticipantReleased, payload); err != nil {
+	if err := protocol.Validate(protocol.TypeParticipantReleased, payload); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestLeaveRoomEmptyPayloadAccepted(t *testing.T) {
-	if err := mesh.Validate(mesh.TypeLeaveRoom, []byte(`{}`)); err != nil {
+	if err := protocol.Validate(protocol.TypeLeaveRoom, []byte(`{}`)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

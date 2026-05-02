@@ -44,6 +44,8 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // SDP / ICE / TURN sentinel values. Each is unique enough that any log
@@ -87,7 +89,7 @@ func TestNoMediaRelay_RelayPathsAreByteIdentical(t *testing.T) {
 	if err := connA.Write(ctx, websocket.MessageText, offerRaw); err != nil {
 		t.Fatalf("write pair_offer: %v", err)
 	}
-	got := readMeshFrameOfType(t, connB, ctx, mesh.TypePairOffer)
+	got := readMeshFrameOfType(t, connB, ctx, protocol.TypePairOffer)
 	assertVerbatimRelay(t, "pair_offer", offerPayload, got.Payload)
 
 	// ---- pair_answer -----------------------------------------------
@@ -106,7 +108,7 @@ func TestNoMediaRelay_RelayPathsAreByteIdentical(t *testing.T) {
 	if err := connB.Write(ctx, websocket.MessageText, answerRaw); err != nil {
 		t.Fatalf("write pair_answer: %v", err)
 	}
-	gotA := readMeshFrameOfType(t, connA, ctx, mesh.TypePairAnswer)
+	gotA := readMeshFrameOfType(t, connA, ctx, protocol.TypePairAnswer)
 	assertVerbatimRelay(t, "pair_answer", answerPayload, gotA.Payload)
 
 	// ---- pair_ice_candidate ---------------------------------------
@@ -125,7 +127,7 @@ func TestNoMediaRelay_RelayPathsAreByteIdentical(t *testing.T) {
 	if err := connA.Write(ctx, websocket.MessageText, iceRaw); err != nil {
 		t.Fatalf("write pair_ice_candidate: %v", err)
 	}
-	gotIce := readMeshFrameOfType(t, connB, ctx, mesh.TypePairIceCandidate)
+	gotIce := readMeshFrameOfType(t, connB, ctx, protocol.TypePairIceCandidate)
 	assertVerbatimRelay(t, "pair_ice_candidate", icePayload, gotIce.Payload)
 
 	// ---- pair_media_state (fan-out) -------------------------------
@@ -144,7 +146,7 @@ func TestNoMediaRelay_RelayPathsAreByteIdentical(t *testing.T) {
 	if err := connA.Write(ctx, websocket.MessageText, stateRaw); err != nil {
 		t.Fatalf("write pair_media_state: %v", err)
 	}
-	gotState := readMeshFrameOfType(t, connB, ctx, mesh.TypePairMediaState)
+	gotState := readMeshFrameOfType(t, connB, ctx, protocol.TypePairMediaState)
 	assertVerbatimRelay(t, "pair_media_state", mediaStatePayload, gotState.Payload)
 
 	// ---- pair_failed ----------------------------------------------
@@ -159,7 +161,7 @@ func TestNoMediaRelay_RelayPathsAreByteIdentical(t *testing.T) {
 	if err := connA.Write(ctx, websocket.MessageText, failedRaw); err != nil {
 		t.Fatalf("write pair_failed: %v", err)
 	}
-	gotFailed := readMeshFrameOfType(t, connB, ctx, mesh.TypePairFailed)
+	gotFailed := readMeshFrameOfType(t, connB, ctx, protocol.TypePairFailed)
 	assertVerbatimRelay(t, "pair_failed", failedPayload, gotFailed.Payload)
 
 	// ---- log assertions ------------------------------------------
@@ -241,7 +243,7 @@ func assertNoSensitiveLogs(t *testing.T, captured string) {
 func mustEnvelope(t *testing.T, msgType, roomID, pairID string, payload map[string]any) []byte {
 	t.Helper()
 	env := map[string]any{
-		"v":       mesh.ContractVersion,
+		"v":       protocol.ContractVersion,
 		"type":    msgType,
 		"roomId":  roomID,
 		"payload": payload,

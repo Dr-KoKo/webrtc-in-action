@@ -9,10 +9,10 @@ package mesh_test
 import (
 	"testing"
 
-	"webrtc-lab/signaling/internal/modes/mesh"
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
-// fakeLedger satisfies mesh.PairLedger by serving epochs from a map.
+// fakeLedger satisfies protocol.PairLedger by serving epochs from a map.
 type fakeLedger struct{ m map[string]uint64 }
 
 func (f *fakeLedger) CurrentPairEpoch(pairID string) (uint64, bool) {
@@ -23,9 +23,9 @@ func (f *fakeLedger) CurrentPairEpoch(pairID string) (uint64, bool) {
 // fakeSink stands in for the server's relay output. M2 has no real
 // relay yet; this type exists so the test asserts "no message
 // delivered" symbolically.
-type fakeSink struct{ delivered []mesh.Envelope }
+type fakeSink struct{ delivered []protocol.Envelope }
 
-func (s *fakeSink) Send(env mesh.Envelope) { s.delivered = append(s.delivered, env) }
+func (s *fakeSink) Send(env protocol.Envelope) { s.delivered = append(s.delivered, env) }
 
 // TestStalePairEpochReturnsErrorAndDoesNotForward — inbound pair
 // message with payload.pairEpoch < server.currentEpoch[pairId] returns
@@ -37,16 +37,16 @@ func TestStalePairEpochReturnsErrorAndDoesNotForward(t *testing.T) {
 
 	// Simulated inbound: pair_offer with payload.pairEpoch = 1, while
 	// the ledger's current is 2.
-	pair := mesh.PairOfferPayload{}
+	pair := protocol.PairOfferPayload{}
 	pair.PairID = "1-3"
 	pair.PairEpoch = 1
-	pair.SDP = mesh.SDPBody{Type: "offer", SDP: "v=0\r\n..."}
+	pair.SDP = protocol.SDPBody{Type: "offer", SDP: "v=0\r\n..."}
 
-	if perr := mesh.ValidateStalePairEpoch(pair.PairID, pair.PairEpoch, ledger); perr == nil {
+	if perr := protocol.ValidateStalePairEpoch(pair.PairID, pair.PairEpoch, ledger); perr == nil {
 		t.Fatal("expected ProtocolError for stale pairEpoch")
 	} else {
-		if perr.Code != mesh.CodeStalePairEpoch {
-			t.Fatalf("code = %q, want %q", perr.Code, mesh.CodeStalePairEpoch)
+		if perr.Code != protocol.CodeStalePairEpoch {
+			t.Fatalf("code = %q, want %q", perr.Code, protocol.CodeStalePairEpoch)
 		}
 	}
 
@@ -58,7 +58,7 @@ func TestStalePairEpochReturnsErrorAndDoesNotForward(t *testing.T) {
 
 func TestEqualPairEpochAccepted(t *testing.T) {
 	ledger := &fakeLedger{m: map[string]uint64{"1-3": 2}}
-	if perr := mesh.ValidateStalePairEpoch("1-3", 2, ledger); perr != nil {
+	if perr := protocol.ValidateStalePairEpoch("1-3", 2, ledger); perr != nil {
 		t.Fatalf("expected equal-epoch accepted; got %v", perr)
 	}
 }
@@ -68,16 +68,16 @@ func TestEqualPairEpochAccepted(t *testing.T) {
 // (it implies a client invented an epoch the server never issued).
 func TestHigherPairEpochRejected(t *testing.T) {
 	ledger := &fakeLedger{m: map[string]uint64{"1-3": 2}}
-	perr := mesh.ValidateStalePairEpoch("1-3", 3, ledger)
-	if perr == nil || perr.Code != mesh.CodeStalePairEpoch {
+	perr := protocol.ValidateStalePairEpoch("1-3", 3, ledger)
+	if perr == nil || perr.Code != protocol.CodeStalePairEpoch {
 		t.Fatalf("expected stale_pair_epoch; got %v", perr)
 	}
 }
 
 func TestUnknownPairIDRejected(t *testing.T) {
 	ledger := &fakeLedger{m: map[string]uint64{}}
-	perr := mesh.ValidateStalePairEpoch("9-99", 1, ledger)
-	if perr == nil || perr.Code != mesh.CodeStalePairEpoch {
+	perr := protocol.ValidateStalePairEpoch("9-99", 1, ledger)
+	if perr == nil || perr.Code != protocol.CodeStalePairEpoch {
 		t.Fatalf("expected stale_pair_epoch for unknown pair; got %v", perr)
 	}
 }

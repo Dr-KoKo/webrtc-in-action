@@ -20,6 +20,8 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // admitPairAndReachInstruction runs the boilerplate: dial two
@@ -31,7 +33,7 @@ func admitPairAndReachInstruction(t *testing.T, ts *httptest.Server, ctx context
 	_ = drainMeshFrames(t, connA, ctx, 2)
 	connB, _, idxB := joinAndExpectAccepted(t, ts, ctx, roomID)
 	_ = drainMeshFrames(t, connB, ctx, 2)
-	_ = readMeshFrameOfType(t, connA, ctx, mesh.TypeMeshRosterUpdate)
+	_ = readMeshFrameOfType(t, connA, ctx, protocol.TypeMeshRosterUpdate)
 
 	sendMediaReady(t, connA, ctx, roomID)
 	drainAllRosterUpdatesForMediaReady(t, []*websocket.Conn{connA, connB}, ctx)
@@ -40,7 +42,7 @@ func admitPairAndReachInstruction(t *testing.T, ts *httptest.Server, ctx context
 
 	aInstr := readNPairInstructions(t, connA, ctx, 1)
 	_ = readNPairInstructions(t, connB, ctx, 1)
-	return connA, connB, mesh.MakePairID(idxA, idxB), aInstr[0].PairEpoch
+	return connA, connB, protocol.MakePairID(idxA, idxB), aInstr[0].PairEpoch
 }
 
 // TestValidPairOfferRelayedOnce — the offerer's pair_offer is forwarded
@@ -65,11 +67,11 @@ func TestValidPairOfferRelayedOnce(t *testing.T) {
 	}
 
 	// Read the relayed envelope on B; assert exactly one with type=pair_offer.
-	got := readMeshFrameOfType(t, connB, ctx, mesh.TypePairOffer)
+	got := readMeshFrameOfType(t, connB, ctx, protocol.TypePairOffer)
 	if got.From == "" {
 		t.Fatalf("relayed offer missing `from` peer id")
 	}
-	var p mesh.PairOfferPayload
+	var p protocol.PairOfferPayload
 	if err := json.Unmarshal(got.Payload, &p); err != nil {
 		t.Fatalf("relayed payload unmarshal: %v", err)
 	}
@@ -105,15 +107,15 @@ func TestValidPairAnswerRelayedOnce(t *testing.T) {
 	if err := connA.Write(ctx, websocket.MessageText, offerRaw); err != nil {
 		t.Fatalf("A write pair_offer failed: %v", err)
 	}
-	_ = readMeshFrameOfType(t, connB, ctx, mesh.TypePairOffer)
+	_ = readMeshFrameOfType(t, connB, ctx, protocol.TypePairOffer)
 
 	// B → answer; should be relayed once to A.
 	answerRaw := buildPairSDPEnvelope(t, "pair_answer", "relayanswer", pairID, epoch, "answer")
 	if err := connB.Write(ctx, websocket.MessageText, answerRaw); err != nil {
 		t.Fatalf("B write pair_answer failed: %v", err)
 	}
-	got := readMeshFrameOfType(t, connA, ctx, mesh.TypePairAnswer)
-	var p mesh.PairAnswerPayload
+	got := readMeshFrameOfType(t, connA, ctx, protocol.TypePairAnswer)
+	var p protocol.PairAnswerPayload
 	if err := json.Unmarshal(got.Payload, &p); err != nil {
 		t.Fatalf("relayed answer payload unmarshal: %v", err)
 	}
@@ -153,8 +155,8 @@ func TestStalePairOfferRejectedAndNotForwarded(t *testing.T) {
 	}
 
 	// Sender receives error stale_pair_epoch.
-	got := readMeshFrameOfType(t, connA, ctx, mesh.TypeError)
-	var ep mesh.ErrorPayload
+	got := readMeshFrameOfType(t, connA, ctx, protocol.TypeError)
+	var ep protocol.ErrorPayload
 	if err := json.Unmarshal(got.Payload, &ep); err != nil {
 		t.Fatalf("error payload unmarshal: %v", err)
 	}
@@ -164,7 +166,7 @@ func TestStalePairOfferRejectedAndNotForwarded(t *testing.T) {
 	// Accept either malformed or stale_pair_epoch here so the test
 	// proves the pair message is rejected and never forwarded.
 	switch ep.Code {
-	case mesh.CodeStalePairEpoch, mesh.CodeMalformed:
+	case protocol.CodeStalePairEpoch, protocol.CodeMalformed:
 	default:
 		t.Fatalf("error.code = %q; want stale_pair_epoch or malformed", ep.Code)
 	}
@@ -175,12 +177,12 @@ func TestStalePairOfferRejectedAndNotForwarded(t *testing.T) {
 	if err := connA.Write(ctx, websocket.MessageText, bumpedRaw); err != nil {
 		t.Fatalf("A write higher-epoch pair_offer failed: %v", err)
 	}
-	got2 := readMeshFrameOfType(t, connA, ctx, mesh.TypeError)
-	var ep2 mesh.ErrorPayload
+	got2 := readMeshFrameOfType(t, connA, ctx, protocol.TypeError)
+	var ep2 protocol.ErrorPayload
 	if err := json.Unmarshal(got2.Payload, &ep2); err != nil {
 		t.Fatalf("error payload 2 unmarshal: %v", err)
 	}
-	if ep2.Code != mesh.CodeStalePairEpoch {
+	if ep2.Code != protocol.CodeStalePairEpoch {
 		t.Fatalf("error.code = %q; want stale_pair_epoch", ep2.Code)
 	}
 	// B must not receive any forwarded offer.
@@ -207,12 +209,12 @@ func TestWrongRolePairOfferRejected(t *testing.T) {
 	if err := connB.Write(ctx, websocket.MessageText, raw); err != nil {
 		t.Fatalf("B write pair_offer (wrong-role) failed: %v", err)
 	}
-	got := readMeshFrameOfType(t, connB, ctx, mesh.TypeError)
-	var ep mesh.ErrorPayload
+	got := readMeshFrameOfType(t, connB, ctx, protocol.TypeError)
+	var ep protocol.ErrorPayload
 	if err := json.Unmarshal(got.Payload, &ep); err != nil {
 		t.Fatalf("error payload unmarshal: %v", err)
 	}
-	if ep.Code != mesh.CodeUnexpectedOffer {
+	if ep.Code != protocol.CodeUnexpectedOffer {
 		t.Fatalf("error.code = %q; want unexpected_offer", ep.Code)
 	}
 	expectNoFurtherFrame(t, connA)
@@ -233,7 +235,7 @@ func buildPairSDPEnvelope(t *testing.T, msgType, roomID, pairID string, epoch ui
 		},
 	}
 	env := map[string]any{
-		"v":       mesh.ContractVersion,
+		"v":       protocol.ContractVersion,
 		"type":    msgType,
 		"roomId":  roomID,
 		"to":      "00000000-0000-4000-8000-000000000001",
@@ -245,4 +247,3 @@ func buildPairSDPEnvelope(t *testing.T, msgType, roomID, pairID string, epoch ui
 	}
 	return raw
 }
-

@@ -43,6 +43,8 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // admitNAndReachMediaReady admits exactly n participants into a fresh
@@ -104,9 +106,9 @@ func admitNAndReachMediaReady(
 func buildPairMediaStateEnvelope(
 	t *testing.T,
 	roomID string,
-	mic mesh.MicState,
-	cam mesh.CameraState,
-	screen mesh.ScreenShareState,
+	mic protocol.MicState,
+	cam protocol.CameraState,
+	screen protocol.ScreenShareState,
 	extras map[string]any,
 ) []byte {
 	t.Helper()
@@ -119,7 +121,7 @@ func buildPairMediaStateEnvelope(
 		payload[k] = v
 	}
 	env := map[string]any{
-		"v":       mesh.ContractVersion,
+		"v":       protocol.ContractVersion,
 		"type":    "pair_media_state",
 		"roomId":  roomID,
 		"payload": payload,
@@ -137,10 +139,10 @@ func readPairMediaStateEnvelope(
 	t *testing.T,
 	conn *websocket.Conn,
 	ctx context.Context,
-) (mesh.Envelope, mesh.PairMediaStatePayload, map[string]any) {
+) (protocol.Envelope, protocol.PairMediaStatePayload, map[string]any) {
 	t.Helper()
-	env := readMeshFrameOfType(t, conn, ctx, mesh.TypePairMediaState)
-	var typed mesh.PairMediaStatePayload
+	env := readMeshFrameOfType(t, conn, ctx, protocol.TypePairMediaState)
+	var typed protocol.PairMediaStatePayload
 	if err := json.Unmarshal(env.Payload, &typed); err != nil {
 		t.Fatalf("typed payload unmarshal: %v", err)
 	}
@@ -165,7 +167,7 @@ func TestPairMediaStateFanOutN2(t *testing.T) {
 		defer c.CloseNow()
 	}
 
-	raw := buildPairMediaStateEnvelope(t, "ms2", mesh.MicOff, mesh.CamOn, mesh.ScreenInactive, nil)
+	raw := buildPairMediaStateEnvelope(t, "ms2", protocol.MicOff, protocol.CamOn, protocol.ScreenInactive, nil)
 	if err := conns[0].Write(ctx, websocket.MessageText, raw); err != nil {
 		t.Fatalf("A write pair_media_state failed: %v", err)
 	}
@@ -174,7 +176,7 @@ func TestPairMediaStateFanOutN2(t *testing.T) {
 	if env.From == "" {
 		t.Fatalf("relayed envelope missing `from`")
 	}
-	if typed.Microphone != mesh.MicOff || typed.Camera != mesh.CamOn || typed.ScreenShare != mesh.ScreenInactive {
+	if typed.Microphone != protocol.MicOff || typed.Camera != protocol.CamOn || typed.ScreenShare != protocol.ScreenInactive {
 		t.Fatalf("payload values mutated: %+v", typed)
 	}
 	// Sender (A) must NOT receive its own fan-out. Only the sender
@@ -214,7 +216,7 @@ func TestPairMediaStateFanOutN3(t *testing.T) {
 		defer c.CloseNow()
 	}
 
-	raw := buildPairMediaStateEnvelope(t, "ms3", mesh.MicOn, mesh.CamOff, mesh.ScreenInactive, nil)
+	raw := buildPairMediaStateEnvelope(t, "ms3", protocol.MicOn, protocol.CamOff, protocol.ScreenInactive, nil)
 	if err := conns[0].Write(ctx, websocket.MessageText, raw); err != nil {
 		t.Fatalf("A write pair_media_state failed: %v", err)
 	}
@@ -224,7 +226,7 @@ func TestPairMediaStateFanOutN3(t *testing.T) {
 		if env.From == "" {
 			t.Fatalf("conn[%d] relayed envelope missing `from`", i)
 		}
-		if typed.Microphone != mesh.MicOn || typed.Camera != mesh.CamOff || typed.ScreenShare != mesh.ScreenInactive {
+		if typed.Microphone != protocol.MicOn || typed.Camera != protocol.CamOff || typed.ScreenShare != protocol.ScreenInactive {
 			t.Fatalf("conn[%d] payload mutated: %+v", i, typed)
 		}
 	}
@@ -244,7 +246,7 @@ func TestPairMediaStateFanOutN4(t *testing.T) {
 		defer c.CloseNow()
 	}
 
-	raw := buildPairMediaStateEnvelope(t, "ms4", mesh.MicOff, mesh.CamOff, mesh.ScreenInactive, nil)
+	raw := buildPairMediaStateEnvelope(t, "ms4", protocol.MicOff, protocol.CamOff, protocol.ScreenInactive, nil)
 	if err := conns[0].Write(ctx, websocket.MessageText, raw); err != nil {
 		t.Fatalf("A write pair_media_state failed: %v", err)
 	}
@@ -254,7 +256,7 @@ func TestPairMediaStateFanOutN4(t *testing.T) {
 		if env.From == "" {
 			t.Fatalf("conn[%d] relayed envelope missing `from`", i)
 		}
-		if typed.Microphone != mesh.MicOff || typed.Camera != mesh.CamOff || typed.ScreenShare != mesh.ScreenInactive {
+		if typed.Microphone != protocol.MicOff || typed.Camera != protocol.CamOff || typed.ScreenShare != protocol.ScreenInactive {
 			t.Fatalf("conn[%d] payload mutated: %+v", i, typed)
 		}
 	}
@@ -282,13 +284,13 @@ func TestPairMediaStateFanOutPayloadBytesUnchanged(t *testing.T) {
 		"extraField":  "must-pass-through",
 		"clientHints": map[string]any{"build": "test"},
 	}
-	raw := buildPairMediaStateEnvelope(t, "msextras", mesh.MicOn, mesh.CamOn, mesh.ScreenInactive, extras)
+	raw := buildPairMediaStateEnvelope(t, "msextras", protocol.MicOn, protocol.CamOn, protocol.ScreenInactive, extras)
 	if err := conns[0].Write(ctx, websocket.MessageText, raw); err != nil {
 		t.Fatalf("A write pair_media_state failed: %v", err)
 	}
 
 	_, typed, rawPayload := readPairMediaStateEnvelope(t, conns[1], ctx)
-	if typed.Microphone != mesh.MicOn || typed.Camera != mesh.CamOn || typed.ScreenShare != mesh.ScreenInactive {
+	if typed.Microphone != protocol.MicOn || typed.Camera != protocol.CamOn || typed.ScreenShare != protocol.ScreenInactive {
 		t.Fatalf("relayed required fields mutated: %+v", typed)
 	}
 	if rawPayload["extraField"] != "must-pass-through" {
@@ -325,17 +327,17 @@ func TestPairMediaStateNotInRoomRejected(t *testing.T) {
 	// A fresh client that never joined the room sends a message.
 	stranger := dialMesh(t, ts, ctx)
 	defer stranger.CloseNow()
-	raw := buildPairMediaStateEnvelope(t, "msrej", mesh.MicOff, mesh.CamOn, mesh.ScreenInactive, nil)
+	raw := buildPairMediaStateEnvelope(t, "msrej", protocol.MicOff, protocol.CamOn, protocol.ScreenInactive, nil)
 	if err := stranger.Write(ctx, websocket.MessageText, raw); err != nil {
 		t.Fatalf("stranger write failed: %v", err)
 	}
 
-	got := readMeshFrameOfType(t, stranger, ctx, mesh.TypeError)
-	var ep mesh.ErrorPayload
+	got := readMeshFrameOfType(t, stranger, ctx, protocol.TypeError)
+	var ep protocol.ErrorPayload
 	if err := json.Unmarshal(got.Payload, &ep); err != nil {
 		t.Fatalf("error payload unmarshal: %v", err)
 	}
-	if ep.Code != mesh.CodeNotInRoom {
+	if ep.Code != protocol.CodeNotInRoom {
 		t.Fatalf("error.code = %q; want not_in_room", ep.Code)
 	}
 	// Only check one room participant for "no fan-out". Checking both
@@ -364,12 +366,12 @@ func TestPairMediaStateMalformedPayloadRejected(t *testing.T) {
 	if err := conns[0].Write(ctx, websocket.MessageText, bad); err != nil {
 		t.Fatalf("A write malformed pair_media_state failed: %v", err)
 	}
-	got := readMeshFrameOfType(t, conns[0], ctx, mesh.TypeError)
-	var ep mesh.ErrorPayload
+	got := readMeshFrameOfType(t, conns[0], ctx, protocol.TypeError)
+	var ep protocol.ErrorPayload
 	if err := json.Unmarshal(got.Payload, &ep); err != nil {
 		t.Fatalf("error payload unmarshal: %v", err)
 	}
-	if ep.Code != mesh.CodeMalformed {
+	if ep.Code != protocol.CodeMalformed {
 		t.Fatalf("error.code = %q; want malformed", ep.Code)
 	}
 	expectNoFurtherFrame(t, conns[1])
@@ -394,7 +396,7 @@ func TestPairMediaStateServerNeverRelaysMediaBytes(t *testing.T) {
 		defer c.CloseNow()
 	}
 
-	raw := buildPairMediaStateEnvelope(t, "msmedia", mesh.MicOff, mesh.CamOn, mesh.ScreenInactive, nil)
+	raw := buildPairMediaStateEnvelope(t, "msmedia", protocol.MicOff, protocol.CamOn, protocol.ScreenInactive, nil)
 	if err := conns[0].Write(ctx, websocket.MessageText, raw); err != nil {
 		t.Fatalf("A write pair_media_state failed: %v", err)
 	}

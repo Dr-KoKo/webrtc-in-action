@@ -26,6 +26,8 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // buildPairIceEnvelope marshals a v=2 pair_ice_candidate envelope. The
@@ -44,7 +46,7 @@ func buildPairIceEnvelope(t *testing.T, roomID, pairID string, epoch uint64, can
 		t.Fatalf("payload marshal: %v", err)
 	}
 	env := map[string]any{
-		"v":       mesh.ContractVersion,
+		"v":       protocol.ContractVersion,
 		"type":    "pair_ice_candidate",
 		"roomId":  roomID,
 		"to":      "00000000-0000-4000-8000-000000000001",
@@ -89,7 +91,7 @@ func TestValidPairIceCandidateRelayedOnce(t *testing.T) {
 		t.Fatalf("A write pair_ice_candidate failed: %v", err)
 	}
 
-	got := readMeshFrameOfType(t, connB, ctx, mesh.TypePairIceCandidate)
+	got := readMeshFrameOfType(t, connB, ctx, protocol.TypePairIceCandidate)
 	if got.From == "" {
 		t.Fatalf("relayed pair_ice_candidate missing `from` peer id")
 	}
@@ -148,7 +150,7 @@ func TestPairIceCandidateNullRelayed(t *testing.T) {
 	if err := connA.Write(ctx, websocket.MessageText, raw); err != nil {
 		t.Fatalf("A write pair_ice_candidate (null) failed: %v", err)
 	}
-	got := readMeshFrameOfType(t, connB, ctx, mesh.TypePairIceCandidate)
+	got := readMeshFrameOfType(t, connB, ctx, protocol.TypePairIceCandidate)
 	var raw2 map[string]json.RawMessage
 	if err := json.Unmarshal(got.Payload, &raw2); err != nil {
 		t.Fatalf("relayed payload unmarshal: %v", err)
@@ -179,12 +181,12 @@ func TestPairIceCandidateEmptyStringRejectedAsMalformed(t *testing.T) {
 		t.Fatalf("A write pair_ice_candidate (empty) failed: %v", err)
 	}
 
-	got := readMeshFrameOfType(t, connA, ctx, mesh.TypeError)
-	var ep mesh.ErrorPayload
+	got := readMeshFrameOfType(t, connA, ctx, protocol.TypeError)
+	var ep protocol.ErrorPayload
 	if err := json.Unmarshal(got.Payload, &ep); err != nil {
 		t.Fatalf("error payload unmarshal: %v", err)
 	}
-	if ep.Code != mesh.CodeMalformed {
+	if ep.Code != protocol.CodeMalformed {
 		t.Fatalf("error.code = %q; want malformed", ep.Code)
 	}
 	expectNoFurtherFrame(t, connB)
@@ -210,12 +212,12 @@ func TestPairIceCandidateStaleEpochRejected(t *testing.T) {
 	if err := connA.Write(ctx, websocket.MessageText, staleRaw); err != nil {
 		t.Fatalf("A write stale pair_ice_candidate failed: %v", err)
 	}
-	got := readMeshFrameOfType(t, connA, ctx, mesh.TypeError)
-	var ep mesh.ErrorPayload
+	got := readMeshFrameOfType(t, connA, ctx, protocol.TypeError)
+	var ep protocol.ErrorPayload
 	if err := json.Unmarshal(got.Payload, &ep); err != nil {
 		t.Fatalf("error payload unmarshal: %v", err)
 	}
-	if ep.Code != mesh.CodeStalePairEpoch {
+	if ep.Code != protocol.CodeStalePairEpoch {
 		t.Fatalf("error.code = %q; want stale_pair_epoch", ep.Code)
 	}
 	expectNoFurtherFrame(t, connB)
@@ -244,8 +246,8 @@ func TestPairIceCandidateNotRelayedToUnrelatedPeer(t *testing.T) {
 	connC, _, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connC.CloseNow()
 	_ = drainMeshFrames(t, connC, ctx, 2)
-	_ = readMeshFrameOfType(t, connA, ctx, mesh.TypeMeshRosterUpdate)
-	_ = readMeshFrameOfType(t, connB, ctx, mesh.TypeMeshRosterUpdate)
+	_ = readMeshFrameOfType(t, connA, ctx, protocol.TypeMeshRosterUpdate)
+	_ = readMeshFrameOfType(t, connB, ctx, protocol.TypeMeshRosterUpdate)
 
 	// A sends an A↔B candidate. C must not see it.
 	cand := json.RawMessage(`{"candidate":"candidate:1 1 UDP 100 1.2.3.4 1234 typ host","sdpMid":"0","sdpMLineIndex":0}`)
@@ -253,7 +255,7 @@ func TestPairIceCandidateNotRelayedToUnrelatedPeer(t *testing.T) {
 	if err := connA.Write(ctx, websocket.MessageText, raw); err != nil {
 		t.Fatalf("A write pair_ice_candidate failed: %v", err)
 	}
-	got := readMeshFrameOfType(t, connB, ctx, mesh.TypePairIceCandidate)
+	got := readMeshFrameOfType(t, connB, ctx, protocol.TypePairIceCandidate)
 	if got.From == "" {
 		t.Fatalf("relayed envelope missing `from`")
 	}
