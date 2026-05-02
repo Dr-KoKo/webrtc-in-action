@@ -1,0 +1,352 @@
+// reconnect — §§3.14–3.16. Two pair-scoped flows live here:
+//
+//   1. `pair_failed` (C→S→C) — endpoint-detected pair failure. The
+//      server validates `pairId` + `pairEpoch`, marks the
+//      server-side Pair.State = PairFailed (bookkeeping), forwards
+//      the original payload bytes to the OTHER endpoint of the pair
+//      only, and does NOT broadcast `mesh_roster_update { presence:
+//      "failed" }` to the room (FR-025: failed presence is
+//      per-(viewer, subject) and derived locally from each client's
+//      PairContext).
+//
+//   2. `reconnect_pair` (C→S) — user clicked Reconnect on a failed
+//      tile. The server validates pair membership + state +
+//      observed epoch under the per-room mutex (which serializes
+//      simultaneous clicks → exactly one winner); on success it
+//      increments `pairEpoch[pairId]` by exactly +1, transitions
+//      Pair.State = PairReconnecting, and emits
+//      `pair_reconnect_instruction` to both endpoints with the new
+//      epoch. The losing side of a simultaneous-click race observes
+//      `stale_pair_epoch` and does not increment a second time.
+
+package signaling
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"time"
+
+	"webrtc-lab/signaling/internal/modes/mesh/protocol"
+	"webrtc-lab/signaling/internal/modes/mesh/room"
+)
+
+// handlePairFailed implements §3.16 — endpoint-detected failure
+// relay. Mirrors the validation shape of relayPairIce
+// (pair_trickle.go) but also flips the server-side Pair.State so a
+// subsequent reconnect_pair can validate the failed precondition.
+func (s *Service) handlePairFailed(ctx context.Context, conn Conn, d *protocol.Decoded) error {
+	payload, ok := d.Message.(*protocol.PairFailedPayload)
+	if !ok || payload == nil {
+		s.writeError(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeInternalError,
+			Message: "pair_failed decode mismatch",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	state := conn.State()
+	if state.PeerID == "" || state.RoomID == "" {
+		s.writeError(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
+			Message: "pair_failed requires an admitted participant",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	rm := s.Rooms.Room(state.RoomID)
+	if rm == nil {
+		s.writeError(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
+			Message: "mesh room not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+
+	rm.Lock()
+	ledger := rm.PairLedger()
+	if ledger == nil {
+		rm.Unlock()
+		s.writeError(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeInternalError,
+			Message: "pair ledger unavailable",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	pair, exists := ledger.Lookup(payload.PairID)
+	if !exists {
+		rm.Unlock()
+		s.writeError(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeStalePairEpoch,
+			Message: "pair " + payload.PairID + " is unknown to the server",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	senderIsLo := pair.LoPeerID == state.PeerID
+	senderIsHi := pair.HiPeerID == state.PeerID
+	if !senderIsLo && !senderIsHi {
+		rm.Unlock()
+		s.writeError(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeMalformed,
+			Message: "sender does not belong to pair " + payload.PairID,
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	if perr := protocol.ValidateStalePairEpoch(payload.PairID, payload.PairEpoch, ledger); perr != nil {
+		rm.Unlock()
+		s.writeError(ctx, conn, perr, d.Envelope.RequestID)
+		return nil
+	}
+	pair.State = room.PairFailed
+	var recipientPeerID string
+	if senderIsLo {
+		recipientPeerID = pair.HiPeerID
+	} else {
+		recipientPeerID = pair.LoPeerID
+	}
+	recipient := rm.FindByPeerID(recipientPeerID)
+	roomID := rm.ID()
+	rm.Unlock()
+
+	if recipient == nil || recipient.Conn == nil {
+		s.Log.Info("pair_failed recipient absent",
+			slog.String("event", "mesh_pair_failed_recipient_absent"),
+			slog.String("room_id", roomID),
+			slog.String("pair_id", payload.PairID),
+		)
+		return nil
+	}
+
+	envOut := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypePairFailed,
+		RoomID:  roomID,
+		From:    state.PeerID,
+		To:      recipientPeerID,
+		TS:      time.Now().UnixMilli(),
+		Payload: d.Envelope.Payload,
+	}
+	if err := recipient.Conn.SendJSON(recipient.Conn.BaseContext(), envOut); err != nil {
+		s.Log.Warn("pair_failed forward failed",
+			slog.String("event", "mesh_pair_failed_send_failed"),
+			slog.String("pair_id", payload.PairID),
+			slog.String("to", recipientPeerID),
+			slog.String("error", err.Error()),
+		)
+		return nil
+	}
+	s.Log.Info("pair_failed forwarded",
+		slog.String("event", "mesh_pair_failed_forwarded"),
+		slog.String("room_id", roomID),
+		slog.String("pair_id", payload.PairID),
+		slog.Uint64("pair_epoch", payload.PairEpoch),
+		slog.String("reason", string(payload.Reason)),
+		slog.String("from", state.PeerID),
+		slog.String("to", recipientPeerID),
+	)
+	return nil
+}
+
+// handleReconnectPair implements §3.14 — request a fresh attempt
+// for one pair. Per-pair mutual exclusion is provided by the room
+// mutex (the only path that mutates PairLedger); a
+// simultaneous-click race resolves deterministically: one request
+// acquires the lock first, validates observedEpoch == current,
+// increments epoch, and emits pair_reconnect_instruction; the
+// second request observes the already-incremented epoch and
+// receives stale_pair_epoch.
+func (s *Service) handleReconnectPair(ctx context.Context, conn Conn, d *protocol.Decoded) error {
+	payload, ok := d.Message.(*protocol.ReconnectPairPayload)
+	if !ok || payload == nil {
+		s.writeError(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeInternalError,
+			Message: "reconnect_pair decode mismatch",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	state := conn.State()
+	if state.PeerID == "" || state.RoomID == "" {
+		s.writeError(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
+			Message: "reconnect_pair requires an admitted participant",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	rm := s.Rooms.Room(state.RoomID)
+	if rm == nil {
+		s.writeError(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
+			Message: "mesh room not found",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+
+	rm.Lock()
+	ledger := rm.PairLedger()
+	if ledger == nil {
+		rm.Unlock()
+		s.writeError(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeInternalError,
+			Message: "pair ledger unavailable",
+		}, d.Envelope.RequestID)
+		return nil
+	}
+	pair, exists := ledger.Lookup(payload.PairID)
+	if !exists {
+		rm.Unlock()
+		s.writeErrorWithContext(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeStalePairEpoch,
+			Message: "pair " + payload.PairID + " is unknown to the server",
+		}, d.Envelope.RequestID, map[string]any{
+			"pairId":  payload.PairID,
+			"subcode": "unknown_pair",
+		})
+		return nil
+	}
+	senderIsLo := pair.LoPeerID == state.PeerID
+	senderIsHi := pair.HiPeerID == state.PeerID
+	if !senderIsLo && !senderIsHi {
+		rm.Unlock()
+		s.writeErrorWithContext(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeMalformed,
+			Message: "sender does not belong to pair " + payload.PairID,
+		}, d.Envelope.RequestID, map[string]any{
+			"pairId":  payload.PairID,
+			"subcode": "not_pair_member",
+		})
+		return nil
+	}
+	// Order matters: validate observedEpoch BEFORE state. In a
+	// simultaneous-click race the first request bumps the epoch AND
+	// flips state to PairReconnecting; the loser observes BOTH the
+	// new epoch AND the new state, but the canonical signal per
+	// contract §3.14 is `stale_pair_epoch` (so both clients can
+	// self-correct onto the winner's epoch). State-check first
+	// would shadow the epoch signal with a misleading
+	// `pair_not_failed`.
+	current, _ := ledger.CurrentPairEpoch(payload.PairID)
+	if payload.ObservedEpoch != current {
+		rm.Unlock()
+		s.writeErrorWithContext(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeStalePairEpoch,
+			Message: "reconnect_pair observedEpoch is stale; server is canonical",
+		}, d.Envelope.RequestID, map[string]any{
+			"pairId":   payload.PairID,
+			"expected": current,
+			"observed": payload.ObservedEpoch,
+		})
+		return nil
+	}
+	if pair.State != room.PairFailed {
+		rm.Unlock()
+		s.writeErrorWithContext(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeMalformed,
+			Message: "pair " + payload.PairID + " is not in failed state",
+		}, d.Envelope.RequestID, map[string]any{
+			"pairId":  payload.PairID,
+			"subcode": "pair_not_failed",
+			"state":   pair.State,
+		})
+		return nil
+	}
+	// Resolve both endpoints under the lock BEFORE incrementing the
+	// epoch. If one of them disconnected between pair_failed and
+	// this reconnect_pair, bumping the epoch here would corrupt the
+	// ledger; refuse so the surviving peer self-corrects once it
+	// processes the mesh_roster_update presence=left for the
+	// missing endpoint.
+	loPeer := rm.FindByPeerID(pair.LoPeerID)
+	hiPeer := rm.FindByPeerID(pair.HiPeerID)
+	if loPeer == nil || hiPeer == nil {
+		rm.Unlock()
+		s.writeErrorWithContext(ctx, conn, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
+			Message: "remote endpoint of pair " + payload.PairID + " is no longer in the room",
+		}, d.Envelope.RequestID, map[string]any{
+			"pairId":  payload.PairID,
+			"subcode": "remote_left",
+		})
+		return nil
+	}
+	newEpoch, _ := ledger.Increment(payload.PairID)
+	pair.State = room.PairReconnecting
+	loIdx := loPeer.AdmissionIndex
+	hiIdx := hiPeer.AdmissionIndex
+	roomID := rm.ID()
+	iceServers := s.ICE
+	rm.Unlock()
+
+	emitOne := func(recipient *room.Participant, role protocol.PairRole, remote *room.Participant, remoteIdx uint64) {
+		if recipient == nil || recipient.Conn == nil || remote == nil {
+			return
+		}
+		body, _ := json.Marshal(protocol.PairReconnectInstructionPayload{
+			PairIdentity: protocol.PairIdentity{
+				PairID:    payload.PairID,
+				PairEpoch: newEpoch,
+			},
+			Role: role,
+			RemotePeer: protocol.RemotePeerRef{
+				PeerID:         remote.PeerID,
+				AdmissionIndex: remoteIdx,
+			},
+			IceServers: iceServers,
+		})
+		env := protocol.Envelope{
+			V:       protocol.ContractVersion,
+			Type:    protocol.TypePairReconnectInstruction,
+			RoomID:  roomID,
+			To:      recipient.PeerID,
+			TS:      time.Now().UnixMilli(),
+			Payload: body,
+		}
+		if err := recipient.Conn.SendJSON(recipient.Conn.BaseContext(), env); err != nil {
+			s.Log.Warn("pair_reconnect_instruction send failed",
+				slog.String("event", "mesh_pair_reconnect_instruction_send_failed"),
+				slog.String("pair_id", payload.PairID),
+				slog.String("to", recipient.PeerID),
+				slog.String("error", err.Error()),
+			)
+			return
+		}
+		s.Log.Info("pair_reconnect_instruction emitted",
+			slog.String("event", "mesh_pair_reconnect_instruction_emitted"),
+			slog.String("room_id", roomID),
+			slog.String("pair_id", payload.PairID),
+			slog.Uint64("pair_epoch", newEpoch),
+			slog.String("role", string(role)),
+			slog.String("to", recipient.PeerID),
+		)
+	}
+	emitOne(loPeer, protocol.RoleOfferer, hiPeer, hiIdx)
+	emitOne(hiPeer, protocol.RoleAnswerer, loPeer, loIdx)
+	return nil
+}
+
+// writeErrorWithContext is the same as writeError but also includes
+// the canonical `context` map (`pairId`, `expected`, etc.) per
+// contract §3.19. Lets clients route a pair-scoped error back to
+// the matching PairContext / button without parsing the message
+// string.
+func (s *Service) writeErrorWithContext(
+	ctx context.Context,
+	conn Conn,
+	perr *protocol.ProtocolError,
+	correlates string,
+	context map[string]any,
+) {
+	if perr == nil {
+		return
+	}
+	payload, _ := json.Marshal(protocol.ErrorPayload{
+		Code:       perr.Code,
+		Message:    perr.Message,
+		Correlates: correlates,
+		Context:    context,
+	})
+	env := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypeError,
+		TS:      time.Now().UnixMilli(),
+		Payload: payload,
+	}
+	_ = conn.SendJSON(ctx, env)
+}
