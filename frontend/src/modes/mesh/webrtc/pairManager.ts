@@ -28,6 +28,7 @@ import {
   MESH_CONTRACT_VERSION,
   type MeshClientMessage,
 } from "../protocol/schema";
+import { makeMeshLog } from "./log";
 import {
   attachAnswererDataChannelHandler,
   attachMeshChatReceiver,
@@ -208,11 +209,45 @@ export function createMeshPairManager(
 ): MeshPairManager {
   const pairs = new Map<string, MeshPairContext>();
 
+  // Phase F4/F5 wiring: the canonical mesh log helper. `appendEvent`
+  // below remains as a shim so the existing 44 callsites inside this
+  // file don't need to migrate yet — every call routes through the
+  // helper now, so the on-screen output goes through the same code
+  // path that future verb-file extractions will use directly.
+  const log = makeMeshLog((entry) =>
+    deps.dispatch({ type: "MESH_EVENT_APPEND", entry }),
+  );
+
   function appendEvent(entry: Parameters<typeof makeMeshEventEntry>[0]): void {
-    deps.dispatch({
-      type: "MESH_EVENT_APPEND",
-      entry: makeMeshEventEntry(entry),
-    });
+    const detail =
+      entry.detail !== undefined ? { detail: entry.detail } : {};
+    switch (entry.scope) {
+      case "room":
+        log.room({ type: entry.type, summary: entry.summary, ...detail });
+        return;
+      case "local":
+        log.local({ type: entry.type, summary: entry.summary, ...detail });
+        return;
+      case "peer":
+        // makeMeshEventEntry validates peerId presence at runtime; the
+        // shim trusts that validation by the time we get here.
+        log.peer({
+          type: entry.type,
+          summary: entry.summary,
+          peerId: entry.peerId as string,
+          ...detail,
+        });
+        return;
+      case "pair":
+        log.pair({
+          type: entry.type,
+          summary: entry.summary,
+          peerId: entry.peerId as string,
+          pairId: entry.pairId as string,
+          ...detail,
+        });
+        return;
+    }
   }
 
   function transitionState(
