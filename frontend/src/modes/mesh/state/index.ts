@@ -35,25 +35,34 @@ import {
   type MeshPairsAction,
   type MeshPairsSlice,
 } from "./pairs";
+import {
+  initialMeshChatSlice,
+  meshChatReducer,
+  type MeshChatAction,
+  type MeshChatSlice,
+} from "./chat";
 
 export interface MeshRootState {
   local: MeshLocalParticipant;
   roster: MeshRosterSlice;
   eventLog: MeshEventLogSlice;
   pairs: MeshPairsSlice;
+  chat: MeshChatSlice;
 }
 
 export type MeshRootAction =
   | MeshLocalAction
   | MeshRosterAction
   | MeshEventLogAction
-  | MeshPairsAction;
+  | MeshPairsAction
+  | MeshChatAction;
 
 export const initialMeshRootState: MeshRootState = {
   local: initialMeshLocalParticipant,
   roster: initialMeshRosterSlice,
   eventLog: initialMeshEventLogSlice,
   pairs: initialMeshPairsSlice,
+  chat: initialMeshChatSlice,
 };
 
 function isRosterAction(a: MeshRootAction): a is MeshRosterAction {
@@ -77,6 +86,16 @@ function isPairsAction(a: MeshRootAction): a is MeshPairsAction {
   );
 }
 
+function isChatAction(a: MeshRootAction): a is MeshChatAction {
+  return (
+    a.type === "MESH_CHAT_LOCAL_APPENDED" ||
+    a.type === "MESH_CHAT_INBOUND_APPENDED" ||
+    a.type === "MESH_CHAT_VALIDATION_FAILED" ||
+    a.type === "MESH_CHAT_VALIDATION_CLEARED" ||
+    a.type === "MESH_CHAT_RESET"
+  );
+}
+
 export function meshRootReducer(
   state: MeshRootState,
   action: MeshRootAction,
@@ -92,6 +111,9 @@ export function meshRootReducer(
   }
   if (isPairsAction(action)) {
     return { ...state, pairs: meshPairsReducer(state.pairs, action) };
+  }
+  if (isChatAction(action)) {
+    return { ...state, chat: meshChatReducer(state.chat, action) };
   }
   return { ...state, local: meshLocalReducer(state.local, action) };
 }

@@ -25,6 +25,7 @@ import { LocalPreview } from "../components/LocalPreview";
 import { MeshMediaController } from "../webrtc/mediaAcquisition";
 import { RemoteTile } from "../components/RemoteTile";
 import { MeshCostSummary } from "../components/MeshCostSummary";
+import { MeshChat } from "../components/MeshChat";
 import { selectRosterAsArray } from "../state/roster";
 import { selectPairByRemotePeerId } from "../state/pairs";
 
@@ -100,6 +101,7 @@ function MeshAppLayout({ roomId }: { roomId: string }) {
             ))
           )}
         </section>
+        <MeshChat />
         <MeshEventLogPanel />
       </div>
     </main>

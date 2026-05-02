@@ -30,6 +30,7 @@ import {
 } from "../signaling/schema";
 import {
   attachAnswererDataChannelHandler,
+  attachMeshChatReceiver,
   createOffererDataChannel,
 } from "./dataChannel";
 import type {
@@ -114,6 +115,12 @@ export interface PairIceCandidateInput {
   readonly candidate: RTCIceCandidateInit | null;
 }
 
+export interface MeshChatSendablePairView {
+  readonly pairId: string;
+  readonly remotePeerId: string;
+  readonly dc: RTCDataChannel | null;
+}
+
 export interface MeshPairManager {
   readonly handleNegotiationInstruction: (
     input: PairNegotiationInstructionInput,
@@ -128,6 +135,12 @@ export interface MeshPairManager {
   ) => Promise<void>;
   readonly getContext: (pairId: string) => MeshPairContext | undefined;
   readonly listContexts: () => MeshPairContext[];
+  // listChatPairs — sender-facing snapshot of pair_id / remote_peer_id /
+  // dc references at call time. Used by `MeshChat` to fan one chat
+  // message out across every active pair (M8). Includes pairs whose
+  // `dc` is `null` or whose `dc.readyState !== "open"`; the sender
+  // helper records those as skipped.
+  readonly listChatPairs: () => MeshChatSendablePairView[];
   readonly snapshotContext: (pairId: string) => Readonly<MeshPairContext> | null;
   readonly closeAll: () => void;
 }
@@ -432,13 +445,21 @@ export function createMeshPairManager(
   }
 
   // wireDataChannelLifecycle — emit DataChannel state-change events
-  // and patch the pair view's `dataChannelState` pill. M7 only
-  // observes; M8 attaches `onmessage` for chat semantics.
+  // and patch the pair view's `dataChannelState` pill. M8 also
+  // attaches the chat `onmessage` handler here so receive plumbing is
+  // active as soon as the channel reference exists (the handler is
+  // idempotent at the dc-instance level — see `attachMeshChatReceiver`).
   function wireDataChannelLifecycle(
     ctx: MeshPairContext,
     dc: RTCDataChannel,
   ): void {
     patchPairView(ctx, { dataChannelState: dc.readyState });
+    attachMeshChatReceiver(dc, {
+      dispatch: deps.dispatch,
+      pairId: ctx.pairId,
+      remotePeerId: ctx.remotePeerId,
+      expectedRoomId: deps.roomId,
+    });
     const refresh = (eventLabel: string) => {
       const value = dc.readyState;
       appendEvent({
@@ -830,6 +851,16 @@ export function createMeshPairManager(
     return Array.from(pairs.values());
   }
 
+  function listChatPairs(): MeshChatSendablePairView[] {
+    return Array.from(pairs.values())
+      .sort((a, b) => a.remoteAdmissionIndex - b.remoteAdmissionIndex)
+      .map((ctx) => ({
+        pairId: ctx.pairId,
+        remotePeerId: ctx.remotePeerId,
+        dc: ctx.dc,
+      }));
+  }
+
   // snapshotContext — returns a freshly-frozen view used by the
   // existing-pair stability test (T053). The shallow copy captures
   // pc / dc / senders references at call time so a later mutation by
@@ -875,6 +906,7 @@ export function createMeshPairManager(
     handlePairIceCandidate,
     getContext,
     listContexts,
+    listChatPairs,
     snapshotContext,
     closeAll,
   };

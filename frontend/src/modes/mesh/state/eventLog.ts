@@ -41,6 +41,14 @@ export type MeshEventType =
   | "retry_requested"
   // generic
   | "error_occurred"
+  // chat (M8 / FR-051..FR-055, L17). Every chat-event entry's `detail`
+  // MUST carry `transport: "datachannel"` (FR-053). M8 is final-MVP
+  // DataChannel-only — no signaling-relayed chat type exists.
+  | "mesh_chat_message_sent"
+  | "mesh_chat_message_received"
+  | "mesh_chat_message_send_skipped"
+  | "mesh_chat_message_received_invalid"
+  | "mesh_chat_input_validation_failed"
   // future-phase pass-through (logged, not state-mutating)
   | "future_phase_message";
 

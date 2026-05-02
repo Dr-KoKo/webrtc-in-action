@@ -576,49 +576,49 @@ Tasks that **MUST be complete** before each pivotal point:
 
 **Goal**: group chat works over per-pair `RTCDataChannel`s; sender local-echoes **once**; event log records `N − 1` per-channel send entries; receivers each render once. **No DM UI. No global ordering claim. No signaling-relayed final transport.**
 
-- [ ] T062 [frontend][webrtc] [M8] DataChannel `onmessage` + reducer plumbing — `frontend/src/features/mesh/webrtc/dataChannel.ts`, `frontend/src/features/mesh/state/chat.ts`
+- [X] T062 [frontend][webrtc] [M8] DataChannel `onmessage` + reducer plumbing — `frontend/src/features/mesh/webrtc/dataChannel.ts`, `frontend/src/features/mesh/state/chat.ts`
     - Purpose: register `onmessage` per pair; deserialize; append to `ChatState.messages` exactly once per inbound message (recipient view).
     - Files: extend `dataChannel.ts`; new `chat.ts` reducer.
     - Dependencies: T047 (offerer-creates DC), T060.
     - DoD: a sender posting one message produces exactly one `chat message received` entry on each receiver's chat list.
     - Verify: `chatFanOut.spec.ts`.
 
-- [ ] T063 [frontend][P] [M8] Sender fan-out + local echo — `frontend/src/features/mesh/state/chat.ts`, `frontend/src/features/mesh/components/MeshChat.tsx`
+- [X] T063 [frontend][P] [M8] Sender fan-out + local echo — `frontend/src/features/mesh/state/chat.ts`, `frontend/src/features/mesh/components/MeshChat.tsx`
     - Purpose: FR-051 + FR-052 + FR-052a — local echo renders the sent message **once**; iterate `PairMap` and `dc.send(serialize(text))` for each open DC; record `attempted` / `succeeded` / `skipped`; emit one `chat message sent` per pair (succeeded) and one `chat message send skipped` per skipped pair.
     - Files: extend reducer; new `MeshChat.tsx` component.
     - Dependencies: T062.
     - DoD: at `N=4`, sending "hi" appends one entry to sender's chat list, three `chat message sent` entries (one per pair), zero skipped; the MeshChat fan-out summary reads `3 / 3 delivered`.
     - Verify: `chatFanOut.spec.ts` covers the FR-052a invariant (chat UI N=1, event log N−1 entries).
 
-- [ ] T064 [frontend][P] [M8] Chat input validation — `frontend/src/features/mesh/components/MeshChat.tsx`
+- [X] T064 [frontend][P] [M8] Chat input validation — `frontend/src/features/mesh/components/MeshChat.tsx`
     - Purpose: FR-054 — trim, reject empty, ≤ 500 chars, render as text only (NFR-006).
     - Files: extend `MeshChat.tsx`.
     - Dependencies: T063.
     - DoD: empty / 501-char / HTML-laden inputs rejected at submit (no fan-out triggered); rendered text shows raw HTML as text, not parsed.
     - Verify: `chatInputValidation.spec.ts`.
 
-- [ ] T065 [frontend][P] [M8] Per-channel ordering only (no global) — `frontend/src/features/mesh/components/MeshChat.tsx`
+- [X] T065 [frontend][P] [M8] Per-channel ordering only (no global) — `frontend/src/features/mesh/components/MeshChat.tsx`
     - Purpose: FR-055 — display each chat message's local-send timestamp (sender clock) and local-receive timestamp (recipient clock); no cross-peer reordering protocol.
     - Files: extend `MeshChat.tsx`.
     - Dependencies: T063.
     - DoD: the UI does NOT reorder messages from different senders; each entry shows two clocks.
     - Verify: `chatOrdering.spec.ts` confirms no Lamport / vector-clock code path exists; manual run with two simultaneous senders shows possibly-different order on different recipients.
 
-- [ ] T066 [frontend][P] [M8] Skipped-peer log entry on closed DC — `frontend/src/features/mesh/state/chat.ts`
+- [X] T066 [frontend][P] [M8] Skipped-peer log entry on closed DC — `frontend/src/features/mesh/state/chat.ts`
     - Purpose: EC-008 — a peer with `dc.readyState !== "open"` is skipped; one `chat message send skipped` event-log entry per skipped pair, one peer-scoped notice in the UI fan-out summary.
     - Files: extend reducer.
     - Dependencies: T063.
     - DoD: closing one peer's DC then sending a message yields `2 of 3 delivered` summary + one skipped log entry naming the closed peer.
     - Verify: quickstart §4.4 second-to-last step manual.
 
-- [ ] T067 [test] [M8] M8 acceptance — `quickstart.md §4.4` + `chatFanOut.spec.ts`
+- [X] T067 [test] [M8] M8 acceptance — `quickstart.md §4.4` + `chatFanOut.spec.ts`
     - Purpose: SC-006 satisfied; **L17 demonstrable**.
     - Files: none new (test was T063); execution-only checklist.
     - Dependencies: T062–T066.
     - DoD: 4-browser quickstart §4.4 ticked; spec green.
     - Verify: `npx vitest run features/mesh/tests/chatFanOut.spec.ts` PASS + manual.
 
-- [ ] T068 [P][test] [M8] Audit — final-MVP transport is DataChannel only — `frontend/src/features/mesh/tests/chatTransportLabel.spec.ts`
+- [X] T068 [P][test] [M8] Audit — final-MVP transport is DataChannel only — `frontend/src/features/mesh/tests/chatTransportLabel.spec.ts`
     - Purpose: FR-053 — the chat-event log entries carry `transport: "datachannel"` for final-MVP; if a `signaling` transport branch exists (interim build), the spec asserts the build flag gates it OFF for MVP shipment.
     - Files: new spec.
     - Dependencies: T063.
