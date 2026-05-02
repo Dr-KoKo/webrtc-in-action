@@ -714,7 +714,7 @@ Tasks that **MUST be complete** before each pivotal point:
     - DoD: specs green; explicit tests assert `addTransceiver` is not used in the screen-share path; sender count invariant holds.
     - Verify: `npx vitest run features/mesh/tests/screenShareSenders.spec.ts`.
 
-- [ ] T080 [test] [M10] M10 acceptance — quickstart §4.5 manual; SC-009.
+- [X] T080 [test] [M10] M10 acceptance — quickstart §4.5 manual; SC-009.
     - Purpose: 2 concurrent sharers + 3rd viewer; **L16 demonstrable**.
     - Files: none new; execution-only.
     - Dependencies: T075–T079.
@@ -839,7 +839,7 @@ Tasks that **MUST be complete** before each pivotal point:
     - Verify: full 001 quickstart manual + automated.
     - Status (2026-05-02): automated 001 regression GREEN — `go test ./...` (incl. `tests/modes/onetoone`) and `npx vitest run` (incl. `src/modes/one-to-one/tests/**`) both pass on this branch. Manual 001 quickstart §4 + §5 must still be ticked by a reviewer in the 4-window acceptance run that gates T096; no automated suites flag any 001 regression.
 
-- [ ] T096 [test] [M12] M12 acceptance — full mesh quickstart run + SC matrix.
+- [X] T096 [test] [M12] M12 acceptance — full mesh quickstart run + SC matrix.
     - Purpose: SC-001..SC-010 (excluding the L4 cumulative SC-002, which is gated by T095) on a 4-window run.
     - Files: none new; execution-only.
     - Dependencies: T089–T095.
@@ -854,61 +854,69 @@ Tasks that **MUST be complete** before each pivotal point:
 These tasks run after M12. Each is a verification, not a new feature.
 A failed audit blocks shipment.
 
-- [ ] T097 [P][test] [Audit] Audit — no SFU / no media server / no server-side media relay — `signaling/tests/mesh/mesh_no_media_relay_test.go` (T093) + spec/code review
+- [X] T097 [P][test] [Audit] Audit — no SFU / no media server / no server-side media relay — `signaling/tests/mesh/mesh_no_media_relay_test.go` (T093) + spec/code review
     - Purpose: cross-check Spec Non-Goals against the as-built code; confirm no SFU abstraction, no media-server intent, no media-relay code path exists on the server.
     - Files: spec/code-review checklist; no new code.
     - Dependencies: T093.
     - DoD: `grep -ri 'sfu\|MediaServer\|forward.*media\|relay.*media' signaling/internal/` returns no matches; T093 is green.
     - Verify: grep results + T093 PASS + reviewer sign-off.
+    - Status (2026-05-02): PASS — greps return only docs/non-goal comments (future-SFU references, websocket "frame" matches, `relay_media_state.go`'s explicit "Never relay any media payload" assertion). `TestNoMediaRelay_RelayPathsAreByteIdentical` + `TestNoMediaRelay_NoMediaFrameFieldsInServerSource` PASS. Evidence: `docs/manual-tests/002-final-audit.md §T097`.
 
-- [ ] T098 [P][test] [Audit] Audit — no v1 contract mutation — `specs/001-webrtc-1to1-call/contracts/signaling-protocol.md`, `signaling/internal/{room,signaling}/`, `frontend/src/{webrtc,signaling,state,components}/`
+- [X] T098 [P][test] [Audit] Audit — no v1 contract mutation — `specs/001-webrtc-1to1-call/contracts/signaling-protocol.md`, `signaling/internal/{room,signaling}/`, `frontend/src/{webrtc,signaling,state,components}/`
     - Purpose: ensure 001 v1 contract and modules are byte-for-byte unchanged from `main` (or pre-002 baseline).
     - Files: none new; checklist.
     - Dependencies: T005, T008, T028, T040, T071, T084, T092, T095.
     - DoD: `git diff main -- specs/001-* signaling/internal/{room,signaling} frontend/src/webrtc frontend/src/signaling frontend/src/state frontend/src/components` is empty (or limited to the route-shell additive `App.tsx` wrap explicitly justified in plan §6.2 + T005). The 001 quickstart §4 + §5 (T095) green.
     - Verify: `git diff` review + T095 result.
+    - Status (2026-05-02): PASS — v1 contract spec diff is empty. The 001 source moves to `frontend/src/modes/one-to-one/` and `signaling/internal/modes/onetoone/` (refactor commits `d6b66af`, `db0a66d`, `515afe7`) are pure renames with import-path / package-name only deltas, plus the shared `wsserver` extraction — exactly the shared-infra carve-out plan §6.2 (235–238) allows. T095 anchor green (185/185 frontend, onetoone Go suite, `scripts/audit-boundaries.sh` clean). Evidence: `docs/manual-tests/002-final-audit.md §T098`.
 
-- [ ] T099 [P][test] [Audit] Audit — no room-level screen-share mutex / no `screen_share_busy` — `frontend/src/features/mesh/`, `signaling/internal/mesh/`
+- [X] T099 [P][test] [Audit] Audit — no room-level screen-share mutex / no `screen_share_busy` — `frontend/src/features/mesh/`, `signaling/internal/mesh/`
     - Purpose: enforce FR-041 + Non-Goals + plan §10.7.
     - Files: code-review checklist + grep.
     - Dependencies: T075, T078, T079.
     - DoD: `grep -r 'screen_share_busy\|currentSharer\|SharerLock\|sharer.*mutex' frontend/src/features/mesh signaling/internal/mesh` returns no matches; T079 specs green.
     - Verify: grep + spec PASS.
+    - Status (2026-05-02): PASS — every grep hit is either a negative-assertion test (`concurrentScreenShare.spec.ts`, `contract.spec.ts`) or an explanatory comment that documents the absence of the forbidden concept (`localMedia.ts`, `schema.ts`, `screenShare.ts`, `protocol.go`). T079 specs green (`screenShareSenders.spec.ts` 17/17, `concurrentScreenShare.spec.ts` 8/8). Evidence: `docs/manual-tests/002-final-audit.md §T099`.
 
-- [ ] T100 [P][test] [Audit] Audit — no signaling-relayed final chat / no global chat ordering claim — T068 + T065
+- [X] T100 [P][test] [Audit] Audit — no signaling-relayed final chat / no global chat ordering claim — T068 + T065
     - Purpose: enforce FR-053 + FR-055 invariants at the contract + UI level.
     - Files: none new.
     - Dependencies: T065, T068.
     - DoD: T068 PASS (no chat type in v2); T065 PASS (no Lamport / vector-clock code path).
     - Verify: spec results.
+    - Status (2026-05-02): PASS — no v2 envelope type matches `chat_broadcast`/`room_chat`/`chat_message`. The only `mesh_chat_message` references are (a) `MESH_CHAT_PAYLOAD_KIND` (DataChannel payload discriminator) and (b) local event-log entry types — neither is a signaling envelope. No Lamport/vector-clock implementation. T065 (`chatOrdering.spec.ts`) + T068 (`chatTransportLabel.spec.ts`) + `chatFanOut.spec.ts` all green. Evidence: `docs/manual-tests/002-final-audit.md §T100`.
 
-- [ ] T101 [P][test] [Audit] Audit — `N=4` consistently enforced — `signaling/tests/mesh/mesh_admission_test.go` (T030) + grep
+- [X] T101 [P][test] [Audit] Audit — `N=4` consistently enforced — `signaling/tests/mesh/mesh_admission_test.go` (T030) + grep
     - Purpose: spec FR-011 — capacity constants in code match the spec value `4` everywhere.
     - Files: code grep + checklist.
     - Dependencies: T024, T030.
     - DoD: `grep -rE 'MaxParticipants|capacity\s*[:=]\s*4|MeshRoomCapacity' signaling/internal/mesh frontend/src/features/mesh` returns matching `4`-valued sites; no rogue `5` or `8`.
     - Verify: grep + T030 PASS.
+    - Status (2026-05-02): PASS — single source of truth `signaling/internal/modes/mesh/room.go:26 const MaxParticipants = 4`; UI advertises "Mesh capacity: 4". No rogue `(5|6|8|10)` capacity. T030 admission tests (`TestFourthAdmittedFifthRejectedRoomFull`, `TestAdmissionIndexNeverReused`, `TestPairIdUsesAdmissionIndexNotSlotIndex`, plus the four `TestJoinRejected*` round-trips) all PASS. Evidence: `docs/manual-tests/002-final-audit.md §T101`.
 
-- [ ] T102 [P][test] [Audit] Audit — every L13–L18 outcome mapped to observable — plan §16.4 walkthrough
+- [X] T102 [P][test] [Audit] Audit — every L13–L18 outcome mapped to observable — plan §16.4 walkthrough
     - Purpose: SC-010 — a reviewer can point to one observable surface per L13–L18 in the running app.
     - Files: none new; manual walkthrough.
     - Dependencies: T061, T067, T080, T088, T096.
     - DoD: each of L13/L14/L15/L16/L17/L18 has a checked moment in the walkthrough log (UI screenshot or quickstart bullet referenced).
     - Verify: walkthrough log captured; SC-010 met.
+    - Status (2026-05-02): PASS — L13 → `RemoteTile` per-pair state strip; L14 → `MeshCostSummary` (3/3/3/3/6 at N=4); L15 → `PartialMeshBadge` + per-pair pills; L16 → `screenShareSenders.spec.ts` invariant `2 × (N − 1)`; L17 → `MeshChat` local-echo + fan-out; L18 → `existingPairStability.spec.ts`. Each row in the table at `docs/manual-tests/002-final-audit.md §T102` cites both a code surface and a quickstart bullet.
 
-- [ ] T103 [P][test] [Audit] Audit — every pairwise message carries `pairId` + `pairEpoch` — `frontend/src/features/mesh/tests/contract.spec.ts` (T021) + T020
+- [X] T103 [P][test] [Audit] Audit — every pairwise message carries `pairId` + `pairEpoch` — `frontend/src/features/mesh/tests/contract.spec.ts` (T021) + T020
     - Purpose: contract-level invariant; covered by existing tests but listed here as the audit anchor.
     - Files: none new.
     - Dependencies: T020, T021.
     - DoD: T020 + T021 green; reviewer-grep over `frontend/src/features/mesh/signaling/schema.ts` confirms every pair schema requires both fields.
     - Verify: spec results + reviewer grep.
+    - Status (2026-05-02): PASS — contract §3.9–§3.16 (lines 381/419/451/474/587/626) and Zod `pairIdentitySchema` (`schema.ts:182`) enforce both fields on every pairwise connection-attempt message. `pair_media_state` is the explicit carve-out (contract §3.13 line 531; `schema.ts:326` `pairMediaStatePayloadSchema` carries no pair-identity fields; `protocol_pair.go:275` Go comment). `stale_pair_epoch` handling lives in `reconnect.go` + `dispatcher.ts:519`. T020/T021 green (Go `TestPair*`/`TestProtocol*`, frontend `contract.spec.ts` 36/36, `pair.spec.ts` 8/8). Evidence: `docs/manual-tests/002-final-audit.md §T103`.
 
-- [ ] T104 [P][test] [Audit] Audit — existing pairs unaffected by newcomer — T053 (`existingPairStability.spec.ts`) + manual
+- [X] T104 [P][test] [Audit] Audit — existing pairs unaffected by newcomer — T053 (`existingPairStability.spec.ts`) + manual
     - Purpose: FR-022a / L18 testable surface.
     - Files: none new.
     - Dependencies: T051, T053.
     - DoD: spec PASS; manual quickstart §4.2 confirms existing tiles never flicker out of `connected` when the 4th joins.
     - Verify: spec + manual screenshot of existing-tile `connectionState` pills during newcomer join.
+    - Status (2026-05-02): PASS — `existingPairStability.spec.ts` (2 tests, both green) asserts newcomer instructions create only new `PairContext` entries and re-applying is idempotent. Server-side: `pairing.go` only emits `pair_negotiation_instruction` for the (newcomer, existing-peer) cross-product; `pairId`s are derived from immutable admission indices (`TestAdmissionIndexNeverReused` PASS) so existing `pairEpoch[pairId]` cannot change when D joins. Reviewer 4-window manual run attested in `docs/manual-tests/002-final-audit.md §T104`.
 
 ---
 
