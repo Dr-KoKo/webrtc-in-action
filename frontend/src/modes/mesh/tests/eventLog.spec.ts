@@ -135,3 +135,74 @@ describe("meshEventLogReducer", () => {
     expect(selectRoomScope(state).map((e) => e.id)).toEqual([roomEntry.id]);
   });
 });
+
+// M9 / T070 + T072 — event-log entries for the local toggle, the
+// outbound `pair_media_state` send, and the inbound fan-out
+// reception. These prove the reader can tell:
+//   - that a local UI action happened (mesh_media_local_toggled),
+//   - that the OUTBOUND signaling envelope went out (mesh_media_state_sent),
+//   - that an INBOUND signaling envelope arrived (mesh_media_state_received),
+//   - and that the messages travelled the SIGNALING METADATA path
+//     (transport=signaling / path=metadata) — NOT the media path.
+describe("M9 media-control event-log entries", () => {
+  it("local mic toggle entry is local-scoped, human-readable, names the kind", () => {
+    const entry = makeMeshEventEntry({
+      scope: "local",
+      type: "mesh_media_local_toggled",
+      summary: "microphone toggled → off",
+      detail: { kind: "microphone", next: "off" },
+    });
+    expect(entry.scope).toBe("local");
+    expect(entry.type).toBe("mesh_media_local_toggled");
+    expect(entry.summary).toMatch(/microphone toggled/);
+    expect(entry.detail).toMatchObject({ kind: "microphone" });
+  });
+
+  it("outbound pair_media_state entry identifies signaling metadata path (not media)", () => {
+    const entry = makeMeshEventEntry({
+      scope: "room",
+      type: "mesh_media_state_sent",
+      summary:
+        "pair_media_state sent (signaling metadata path; server fan-out, not media path)",
+      detail: { transport: "signaling", path: "metadata" },
+    });
+    expect(entry.summary).toMatch(/signaling metadata path/);
+    expect(entry.summary).toMatch(/not media path/);
+    expect(entry.detail).toMatchObject({
+      transport: "signaling",
+      path: "metadata",
+    });
+  });
+
+  it("inbound pair_media_state entry includes remotePeerId and metadata path", () => {
+    const entry = makeMeshEventEntry({
+      scope: "peer",
+      type: "mesh_media_state_received",
+      summary: `pair_media_state received from peer ${PEER_A.slice(0, 8)}… (signaling metadata path)`,
+      peerId: PEER_A,
+      detail: {
+        transport: "signaling",
+        path: "metadata",
+        remotePeerId: PEER_A,
+      },
+    });
+    expect(entry.scope).toBe("peer");
+    expect(entry.peerId).toBe(PEER_A);
+    expect(entry.detail).toMatchObject({
+      transport: "signaling",
+      path: "metadata",
+      remotePeerId: PEER_A,
+    });
+    expect(entry.summary).toMatch(/signaling metadata path/);
+  });
+
+  it("inbound entry MUST satisfy FR-061 — peer-scoped means peerId required", () => {
+    expect(() =>
+      makeMeshEventEntry({
+        scope: "peer",
+        type: "mesh_media_state_received",
+        summary: "peer-scoped without peerId is malformed",
+      }),
+    ).toThrowError(/peerId/);
+  });
+});

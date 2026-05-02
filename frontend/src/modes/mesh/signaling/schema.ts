@@ -316,11 +316,21 @@ export const pairIceCandidatePayloadSchema = pairIdentitySchema.extend({
 // `pair_media_state` is participant-level (§3.13 note): it does NOT
 // carry pairId or pairEpoch on the wire. Server fans out to all other
 // participants in the same room.
+export const micStateSchema = z.enum(["on", "off"]);
+export const cameraStateSchema = z.enum(["on", "off"]);
+export const screenShareStateSchema = z.enum(["active", "inactive"]);
+export type MicState = z.infer<typeof micStateSchema>;
+export type CameraState = z.infer<typeof cameraStateSchema>;
+export type ScreenShareState = z.infer<typeof screenShareStateSchema>;
+
 export const pairMediaStatePayloadSchema = z.object({
-  microphone: z.enum(["on", "off"]),
-  camera: z.enum(["on", "off"]),
-  screenShare: z.enum(["active", "inactive"]),
+  microphone: micStateSchema,
+  camera: cameraStateSchema,
+  screenShare: screenShareStateSchema,
 });
+export type PairMediaStatePayload = z.infer<
+  typeof pairMediaStatePayloadSchema
+>;
 
 export const reconnectPairPayloadSchema = z.object({
   pairId: z.string().min(1),

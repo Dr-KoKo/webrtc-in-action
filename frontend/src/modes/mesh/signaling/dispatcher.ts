@@ -391,14 +391,60 @@ function dispatchValidated(deps: DispatcherDeps, msg: MeshServerMessage): void {
     }
     case "pair_media_state": {
       const subjectPeerId = msg.from;
+      // Without `from` we can't map the state to a remote tile, so we
+      // surface the malformed envelope as a room-scoped error instead
+      // of touching any roster entry. (The server always stamps `from`
+      // on relay; this branch protects test fixtures + future
+      // contract drift.)
+      if (!subjectPeerId) {
+        dispatch({
+          type: "MESH_EVENT_APPEND",
+          entry: makeMeshEventEntry({
+            scope: "room",
+            type: "error_occurred",
+            summary:
+              "pair_media_state received without `from` — cannot route to a remote tile",
+            detail: { code: "malformed", type: msg.type },
+          }),
+        });
+        return;
+      }
+      const selfPeerId = deps.getSelfPeerId();
+      if (selfPeerId && subjectPeerId === selfPeerId) {
+        // The server fans out to other participants only — receiving
+        // our own state back would be a server bug. Log + drop without
+        // mutating local-media state (M9 isolation rule).
+        dispatch({
+          type: "MESH_EVENT_APPEND",
+          entry: makeMeshEventEntry({
+            scope: "local",
+            type: "error_occurred",
+            summary:
+              "pair_media_state received with from=self — ignored (server fan-out should skip the sender)",
+            detail: { code: "internal_error", type: msg.type },
+          }),
+        });
+        return;
+      }
+      dispatch({
+        type: "MESH_REMOTE_MEDIA_STATE_APPLIED",
+        subjectPeerId,
+        microphone: msg.payload.microphone,
+        camera: msg.payload.camera,
+        screenShare: msg.payload.screenShare,
+      });
       dispatch({
         type: "MESH_EVENT_APPEND",
         entry: makeMeshEventEntry({
-          scope: subjectPeerId ? "peer" : "room",
-          type: "future_phase_message",
-          summary: `pair_media_state received (future phase)`,
-          ...(subjectPeerId ? { peerId: subjectPeerId } : {}),
-          detail: { type: msg.type },
+          scope: "peer",
+          type: "mesh_media_state_received",
+          summary: `pair_media_state received from peer ${shortenId(subjectPeerId)} (signaling metadata path)`,
+          peerId: subjectPeerId,
+          detail: {
+            transport: "signaling",
+            path: "metadata",
+            remotePeerId: subjectPeerId,
+          },
         }),
       });
       return;

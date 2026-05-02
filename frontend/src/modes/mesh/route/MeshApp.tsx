@@ -26,6 +26,7 @@ import { MeshMediaController } from "../webrtc/mediaAcquisition";
 import { RemoteTile } from "../components/RemoteTile";
 import { MeshCostSummary } from "../components/MeshCostSummary";
 import { MeshChat } from "../components/MeshChat";
+import { MeshControls } from "../components/MeshControls";
 import { selectRosterAsArray } from "../state/roster";
 import { selectPairByRemotePeerId } from "../state/pairs";
 
@@ -80,6 +81,7 @@ function MeshAppLayout({ roomId }: { roomId: string }) {
           initialRoomId={roomId}
         />
         <LocalPreview />
+        <MeshControls />
         <MeshRoster />
         <MeshCostSummary />
         <section
@@ -97,6 +99,7 @@ function MeshAppLayout({ roomId }: { roomId: string }) {
                 admissionIndex={p.admissionIndex}
                 presence={p.presence}
                 pair={selectPairByRemotePeerId(pairs, p.peerId) ?? null}
+                remoteMedia={p.remoteMedia}
               />
             ))
           )}

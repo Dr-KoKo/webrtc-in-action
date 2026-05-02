@@ -49,6 +49,13 @@ export type MeshEventType =
   | "mesh_chat_message_send_skipped"
   | "mesh_chat_message_received_invalid"
   | "mesh_chat_input_validation_failed"
+  // media controls (M9 / FR-032 + FR-033). The local-toggle entry is
+  // user-initiated; the *_sent / *_received entries identify the
+  // signaling metadata path (server-fan-out, NOT the media path) so
+  // a reader can tell metadata routing apart from media routing.
+  | "mesh_media_local_toggled"
+  | "mesh_media_state_sent"
+  | "mesh_media_state_received"
   // future-phase pass-through (logged, not state-mutating)
   | "future_phase_message";
 

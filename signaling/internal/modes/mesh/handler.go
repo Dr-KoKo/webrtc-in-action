@@ -224,6 +224,8 @@ func (h *Handler) dispatch(ctx context.Context, cc *meshConn, d *Decoded) error 
 		return h.handlePairAnswer(ctx, cc, d)
 	case TypePairIceCandidate:
 		return h.handlePairIceCandidate(ctx, cc, d)
+	case TypePairMediaState:
+		return h.handlePairMediaState(ctx, cc, d)
 	case TypeError:
 		// Clients may send `error` back as informational; log + drop.
 		h.Log.Debug("mesh client error reported",
@@ -242,7 +244,7 @@ func (h *Handler) dispatch(ctx context.Context, cc *meshConn, d *Decoded) error 
 	default:
 		// Types reserved for later milestones. M6 (T049) wires
 		// pair_offer + pair_answer; pair_ice_candidate waits for M7
-		// (T055), pair_media_state for M9 (T071), pair_failed +
+		// (T055); pair_media_state landed in M9 (T071); pair_failed +
 		// reconnect_pair for M11. Until each handler lands, reply
 		// with internal_error per §3.19 — the request was understood
 		// (decode passed) but the server has no implementation yet.

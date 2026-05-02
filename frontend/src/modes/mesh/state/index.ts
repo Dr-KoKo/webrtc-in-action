@@ -41,6 +41,12 @@ import {
   type MeshChatAction,
   type MeshChatSlice,
 } from "./chat";
+import {
+  initialMeshLocalMediaSlice,
+  meshLocalMediaReducer,
+  type MeshLocalMediaAction,
+  type MeshLocalMediaSlice,
+} from "./localMedia";
 
 export interface MeshRootState {
   local: MeshLocalParticipant;
@@ -48,6 +54,7 @@ export interface MeshRootState {
   eventLog: MeshEventLogSlice;
   pairs: MeshPairsSlice;
   chat: MeshChatSlice;
+  localMedia: MeshLocalMediaSlice;
 }
 
 export type MeshRootAction =
@@ -55,7 +62,8 @@ export type MeshRootAction =
   | MeshRosterAction
   | MeshEventLogAction
   | MeshPairsAction
-  | MeshChatAction;
+  | MeshChatAction
+  | MeshLocalMediaAction;
 
 export const initialMeshRootState: MeshRootState = {
   local: initialMeshLocalParticipant,
@@ -63,13 +71,23 @@ export const initialMeshRootState: MeshRootState = {
   eventLog: initialMeshEventLogSlice,
   pairs: initialMeshPairsSlice,
   chat: initialMeshChatSlice,
+  localMedia: initialMeshLocalMediaSlice,
 };
 
 function isRosterAction(a: MeshRootAction): a is MeshRosterAction {
   return (
     a.type === "MESH_ROSTER_SNAPSHOT_APPLIED" ||
     a.type === "MESH_ROSTER_UPDATE_APPLIED" ||
+    a.type === "MESH_REMOTE_MEDIA_STATE_APPLIED" ||
     a.type === "MESH_ROSTER_RESET"
+  );
+}
+
+function isLocalMediaAction(a: MeshRootAction): a is MeshLocalMediaAction {
+  return (
+    a.type === "MESH_LOCAL_MEDIA_MIC_TOGGLED" ||
+    a.type === "MESH_LOCAL_MEDIA_CAMERA_TOGGLED" ||
+    a.type === "MESH_LOCAL_MEDIA_RESET"
   );
 }
 
@@ -114,6 +132,12 @@ export function meshRootReducer(
   }
   if (isChatAction(action)) {
     return { ...state, chat: meshChatReducer(state.chat, action) };
+  }
+  if (isLocalMediaAction(action)) {
+    return {
+      ...state,
+      localMedia: meshLocalMediaReducer(state.localMedia, action),
+    };
   }
   return { ...state, local: meshLocalReducer(state.local, action) };
 }

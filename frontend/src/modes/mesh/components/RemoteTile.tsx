@@ -22,6 +22,10 @@
 import { useEffect, useRef } from "react";
 import type { MeshPairView } from "../state/pairs";
 import type { Presence } from "../signaling/schema";
+import {
+  defaultRemoteMediaState,
+  type RemoteMediaState,
+} from "../state/roster";
 
 const PRESENCE_LABEL: Record<Presence, string> = {
   joined: "joined",
@@ -42,6 +46,10 @@ export interface RemoteTileProps {
   // Pair view — `null` while the pair has not yet been allocated
   // (e.g. the remote peer is in `joined` but not yet `media-ready`).
   readonly pair: MeshPairView | null;
+  // Remote media-state indicator (M9 / FR-033). Default is mic+camera
+  // "on" / screen-share "inactive" so the tile renders meaningful pills
+  // for peers that haven't toggled yet.
+  readonly remoteMedia?: RemoteMediaState;
 }
 
 export function RemoteTile({
@@ -49,6 +57,7 @@ export function RemoteTile({
   admissionIndex,
   presence,
   pair,
+  remoteMedia = defaultRemoteMediaState,
 }: RemoteTileProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -127,6 +136,26 @@ export function RemoteTile({
           value={pair?.dataChannelState ?? "(no pair)"}
           testId={`mesh-remote-tile-${peerId}-data-channel-state`}
           dimmed={!pair}
+        />
+      </ul>
+      <ul
+        className="mesh-remote-tile__media"
+        data-testid={`mesh-remote-tile-${peerId}-media-indicators`}
+      >
+        <Pill
+          label="mic"
+          value={remoteMedia.microphone}
+          testId={`mesh-remote-tile-${peerId}-mic`}
+        />
+        <Pill
+          label="camera"
+          value={remoteMedia.camera}
+          testId={`mesh-remote-tile-${peerId}-camera`}
+        />
+        <Pill
+          label="screen"
+          value={remoteMedia.screenShare}
+          testId={`mesh-remote-tile-${peerId}-screen-share`}
         />
       </ul>
     </article>

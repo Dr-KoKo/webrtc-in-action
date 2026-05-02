@@ -631,42 +631,42 @@ Tasks that **MUST be complete** before each pivotal point:
 
 **Goal**: mic / cam toggles on one peer update the other `N − 1` peers' tiles via **one** `pair_media_state` signaling message + **server fan-out**.
 
-- [ ] T069 [frontend][webrtc] [M9] Mic / camera toggles — `frontend/src/features/mesh/components/MeshControls.tsx`, `frontend/src/features/mesh/webrtc/senders.ts`
+- [X] T069 [frontend][webrtc] [M9] Mic / camera toggles — `frontend/src/features/mesh/components/MeshControls.tsx`, `frontend/src/features/mesh/webrtc/senders.ts`
     - Purpose: flip `track.enabled` on the local audio / video tracks; do NOT renegotiate.
     - Files: 2 new / extended files.
     - Dependencies: T039, T046.
     - DoD: mic / camera buttons immediately reflect local state; remote tiles still show the local participant (since SDP + senders are unchanged) but the remote's `RemoteMediaState` indicator updates per T072.
     - Verify: manual; the 001 quickstart pattern §4.2 generalizes.
 
-- [ ] T070 [frontend][P] [M9] Emit one `pair_media_state` per local toggle — `frontend/src/features/mesh/components/MeshControls.tsx`
+- [X] T070 [frontend][P] [M9] Emit one `pair_media_state` per local toggle — `frontend/src/features/mesh/components/MeshControls.tsx`
     - Purpose: FR-032 — exactly one signaling message per state change; client does NOT iterate pairs.
     - Files: extend `MeshControls.tsx`.
     - Dependencies: T069.
     - DoD: mic toggle ⇒ exactly one `pair_media_state` outbound (asserted in test); reflect that the message has no `pairId` (per contract §3.13 note).
     - Verify: `mediaStateOutboundCardinality.spec.ts`.
 
-- [ ] T071 [server] [M9] Server-side fan-out for `pair_media_state` — `signaling/internal/mesh/handler.go`
+- [X] T071 [server] [M9] Server-side fan-out for `pair_media_state` — `signaling/internal/mesh/handler.go`
     - Purpose: receive one `pair_media_state` from a sender; fan out one envelope per **other** participant in the same room with `from = sender.peerId`. Do NOT mutate the payload. Do NOT log mic/cam/screen values.
     - Files: extend handler.
     - Dependencies: T028, T040.
     - DoD: 4-window run with one mic toggle ⇒ exactly 3 outbound envelopes from the server (one per other participant); payload bytes unchanged.
     - Verify: `mesh_media_state_fanout_test.go`.
 
-- [ ] T072 [frontend] [M9] Remote media-state rendering — `frontend/src/features/mesh/components/RemoteTile.tsx`, `frontend/src/features/mesh/state/roster.ts`
+- [X] T072 [frontend] [M9] Remote media-state rendering — `frontend/src/features/mesh/components/RemoteTile.tsx`, `frontend/src/features/mesh/state/roster.ts`
     - Purpose: on inbound `pair_media_state`, update `RemoteParticipant.remoteMedia`; render mic / cam / screen icons per FR-033.
     - Files: extend tile + reducer.
     - Dependencies: T034, T071.
     - DoD: remote tiles update within ~1 s of the toggle.
     - Verify: quickstart §4.2 partial; SC for media-state visibility.
 
-- [ ] T073 [P][test] [M9] Server-side fan-out test — `signaling/tests/mesh/mesh_media_state_fanout_test.go`
+- [X] T073 [P][test] [M9] Server-side fan-out test — `signaling/tests/mesh/mesh_media_state_fanout_test.go`
     - Purpose: assert one client message ⇒ exactly `N − 1` outbound envelopes; assert no payload mutation; assert no media-bytes logging.
     - Files: new test.
     - Dependencies: T071.
     - DoD: scenario covers `N=2`, `N=3`, `N=4`; in each, count outbound envelopes is exactly `N − 1`.
     - Verify: `go test ./tests/mesh/mesh_media_state_fanout_test.go`.
 
-- [ ] T074 [P][test][frontend] [M9] Client outbound cardinality test — `frontend/src/features/mesh/tests/mediaStateOutboundCardinality.spec.ts`
+- [X] T074 [P][test][frontend] [M9] Client outbound cardinality test — `frontend/src/features/mesh/tests/mediaStateOutboundCardinality.spec.ts`
     - Purpose: assert toggling mic / cam emits exactly **one** signaling message (not `N − 1`).
     - Files: new spec.
     - Dependencies: T070.

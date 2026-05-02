@@ -11,13 +11,37 @@
 // records them in the event log as `mesh_roster_update_dropped_stale`
 // (data-model §A.6, contract §3.5).
 
-import type { Presence } from "../signaling/schema";
+import type {
+  CameraState,
+  MicState,
+  Presence,
+  ScreenShareState,
+} from "../signaling/schema";
+
+// RemoteMediaState — last `pair_media_state` snapshot received for the
+// peer (M9 / FR-033). Until the first message arrives, every field is
+// the contract's "unknown" default — mic+camera "on", screen-share
+// "inactive" — so the indicators don't render an alarmist "muted"
+// state for peers that simply haven't toggled yet.
+export interface RemoteMediaState {
+  readonly microphone: MicState;
+  readonly camera: CameraState;
+  readonly screenShare: ScreenShareState;
+  readonly receivedAt?: number;
+}
+
+export const defaultRemoteMediaState: RemoteMediaState = {
+  microphone: "on",
+  camera: "on",
+  screenShare: "inactive",
+};
 
 export interface RemoteParticipant {
   readonly peerId: string;
   readonly admissionIndex: number;
   readonly presence: Presence;
   readonly joinedAt?: number;
+  readonly remoteMedia: RemoteMediaState;
 }
 
 export interface MeshRosterSlice {
@@ -53,6 +77,17 @@ export type MeshRosterAction =
       selfPeerId?: string;
       now?: number;
     }
+  | {
+      // Server-fanned-out `pair_media_state` (M9 / contract §3.13).
+      // Updates only the named remote peer's `remoteMedia`. NEVER
+      // touches the local participant or any other roster entry.
+      type: "MESH_REMOTE_MEDIA_STATE_APPLIED";
+      subjectPeerId: string;
+      microphone: MicState;
+      camera: CameraState;
+      screenShare: ScreenShareState;
+      now?: number;
+    }
   | { type: "MESH_ROSTER_RESET" };
 
 export type MeshRosterReducerOutcome =
@@ -86,6 +121,7 @@ export function rosterReducerWithOutcome(
           admissionIndex: p.admissionIndex,
           presence: p.presence,
           joinedAt: ts,
+          remoteMedia: defaultRemoteMediaState,
         };
       }
       return {
@@ -121,11 +157,40 @@ export function rosterReducerWithOutcome(
           admissionIndex: action.admissionIndex,
           presence: action.presence,
           joinedAt: existing?.joinedAt ?? action.now ?? Date.now(),
+          remoteMedia: existing?.remoteMedia ?? defaultRemoteMediaState,
         };
       }
       return {
         kind: "applied",
         next: { serverSeq: action.serverSeq, byPeerId: next },
+      };
+    }
+    case "MESH_REMOTE_MEDIA_STATE_APPLIED": {
+      // Drop silently if the subject peer is unknown — the dispatcher
+      // surfaces the unknown-sender case as an error event so the
+      // reducer doesn't need to log here. This keeps the reducer pure
+      // (no console / event-log side effects) and matches the
+      // "unknown sender → safe no-op" requirement (T072 testing).
+      const existing = state.byPeerId[action.subjectPeerId];
+      if (!existing) {
+        return { kind: "applied", next: state };
+      }
+      const ts = action.now ?? Date.now();
+      const next: Record<string, RemoteParticipant> = {
+        ...state.byPeerId,
+        [action.subjectPeerId]: {
+          ...existing,
+          remoteMedia: {
+            microphone: action.microphone,
+            camera: action.camera,
+            screenShare: action.screenShare,
+            receivedAt: ts,
+          },
+        },
+      };
+      return {
+        kind: "applied",
+        next: { serverSeq: state.serverSeq, byPeerId: next },
       };
     }
     case "MESH_ROSTER_RESET":
