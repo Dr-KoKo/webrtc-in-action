@@ -112,4 +112,83 @@ fi
   fi
 )
 
+# Per-mode ring rules (specs/signaling-architecture.md §2.4). Each
+# mode's three sub-packages must respect the dependency direction:
+#
+#   protocol/    pure schema — imports neither room/ nor signaling/
+#   room/        pure state  — imports neither protocol/ nor signaling/
+#   signaling/   verbs       — imports protocol/ + room/, NOT mode root,
+#                              NOT shared/wsserver
+#   mode root    only package wiring shared/wsserver to signaling.Service
+#
+# 3a. protocol/ must not import room/ or signaling/.
+(
+  cd signaling
+  for m in "${BACK_MODES[@]}"; do
+    if go list -deps "./internal/modes/$m/protocol/..." 2>/dev/null \
+      | grep -E "/internal/modes/$m/(room|signaling)$" >/dev/null; then
+      echo "VIOLATION: backend mode $m protocol/ imports room/ or signaling/" >&2
+      go list -deps "./internal/modes/$m/protocol/..." 2>/dev/null \
+        | grep -E "/internal/modes/$m/(room|signaling)$" >&2 || true
+      exit 1
+    fi
+  done
+)
+
+# 3b. room/ must not import protocol/ or signaling/.
+(
+  cd signaling
+  for m in "${BACK_MODES[@]}"; do
+    if go list -deps "./internal/modes/$m/room/..." 2>/dev/null \
+      | grep -E "/internal/modes/$m/(protocol|signaling)$" >/dev/null; then
+      echo "VIOLATION: backend mode $m room/ imports protocol/ or signaling/" >&2
+      go list -deps "./internal/modes/$m/room/..." 2>/dev/null \
+        | grep -E "/internal/modes/$m/(protocol|signaling)$" >&2 || true
+      exit 1
+    fi
+  done
+)
+
+# 3c. signaling/ must not import the mode root or shared/wsserver.
+#     Use {{.Imports}} (direct only) — signaling/ legitimately
+#     transitively reaches shared/wsserver via the mode-root types it
+#     does NOT import; we want to catch only direct imports.
+(
+  cd signaling
+  for m in "${BACK_MODES[@]}"; do
+    bad=$(go list -f '{{range .Imports}}{{println .}}{{end}}' "./internal/modes/$m/signaling/..." 2>/dev/null \
+      | grep -E "(/internal/modes/$m\$|/internal/shared/wsserver\$)" || true)
+    if [ -n "$bad" ]; then
+      echo "VIOLATION: backend mode $m signaling/ imports mode root or shared/wsserver" >&2
+      echo "$bad" >&2
+      exit 1
+    fi
+  done
+)
+
+# 3d. The mode root is the only package importing shared/wsserver.
+#     {{.Imports}} catches direct imports only. Walk every backend
+#     package; flag any package outside cmd/ + internal/app/ +
+#     internal/modes/<m>/ (mode root file) that imports wsserver.
+(
+  cd signaling
+  while IFS= read -r line; do
+    pkg=${line%% *}
+    imports=${line#* }
+    case "$pkg" in
+      webrtc-lab/signaling/cmd/*) ;;        # cmd/ uses wsserver via internal/app, not directly
+      webrtc-lab/signaling/internal/shared/wsserver) ;;  # wsserver itself
+      webrtc-lab/signaling/internal/modes/onetoone) ;;   # 1:1 mode root — allowed
+      webrtc-lab/signaling/internal/modes/mesh) ;;       # mesh mode root — allowed
+      *)
+        if echo "$imports" | grep -qE 'internal/shared/wsserver'; then
+          echo "VIOLATION: package $pkg directly imports shared/wsserver — only mode roots may" >&2
+          echo "  imports: $imports" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  done < <(go list -f '{{.ImportPath}} {{join .Imports " "}}' ./... 2>/dev/null)
+)
+
 echo "Boundary audit clean."
