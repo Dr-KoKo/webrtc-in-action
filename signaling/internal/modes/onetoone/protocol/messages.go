@@ -3,126 +3,40 @@
 // match the canonical contract in
 // specs/001-webrtc-1to1-call/contracts/signaling-protocol.md §3.
 
-package onetoone
+package protocol
 
 import (
 	"encoding/json"
-	"fmt"
 )
 
 // ---------------------------------------------------------------------
-// decodePayload — dispatch table from Type to struct + Validate()
+// Payload-specific enum values
 // ---------------------------------------------------------------------
-
-func decodePayload(t Type, raw json.RawMessage) (any, error) {
-	switch t {
-	case TypeJoinRoom:
-		return decodeInto[JoinRoomPayload](raw)
-	case TypeJoinAccepted:
-		return decodeInto[JoinAcceptedPayload](raw)
-	case TypeJoinRejected:
-		return decodeInto[JoinRejectedPayload](raw)
-	case TypePeerPresenceChanged:
-		return decodeInto[PeerPresenceChangedPayload](raw)
-	case TypeMediaReady:
-		return decodeInto[MediaReadyPayload](raw)
-	case TypeMediaFailed:
-		return decodeInto[MediaFailedPayload](raw)
-	case TypeReadyForOffer:
-		return decodeInto[ReadyForOfferPayload](raw)
-	case TypeOffer:
-		return decodeInto[OfferPayload](raw)
-	case TypeAnswer:
-		return decodeInto[AnswerPayload](raw)
-	case TypeIceCandidate:
-		return decodeInto[IceCandidatePayload](raw)
-	case TypeMediaState:
-		return decodeInto[MediaStatePayload](raw)
-	case TypePeerLeft:
-		return decodeInto[PeerLeftPayload](raw)
-	case TypeParticipantReleased:
-		return decodeInto[ParticipantReleasedPayload](raw)
-	case TypeLeaveRoom:
-		return decodeInto[LeaveRoomPayload](raw)
-	case TypeError:
-		return decodeInto[ErrorPayload](raw)
-	}
-	return nil, &DecodeError{Code: CodeMalformed, Message: fmt.Sprintf("no decoder for %q", t)}
-}
-
-type validator interface {
-	Validate() error
-}
-
-func decodeInto[T any](raw json.RawMessage) (*T, error) {
-	var v T
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &v); err != nil {
-			return nil, &DecodeError{Code: CodeMalformed, Message: err.Error()}
-		}
-	}
-	if vv, ok := any(&v).(validator); ok {
-		if err := vv.Validate(); err != nil {
-			return nil, err
-		}
-	}
-	return &v, nil
-}
-
-// ---------------------------------------------------------------------
-// Enum values carried inside payloads
-// ---------------------------------------------------------------------
-
-type MediaReadiness string
-
-const (
-	MediaPending MediaReadiness = "pending-media"
-	MediaReady   MediaReadiness = "ready"
-)
-
-type RoomReadiness string
-
-const (
-	RoomEmpty            RoomReadiness = "empty"
-	RoomWaitingForMedia  RoomReadiness = "waiting_for_media"
-	RoomWaitingForPeer   RoomReadiness = "waiting_for_peer"
-	RoomPaired           RoomReadiness = "paired"
-)
 
 type JoinRejectedResult string
 
 const (
-	JoinRejectedRoomFull     JoinRejectedResult = "join_rejected_room_full"
-	JoinRejectedInvalidRoom  JoinRejectedResult = "join_rejected_invalid_room"
+	JoinRejectedRoomFull    JoinRejectedResult = "join_rejected_room_full"
+	JoinRejectedInvalidRoom JoinRejectedResult = "join_rejected_invalid_room"
 )
 
 type JoinRejectedReason string
 
 const (
-	ReasonRoomFull       JoinRejectedReason = "room_full"
-	ReasonInvalidRoomID  JoinRejectedReason = "invalid_room_id"
-)
-
-type Presence string
-
-const (
-	PresencePendingMedia Presence = "pending-media"
-	PresenceReady        Presence = "ready"
-	PresenceInCall       Presence = "in-call"
-	PresenceLeft         Presence = "left"
-	PresenceReleased     Presence = "released"
+	ReasonRoomFull      JoinRejectedReason = "room_full"
+	ReasonInvalidRoomID JoinRejectedReason = "invalid_room_id"
 )
 
 type PresenceReason string
 
 const (
-	PresenceReasonAdmitted         PresenceReason = "admitted"
-	PresenceReasonMediaReady       PresenceReason = "media_ready"
-	PresenceReasonMediaFailed      PresenceReason = "media_failed"
-	PresenceReasonRoleAssigned     PresenceReason = "role_assigned"
-	PresenceReasonGracefulLeave    PresenceReason = "graceful_leave"
-	PresenceReasonDisconnect       PresenceReason = "disconnect"
-	PresenceReasonPendingReleased  PresenceReason = "pending_released"
+	PresenceReasonAdmitted        PresenceReason = "admitted"
+	PresenceReasonMediaReady      PresenceReason = "media_ready"
+	PresenceReasonMediaFailed     PresenceReason = "media_failed"
+	PresenceReasonRoleAssigned    PresenceReason = "role_assigned"
+	PresenceReasonGracefulLeave   PresenceReason = "graceful_leave"
+	PresenceReasonDisconnect      PresenceReason = "disconnect"
+	PresenceReasonPendingReleased PresenceReason = "pending_released"
 )
 
 type MediaFailedReason string
@@ -137,8 +51,8 @@ const (
 type ParticipantReleasedResult string
 
 const (
-	ParticipantReleasedMediaFailed  ParticipantReleasedResult = "participant_released_media_failed"
-	ParticipantReleasedDisconnect   ParticipantReleasedResult = "participant_released_disconnect"
+	ParticipantReleasedMediaFailed ParticipantReleasedResult = "participant_released_media_failed"
+	ParticipantReleasedDisconnect  ParticipantReleasedResult = "participant_released_disconnect"
 )
 
 type ParticipantReleasedReason string
@@ -146,13 +60,6 @@ type ParticipantReleasedReason string
 const (
 	ReleasedReasonMediaFailed ParticipantReleasedReason = "media_failed"
 	ReleasedReasonDisconnect  ParticipantReleasedReason = "disconnect"
-)
-
-type Role string
-
-const (
-	RoleOfferer  Role = "offerer"
-	RoleAnswerer Role = "answerer"
 )
 
 type PeerLeftReason string
@@ -173,11 +80,6 @@ func (p *JoinRoomPayload) Validate() error { return nil }
 // ---------------------------------------------------------------------
 // §3.2 join_accepted
 // ---------------------------------------------------------------------
-
-type RemotePeerSnapshot struct {
-	PeerID         string         `json:"peerId"`
-	MediaReadiness MediaReadiness `json:"mediaReadiness"`
-}
 
 type JoinAcceptedPayload struct {
 	PeerID         string              `json:"peerId"`
@@ -275,11 +177,6 @@ func (p *PeerPresenceChangedPayload) Validate() error {
 // §3.5 media_ready
 // ---------------------------------------------------------------------
 
-type MediaCapabilities struct {
-	Audio bool `json:"audio"`
-	Video bool `json:"video"`
-}
-
 type MediaReadyPayload struct {
 	MediaCapabilities MediaCapabilities `json:"mediaCapabilities"`
 }
@@ -316,19 +213,6 @@ func (p *MediaFailedPayload) Validate() error {
 // §3.7 ready_for_offer
 // ---------------------------------------------------------------------
 
-// IceServer mirrors the browser RTCIceServer dictionary. urls can be
-// either a string or a string list — contract §3.7.
-type IceServer struct {
-	URLs       any    `json:"urls"`
-	Username   string `json:"username,omitempty"`
-	Credential string `json:"credential,omitempty"`
-}
-
-type ReadyForOfferRemote struct {
-	PeerID         string `json:"peerId"`
-	AdmissionOrder int    `json:"admissionOrder"`
-}
-
 type ReadyForOfferPayload struct {
 	Role       Role                `json:"role"`
 	RemotePeer ReadyForOfferRemote `json:"remotePeer"`
@@ -353,13 +237,6 @@ func (p *ReadyForOfferPayload) Validate() error {
 // ---------------------------------------------------------------------
 // §3.8 offer / §3.9 answer — SDP bodies
 // ---------------------------------------------------------------------
-
-// SDPBody is the raw RTCSessionDescriptionInit shape. The server MUST
-// NOT parse sdp.sdp — it is opaque bytes (NFR-003).
-type SDPBody struct {
-	Type string `json:"type"`
-	SDP  string `json:"sdp"`
-}
 
 type OfferPayload struct {
 	SDP SDPBody `json:"sdp"`
@@ -392,15 +269,6 @@ func (p *AnswerPayload) Validate() error {
 // ---------------------------------------------------------------------
 // §3.10 ice_candidate
 // ---------------------------------------------------------------------
-
-// IceCandidateInit mirrors the browser RTCIceCandidateInit. The
-// strings are opaque to the server.
-type IceCandidateInit struct {
-	Candidate        string  `json:"candidate"`
-	SDPMid           *string `json:"sdpMid,omitempty"`
-	SDPMLineIndex    *int    `json:"sdpMLineIndex,omitempty"`
-	UsernameFragment *string `json:"usernameFragment,omitempty"`
-}
 
 // IceCandidatePayload wraps the candidate pointer so we can
 // distinguish "end of candidates" (candidate == nil, JSON null) from

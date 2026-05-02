@@ -11,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"webrtc-lab/signaling/internal/modes/onetoone/protocol"
 	"webrtc-lab/signaling/internal/modes/onetoone/room"
 	"webrtc-lab/signaling/internal/shared/config"
 	"webrtc-lab/signaling/internal/shared/heartbeat"
@@ -37,7 +38,7 @@ type Handler struct {
 	// (contract §3.7). Loaded once at construction from env; never
 	// logged (TURN credentials are secrets). If the list is empty, a
 	// public STUN fallback is used so a fresh clone works on localhost.
-	IceServers []IceServer
+	IceServers []protocol.IceServer
 
 	server *wsserver.Server
 }
@@ -86,13 +87,13 @@ func (h *Handler) NewSession(sess wsserver.Session, log *slog.Logger) (wsserver.
 	return &oneToOneConn{sess: sess, handler: h, log: log}, nil
 }
 
-// iceServersFromConfig converts the shared internal IceServer
+// iceServersFromConfig converts the shared internal protocol.IceServer
 // struct (no JSON tags) to this mode's wire-payload type with v1
 // contract JSON tags.
-func iceServersFromConfig(in []config.IceServer) []IceServer {
-	out := make([]IceServer, len(in))
+func iceServersFromConfig(in []config.IceServer) []protocol.IceServer {
+	out := make([]protocol.IceServer, len(in))
 	for i, s := range in {
-		out[i] = IceServer{
+		out[i] = protocol.IceServer{
 			URLs:       s.URLs,
 			Username:   s.Username,
 			Credential: s.Credential,
@@ -131,9 +132,9 @@ func (c *oneToOneConn) sendJSON(ctx context.Context, v any) error {
 // to the client via writeError inside the per-type handlers; we
 // log and return nil for the same continue-on-non-fatal reason.
 func (c *oneToOneConn) HandleFrame(ctx context.Context, frame []byte) error {
-	decoded, derr := Decode(frame)
+	decoded, derr := protocol.Decode(frame)
 	if derr != nil {
-		var de *DecodeError
+		var de *protocol.DecodeError
 		errors.As(derr, &de)
 		c.handler.writeError(ctx, c, de, "")
 		c.handler.Log.Debug("decode error",
@@ -189,33 +190,33 @@ func (r *roomConn) SendJSON(v any) error {
 // dispatch routes a decoded envelope to the correct handler for the
 // current phase. Types not yet wired are rejected with an `error`
 // frame so a malformed client cannot drive state we have not built.
-func (h *Handler) dispatch(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
+func (h *Handler) dispatch(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
 	switch d.Envelope.Type {
-	case TypeJoinRoom:
+	case protocol.TypeJoinRoom:
 		return h.handleJoinRoom(ctx, cc, d)
-	case TypeLeaveRoom:
+	case protocol.TypeLeaveRoom:
 		return h.handleLeaveRoom(ctx, cc, d)
-	case TypeMediaReady:
+	case protocol.TypeMediaReady:
 		return h.handleMediaReady(ctx, cc, d)
-	case TypeMediaFailed:
+	case protocol.TypeMediaFailed:
 		return h.handleMediaFailed(ctx, cc, d)
-	case TypeOffer:
+	case protocol.TypeOffer:
 		return h.handleOffer(ctx, cc, d)
-	case TypeAnswer:
+	case protocol.TypeAnswer:
 		return h.handleAnswer(ctx, cc, d)
-	case TypeIceCandidate:
+	case protocol.TypeIceCandidate:
 		return h.handleIceCandidate(ctx, cc, d)
-	case TypeMediaState:
+	case protocol.TypeMediaState:
 		return h.handleMediaState(ctx, cc, d)
-	case TypeReadyForOffer, TypeJoinAccepted, TypeJoinRejected,
-		TypePeerPresenceChanged, TypePeerLeft, TypeParticipantReleased:
+	case protocol.TypeReadyForOffer, protocol.TypeJoinAccepted, protocol.TypeJoinRejected,
+		protocol.TypePeerPresenceChanged, protocol.TypePeerLeft, protocol.TypeParticipantReleased:
 		// These are server-originated; a client sending them is a bug.
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeMalformed,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeMalformed,
 			Message: "server-originated message received from client",
 		}, d.Envelope.RequestID)
 		return nil
-	case TypeError:
+	case protocol.TypeError:
 		// Clients may send `error` back to flag inbound-validation
 		// failures. Log and drop — the server treats these as
 		// informational.
@@ -227,22 +228,22 @@ func (h *Handler) dispatch(ctx context.Context, cc *oneToOneConn, d *Decoded) er
 	return nil
 }
 
-func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
+func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
 	if cc.peerID != "" {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeAlreadyJoined,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeAlreadyJoined,
 			Message: "this connection has already joined a room",
 		}, d.Envelope.RequestID)
 		return nil
 	}
 
 	roomID := d.Envelope.RoomID
-	if err := ValidateRoomID(roomID); err != nil {
+	if err := protocol.ValidateRoomID(roomID); err != nil {
 		// Contract §3.1 + §3.3 route invalid IDs to join_rejected, not
 		// the generic `error` message, because it is a terminal
 		// admission outcome not a protocol violation.
 		h.sendJoinRejected(ctx, cc, roomID, d.Envelope.RequestID,
-			JoinRejectedInvalidRoom, ReasonInvalidRoomID,
+			protocol.JoinRejectedInvalidRoom, protocol.ReasonInvalidRoomID,
 			"room ID must match ^[A-Za-z0-9._-]{1,64}$.")
 		return nil
 	}
@@ -252,13 +253,13 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *Decod
 	switch outcome.Result {
 	case room.JoinRejectedInvalidRoom:
 		h.sendJoinRejected(ctx, cc, roomID, d.Envelope.RequestID,
-			JoinRejectedInvalidRoom, ReasonInvalidRoomID,
+			protocol.JoinRejectedInvalidRoom, protocol.ReasonInvalidRoomID,
 			"room ID must match ^[A-Za-z0-9._-]{1,64}$.")
 		return nil
 
 	case room.JoinRejectedRoomFull:
 		h.sendJoinRejected(ctx, cc, roomID, d.Envelope.RequestID,
-			JoinRejectedRoomFull, ReasonRoomFull,
+			protocol.JoinRejectedRoomFull, protocol.ReasonRoomFull,
 			"Room '"+roomID+"' already has two reserved participants.")
 		return nil
 
@@ -270,9 +271,9 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *Decod
 	// Snapshot the remote peer (if any) under the room lock so the
 	// join_accepted payload reflects the state at admission time.
 	outcome.Room.Lock()
-	var remote *RemotePeerSnapshot
+	var remote *protocol.RemotePeerSnapshot
 	if r := outcome.Room.Remote(outcome.Participant.PeerID); r != nil {
-		remote = &RemotePeerSnapshot{
+		remote = &protocol.RemotePeerSnapshot{
 			PeerID:         r.PeerID,
 			MediaReadiness: toWireMediaReadiness(r.MediaReadiness),
 		}
@@ -281,15 +282,15 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *Decod
 	admissionOrder := outcome.Participant.AdmissionOrder
 	outcome.Room.Unlock()
 
-	payload, _ := json.Marshal(JoinAcceptedPayload{
+	payload, _ := json.Marshal(protocol.JoinAcceptedPayload{
 		PeerID:         outcome.Participant.PeerID,
 		AdmissionOrder: admissionOrder,
 		RoomReadiness:  readiness,
 		RemotePeer:     remote,
 	})
-	env := Envelope{
-		V:         ContractVersion,
-		Type:      TypeJoinAccepted,
+	env := protocol.Envelope{
+		V:         protocol.ContractVersion,
+		Type:      protocol.TypeJoinAccepted,
 		RoomID:    roomID,
 		RequestID: d.Envelope.RequestID,
 		TS:        time.Now().UnixMilli(),
@@ -303,7 +304,7 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *Decod
 	// Broadcast the admission event to both reserved participants (§3.4,
 	// §T025 DoD — including the subject).
 	h.broadcastPresence(ctx, outcome.Room, outcome.Participant,
-		PresencePendingMedia, PresenceReasonAdmitted)
+		protocol.PresencePendingMedia, protocol.PresenceReasonAdmitted)
 
 	h.Log.Info("peer admitted",
 		slog.String("event", "peer_admitted"),
@@ -315,10 +316,10 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *Decod
 	return nil
 }
 
-func (h *Handler) handleLeaveRoom(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
+func (h *Handler) handleLeaveRoom(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
 	if cc.peerID == "" {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "leave_room requires an admitted participant",
 		}, d.Envelope.RequestID)
 		return nil
@@ -343,15 +344,15 @@ func (h *Handler) handleLeaveRoom(ctx context.Context, cc *oneToOneConn, d *Deco
 // same classification decides both the presence enum on the broadcast
 // and whether the convenience peer_left message is sent.
 type departureClassification struct {
-	inCall          bool
-	presence        Presence
-	presenceReason  PresenceReason
-	peerLeftReason  PeerLeftReason
+	inCall         bool
+	presence       protocol.Presence
+	presenceReason protocol.PresenceReason
+	peerLeftReason protocol.PeerLeftReason
 }
 
 // classifyDeparture runs §C.6 step 1 BEFORE any state mutation. The
 // caller passes `reason ∈ {"graceful_leave", "disconnect",
-// "media_failed"}` — reason drives the PresenceReason / PeerLeftReason
+// "media_failed"}` — reason drives the protocol.PresenceReason / protocol.PeerLeftReason
 // labels but never overrides the in-call / pre-pairing split. A
 // pending-media departure is ALWAYS pre-pairing regardless of reason,
 // which is the invariant T086's
@@ -361,28 +362,28 @@ func classifyDeparture(p *room.Participant, reason string) departureClassificati
 	if p != nil {
 		inCall = room.IsInCall(p.CallPhase)
 	}
-	var presence Presence
+	var presence protocol.Presence
 	if inCall {
-		presence = PresenceLeft
+		presence = protocol.PresenceLeft
 	} else {
-		presence = PresenceReleased
+		presence = protocol.PresenceReleased
 	}
-	var presReason PresenceReason
+	var presReason protocol.PresenceReason
 	switch reason {
 	case "graceful_leave":
-		presReason = PresenceReasonGracefulLeave
+		presReason = protocol.PresenceReasonGracefulLeave
 	case "disconnect":
-		presReason = PresenceReasonDisconnect
+		presReason = protocol.PresenceReasonDisconnect
 	case "media_failed":
-		presReason = PresenceReasonMediaFailed
+		presReason = protocol.PresenceReasonMediaFailed
 	default:
-		presReason = PresenceReasonDisconnect
+		presReason = protocol.PresenceReasonDisconnect
 	}
-	var peerLeftReason PeerLeftReason
+	var peerLeftReason protocol.PeerLeftReason
 	if reason == "graceful_leave" {
-		peerLeftReason = PeerLeftGracefulLeave
+		peerLeftReason = protocol.PeerLeftGracefulLeave
 	} else {
-		peerLeftReason = PeerLeftDisconnect
+		peerLeftReason = protocol.PeerLeftDisconnect
 	}
 	return departureClassification{
 		inCall:         inCall,
@@ -442,15 +443,15 @@ func (h *Handler) releaseAndNotify(_ context.Context, cc *oneToOneConn, reason s
 	}
 
 	// peer_presence_changed is ALWAYS sent on departure (§C.6 step 4).
-	presencePayload, _ := json.Marshal(PeerPresenceChangedPayload{
+	presencePayload, _ := json.Marshal(protocol.PeerPresenceChangedPayload{
 		SubjectPeerID:  outcome.Departing.PeerID,
 		AdmissionOrder: outcome.Departing.AdmissionOrder,
 		Presence:       cls.presence,
 		Reason:         cls.presenceReason,
 	})
-	presenceEnv := Envelope{
-		V:       ContractVersion,
-		Type:    TypePeerPresenceChanged,
+	presenceEnv := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypePeerPresenceChanged,
 		RoomID:  roomID,
 		TS:      time.Now().UnixMilli(),
 		Payload: presencePayload,
@@ -465,13 +466,13 @@ func (h *Handler) releaseAndNotify(_ context.Context, cc *oneToOneConn, reason s
 	// Pending-media releases use peer_presence_changed alone (§3.12
 	// note: "Pending-media releases MUST NOT emit peer_left").
 	if cls.inCall {
-		payload, _ := json.Marshal(PeerLeftPayload{
+		payload, _ := json.Marshal(protocol.PeerLeftPayload{
 			PeerID: outcome.Departing.PeerID,
 			Reason: cls.peerLeftReason,
 		})
-		env := Envelope{
-			V:       ContractVersion,
-			Type:    TypePeerLeft,
+		env := protocol.Envelope{
+			V:       protocol.ContractVersion,
+			Type:    protocol.TypePeerLeft,
 			RoomID:  roomID,
 			TS:      time.Now().UnixMilli(),
 			Payload: payload,
@@ -496,20 +497,20 @@ func (h *Handler) releaseAndNotify(_ context.Context, cc *oneToOneConn, reason s
 // broadcastPresence sends peer_presence_changed to every reserved
 // slot in the room (contract §3.4 "S→B to both reserved
 // participants, including the subject").
-func (h *Handler) broadcastPresence(_ context.Context, r *room.Room, subject *room.Participant, presence Presence, reason PresenceReason) {
+func (h *Handler) broadcastPresence(_ context.Context, r *room.Room, subject *room.Participant, presence protocol.Presence, reason protocol.PresenceReason) {
 	r.Lock()
 	targets := r.Participants()
 	r.Unlock()
 
-	payload, _ := json.Marshal(PeerPresenceChangedPayload{
+	payload, _ := json.Marshal(protocol.PeerPresenceChangedPayload{
 		SubjectPeerID:  subject.PeerID,
 		AdmissionOrder: subject.AdmissionOrder,
 		Presence:       presence,
 		Reason:         reason,
 	})
-	env := Envelope{
-		V:       ContractVersion,
-		Type:    TypePeerPresenceChanged,
+	env := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypePeerPresenceChanged,
 		RoomID:  subject.RoomID,
 		TS:      time.Now().UnixMilli(),
 		Payload: payload,
@@ -530,15 +531,15 @@ func (h *Handler) broadcastPresence(_ context.Context, r *room.Room, subject *ro
 // sendJoinRejected centralizes the join_rejected send so both the
 // pre-admit room-ID validator and the RoomManager rejection paths use
 // the same envelope shape.
-func (h *Handler) sendJoinRejected(ctx context.Context, cc *oneToOneConn, roomID, requestID string, result JoinRejectedResult, reason JoinRejectedReason, message string) {
-	payload, _ := json.Marshal(JoinRejectedPayload{
+func (h *Handler) sendJoinRejected(ctx context.Context, cc *oneToOneConn, roomID, requestID string, result protocol.JoinRejectedResult, reason protocol.JoinRejectedReason, message string) {
+	payload, _ := json.Marshal(protocol.JoinRejectedPayload{
 		Result:  result,
 		Reason:  reason,
 		Message: message,
 	})
-	env := Envelope{
-		V:         ContractVersion,
-		Type:      TypeJoinRejected,
+	env := protocol.Envelope{
+		V:         protocol.ContractVersion,
+		Type:      protocol.TypeJoinRejected,
 		RoomID:    roomID,
 		RequestID: requestID,
 		TS:        time.Now().UnixMilli(),
@@ -547,15 +548,15 @@ func (h *Handler) sendJoinRejected(ctx context.Context, cc *oneToOneConn, roomID
 	_ = cc.sendJSON(ctx, env)
 }
 
-func (h *Handler) writeError(ctx context.Context, cc *oneToOneConn, de *DecodeError, correlates string) {
-	payload, _ := json.Marshal(ErrorPayload{
+func (h *Handler) writeError(ctx context.Context, cc *oneToOneConn, de *protocol.DecodeError, correlates string) {
+	payload, _ := json.Marshal(protocol.ErrorPayload{
 		Code:       de.Code,
 		Message:    de.Message,
 		Correlates: correlates,
 	})
-	env := Envelope{
-		V:       ContractVersion,
-		Type:    TypeError,
+	env := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypeError,
 		TS:      time.Now().UnixMilli(),
 		Payload: payload,
 	}
@@ -566,26 +567,26 @@ func (h *Handler) writeError(ctx context.Context, cc *oneToOneConn, de *DecodeEr
 // room → wire enum mapping
 // ---------------------------------------------------------------------
 
-func toWireMediaReadiness(m room.MediaReadiness) MediaReadiness {
+func toWireMediaReadiness(m room.MediaReadiness) protocol.MediaReadiness {
 	switch m {
 	case room.MediaReadinessReady:
-		return MediaReady
+		return protocol.MediaReady
 	}
-	return MediaPending
+	return protocol.MediaPending
 }
 
-func toWireRoomReadiness(c room.CallReadiness) RoomReadiness {
+func toWireRoomReadiness(c room.CallReadiness) protocol.RoomReadiness {
 	switch c {
 	case room.CallReadinessEmpty:
-		return RoomEmpty
+		return protocol.RoomEmpty
 	case room.CallReadinessWaitingForMedia:
-		return RoomWaitingForMedia
+		return protocol.RoomWaitingForMedia
 	case room.CallReadinessWaitingForPeer:
-		return RoomWaitingForPeer
+		return protocol.RoomWaitingForPeer
 	case room.CallReadinessPaired:
-		return RoomPaired
+		return protocol.RoomPaired
 	}
-	return RoomEmpty
+	return protocol.RoomEmpty
 }
 
 // ---------------------------------------------------------------------
@@ -597,18 +598,18 @@ func toWireRoomReadiness(c room.CallReadiness) RoomReadiness {
 // media_ready), and — if the room reaches paired call-readiness —
 // assigns roles by admissionOrder and emits ready_for_offer to both
 // peers exactly once per pairing attempt (contract §§3.5, 3.7).
-func (h *Handler) handleMediaReady(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
+func (h *Handler) handleMediaReady(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
 	if cc.peerID == "" {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "media_ready requires an admitted participant",
 		}, d.Envelope.RequestID)
 		return nil
 	}
 	rm := h.Rooms.Room(cc.roomID)
 	if rm == nil {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "room not found",
 		}, d.Envelope.RequestID)
 		return nil
@@ -618,16 +619,16 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *oneToOneConn, d *Dec
 	p := rm.FindByPeerID(cc.peerID)
 	if p == nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "participant not found",
 		}, d.Envelope.RequestID)
 		return nil
 	}
 	if p.MediaReadiness != room.MediaReadinessPending {
 		rm.Unlock()
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeUnexpectedMediaReady,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeUnexpectedMediaReady,
 			Message: "media_ready requires mediaReadiness = pending-media",
 		}, d.Envelope.RequestID)
 		return nil
@@ -647,7 +648,7 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *oneToOneConn, d *Dec
 	}
 	rm.Unlock()
 
-	h.broadcastPresence(ctx, rm, p, PresenceReady, PresenceReasonMediaReady)
+	h.broadcastPresence(ctx, rm, p, protocol.PresenceReady, protocol.PresenceReasonMediaReady)
 
 	if assignRoles {
 		h.sendReadyForOffer(ctx, rm, pairParticipants)
@@ -670,20 +671,20 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *oneToOneConn, d *Dec
 // another `join_room` (contract §§3.6, 3.13 "Server-side retry
 // support"). No `peer_left` is emitted — pending-media releases are
 // pre-pairing by definition.
-func (h *Handler) handleMediaFailed(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
+func (h *Handler) handleMediaFailed(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
 	if cc.peerID == "" {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "media_failed requires an admitted participant",
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	payload, _ := d.Message.(*MediaFailedPayload)
+	payload, _ := d.Message.(*protocol.MediaFailedPayload)
 
 	rm := h.Rooms.Room(cc.roomID)
 	if rm == nil {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "room not found",
 		}, d.Envelope.RequestID)
 		return nil
@@ -693,16 +694,16 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *oneToOneConn, d *De
 	p := rm.FindByPeerID(cc.peerID)
 	if p == nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "participant not found",
 		}, d.Envelope.RequestID)
 		return nil
 	}
 	if p.MediaReadiness != room.MediaReadinessPending {
 		rm.Unlock()
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeMalformed,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeMalformed,
 			Message: "media_failed requires mediaReadiness = pending-media",
 		}, d.Envelope.RequestID)
 		return nil
@@ -715,14 +716,14 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *oneToOneConn, d *De
 	if payload != nil {
 		detail = string(payload.Reason)
 	}
-	relPayload, _ := json.Marshal(ParticipantReleasedPayload{
-		Result: ParticipantReleasedMediaFailed,
-		Reason: ReleasedReasonMediaFailed,
+	relPayload, _ := json.Marshal(protocol.ParticipantReleasedPayload{
+		Result: protocol.ParticipantReleasedMediaFailed,
+		Reason: protocol.ReleasedReasonMediaFailed,
 		Detail: detail,
 	})
-	relEnv := Envelope{
-		V:       ContractVersion,
-		Type:    TypeParticipantReleased,
+	relEnv := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypeParticipantReleased,
 		RoomID:  cc.roomID,
 		TS:      time.Now().UnixMilli(),
 		Payload: relPayload,
@@ -769,18 +770,18 @@ func (h *Handler) sendReadyForOffer(_ context.Context, rm *room.Room, participan
 		offerer, answerer = answerer, offerer
 	}
 
-	send := func(self, remote *room.Participant, role Role) {
-		payload, _ := json.Marshal(ReadyForOfferPayload{
+	send := func(self, remote *room.Participant, role protocol.Role) {
+		payload, _ := json.Marshal(protocol.ReadyForOfferPayload{
 			Role: role,
-			RemotePeer: ReadyForOfferRemote{
+			RemotePeer: protocol.ReadyForOfferRemote{
 				PeerID:         remote.PeerID,
 				AdmissionOrder: remote.AdmissionOrder,
 			},
 			IceServers: h.IceServers,
 		})
-		env := Envelope{
-			V:       ContractVersion,
-			Type:    TypeReadyForOffer,
+		env := protocol.Envelope{
+			V:       protocol.ContractVersion,
+			Type:    protocol.TypeReadyForOffer,
 			RoomID:  rm.ID(),
 			To:      self.PeerID,
 			TS:      time.Now().UnixMilli(),
@@ -796,8 +797,8 @@ func (h *Handler) sendReadyForOffer(_ context.Context, rm *room.Room, participan
 		}
 	}
 
-	send(offerer, answerer, RoleOfferer)
-	send(answerer, offerer, RoleAnswerer)
+	send(offerer, answerer, protocol.RoleOfferer)
+	send(answerer, offerer, protocol.RoleAnswerer)
 
 	// Structured log — role + admissionOrder only; MUST NOT log
 	// iceServers (TURN credential confidentiality per §3.7).
@@ -817,13 +818,13 @@ func (h *Handler) sendReadyForOffer(_ context.Context, rm *room.Room, participan
 // and state (mediaReadiness × callPhase), relays it to the remote
 // peer with envelope.from = sender peerId, and advances the sender's
 // CallPhase role-assigned → negotiating (§§3.8, C.2).
-func (h *Handler) handleOffer(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
-	return h.handleSDPRelay(ctx, cc, d, TypeOffer)
+func (h *Handler) handleOffer(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
+	return h.handleSDPRelay(ctx, cc, d, protocol.TypeOffer)
 }
 
 // handleAnswer mirrors handleOffer for §3.9.
-func (h *Handler) handleAnswer(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
-	return h.handleSDPRelay(ctx, cc, d, TypeAnswer)
+func (h *Handler) handleAnswer(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
+	return h.handleSDPRelay(ctx, cc, d, protocol.TypeAnswer)
 }
 
 // handleSDPRelay is the shared offer / answer pathway. Keeps the
@@ -834,18 +835,18 @@ func (h *Handler) handleAnswer(ctx context.Context, cc *oneToOneConn, d *Decoded
 // Importantly, the server NEVER parses payload.sdp.sdp — the inbound
 // payload bytes are forwarded verbatim on the new envelope with only
 // envelope.from / envelope.to / envelope.ts overwritten. NFR-003.
-func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *Decoded, t Type) error {
+func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded, t protocol.Type) error {
 	if cc.peerID == "" {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: string(t) + " requires an admitted participant",
 		}, d.Envelope.RequestID)
 		return nil
 	}
 	rm := h.Rooms.Room(cc.roomID)
 	if rm == nil {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "room not found",
 		}, d.Envelope.RequestID)
 		return nil
@@ -855,8 +856,8 @@ func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *Decod
 	p := rm.FindByPeerID(cc.peerID)
 	if p == nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "participant not found",
 		}, d.Envelope.RequestID)
 		return nil
@@ -865,15 +866,15 @@ func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *Decod
 	role := rm.AssignedRole(cc.peerID)
 	var relayErr *room.RelayError
 	switch t {
-	case TypeOffer:
+	case protocol.TypeOffer:
 		relayErr = p.CanSendOffer(role)
-	case TypeAnswer:
+	case protocol.TypeAnswer:
 		relayErr = p.CanSendAnswer(role)
 	}
 	if relayErr != nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    ErrorCode(relayErr.Code),
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.ErrorCode(relayErr.Code),
 			Message: relayErr.Message,
 		}, d.Envelope.RequestID)
 		return nil
@@ -885,8 +886,8 @@ func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *Decod
 		// Contract: remote-peer unresolvable is a transient protocol
 		// failure — the remote may have just disconnected. Surface as
 		// not_in_room to the sender.
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "remote peer not present",
 		}, d.Envelope.RequestID)
 		return nil
@@ -906,8 +907,8 @@ func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *Decod
 
 	// Relay payload bytes verbatim. Only envelope metadata is
 	// rewritten — per NFR-003 the server does not parse SDP content.
-	outEnv := Envelope{
-		V:       ContractVersion,
+	outEnv := protocol.Envelope{
+		V:       protocol.ContractVersion,
 		Type:    t,
 		RoomID:  cc.roomID,
 		From:    cc.peerID,
@@ -916,8 +917,8 @@ func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *Decod
 		Payload: d.Envelope.Payload,
 	}
 	if remoteConn == nil {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "remote peer not present",
 		}, d.Envelope.RequestID)
 		return nil
@@ -932,8 +933,8 @@ func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *Decod
 			slog.String("type", string(t)),
 			slog.String("peer_id", remotePeerID),
 			slog.String("error", err.Error()))
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeInternalError,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeInternalError,
 			Message: "remote peer unreachable",
 		}, d.Envelope.RequestID)
 		return nil
@@ -960,21 +961,21 @@ func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *Decod
 // sdpMid, and sdpMLineIndex are NOT logged.
 //
 // The `candidate: ""` / missing-key malformed cases are already caught
-// by IceCandidatePayload.Validate() (decoded before dispatch); a
-// DecodeError(Code: CodeMalformed) flows through `writeError` to the
+// by protocol.IceCandidatePayload.Validate() (decoded before dispatch); a
+// protocol.DecodeError(Code: protocol.CodeMalformed) flows through `writeError` to the
 // sender without ever reaching this function.
-func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
+func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
 	if cc.peerID == "" {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "ice_candidate requires an admitted participant",
 		}, d.Envelope.RequestID)
 		return nil
 	}
 	rm := h.Rooms.Room(cc.roomID)
 	if rm == nil {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "room not found",
 		}, d.Envelope.RequestID)
 		return nil
@@ -984,8 +985,8 @@ func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *D
 	p := rm.FindByPeerID(cc.peerID)
 	if p == nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "participant not found",
 		}, d.Envelope.RequestID)
 		return nil
@@ -995,8 +996,8 @@ func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *D
 	role := rm.AssignedRole(cc.peerID)
 	if relayErr := p.CanSendIceCandidate(role); relayErr != nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    ErrorCode(relayErr.Code),
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.ErrorCode(relayErr.Code),
 			Message: relayErr.Message,
 		}, d.Envelope.RequestID)
 		return nil
@@ -1004,8 +1005,8 @@ func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *D
 	remote := rm.ResolveRemote(cc.peerID)
 	if remote == nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "remote peer not present",
 		}, d.Envelope.RequestID)
 		return nil
@@ -1018,9 +1019,9 @@ func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *D
 	// `json.RawMessage` captured BEFORE decodePayload ran, so it still
 	// carries the original `candidate` / `candidate: null` body without
 	// any server-side parsing. NFR-003.
-	outEnv := Envelope{
-		V:       ContractVersion,
-		Type:    TypeIceCandidate,
+	outEnv := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypeIceCandidate,
 		RoomID:  cc.roomID,
 		From:    cc.peerID,
 		To:      remotePeerID,
@@ -1028,8 +1029,8 @@ func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *D
 		Payload: d.Envelope.Payload,
 	}
 	if remoteConn == nil {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "remote peer not present",
 		}, d.Envelope.RequestID)
 		return nil
@@ -1052,7 +1053,7 @@ func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *D
 	// the raw body. The decoded payload cannot be nil at this point —
 	// decodePayload has already populated it — but guard defensively.
 	endOfCandidates := false
-	if payload, ok := d.Message.(*IceCandidatePayload); ok && payload != nil {
+	if payload, ok := d.Message.(*protocol.IceCandidatePayload); ok && payload != nil {
 		endOfCandidates = payload.Candidate == nil
 	}
 	h.Log.Info("ice_candidate relayed",
@@ -1076,20 +1077,20 @@ func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *D
 // screenShare values themselves — only the sender / receiver peer IDs.
 //
 // Full-triplet validation (microphone, camera, screenShare all
-// required) is enforced at decode time by MediaStatePayload.Validate():
+// required) is enforced at decode time by protocol.MediaStatePayload.Validate():
 // a missing field decodes to "" which fails the enum switch.
-func (h *Handler) handleMediaState(ctx context.Context, cc *oneToOneConn, d *Decoded) error {
+func (h *Handler) handleMediaState(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
 	if cc.peerID == "" {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "media_state requires an admitted participant",
 		}, d.Envelope.RequestID)
 		return nil
 	}
 	rm := h.Rooms.Room(cc.roomID)
 	if rm == nil {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "room not found",
 		}, d.Envelope.RequestID)
 		return nil
@@ -1099,8 +1100,8 @@ func (h *Handler) handleMediaState(ctx context.Context, cc *oneToOneConn, d *Dec
 	p := rm.FindByPeerID(cc.peerID)
 	if p == nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "participant not found",
 		}, d.Envelope.RequestID)
 		return nil
@@ -1108,8 +1109,8 @@ func (h *Handler) handleMediaState(ctx context.Context, cc *oneToOneConn, d *Dec
 	role := rm.AssignedRole(cc.peerID)
 	if relayErr := p.CanSendMediaState(role); relayErr != nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    ErrorCode(relayErr.Code),
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.ErrorCode(relayErr.Code),
 			Message: relayErr.Message,
 		}, d.Envelope.RequestID)
 		return nil
@@ -1117,8 +1118,8 @@ func (h *Handler) handleMediaState(ctx context.Context, cc *oneToOneConn, d *Dec
 	remote := rm.ResolveRemote(cc.peerID)
 	if remote == nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "remote peer not present",
 		}, d.Envelope.RequestID)
 		return nil
@@ -1130,9 +1131,9 @@ func (h *Handler) handleMediaState(ctx context.Context, cc *oneToOneConn, d *Dec
 	// Relay payload bytes verbatim — the server never needs to parse
 	// the on/off values to route the message. Only envelope metadata
 	// is rewritten.
-	outEnv := Envelope{
-		V:       ContractVersion,
-		Type:    TypeMediaState,
+	outEnv := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypeMediaState,
 		RoomID:  cc.roomID,
 		From:    cc.peerID,
 		To:      remotePeerID,
@@ -1140,8 +1141,8 @@ func (h *Handler) handleMediaState(ctx context.Context, cc *oneToOneConn, d *Dec
 		Payload: d.Envelope.Payload,
 	}
 	if remoteConn == nil {
-		h.writeError(ctx, cc, &DecodeError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.DecodeError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "remote peer not present",
 		}, d.Envelope.RequestID)
 		return nil
