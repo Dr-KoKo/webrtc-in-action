@@ -1,7 +1,7 @@
 # Architecture: per-mode layout
 
-**Status**: canonical. **Date**: 2026-04-27.
-**Scope**: cross-version structure rules. Per-version specs (001, 002, …) remain authoritative for their own contracts and behavior.
+**Status**: canonical. **Date**: 2026-05-02.
+**Scope**: cross-version structure rules. Per-version specs (001, 002, …) remain authoritative for their own contracts and behavior. The **per-mode internal** layout (Ring 2 + Ring 3 inside each mode's backend subtree) lives in [`specs/signaling-architecture.md`](signaling-architecture.md) — this doc covers the cross-mode boundary; that doc covers what's inside each mode.
 
 This repo is a learning playground for multiple WebRTC topologies. Every WebRTC implementation is a self-contained **mode**:
 
@@ -60,21 +60,36 @@ TypeScript path aliases (`tsconfig.json` `paths` + `vite.config.ts` `resolve.ali
 
 ### Backend (`signaling/`)
 
+Each mode subtree under `internal/modes/` follows the three-ring layout from [`signaling-architecture.md`](signaling-architecture.md) §3 — a thin mode root plus three sibling sub-packages (`protocol/`, `room/`, `signaling/`). The mode root is a wsserver adapter; everything substantive lives in the rings.
+
 ```
 cmd/signaling/main.go        — minimal entry; calls app.RegisterRoutes(...)
 internal/
   app/
     routes.go                — mux wiring per mode + /healthz
   shared/
+    wsserver/                — WS session lifecycle (Accept, conn-id, heartbeat goroutine, write
+                               serialization, read loop, error classification, teardown)
     heartbeat/               — parameterized over Labels{ PongTimeoutEvent, PongTimeoutMessage }
     config/                  — IceServer + LoadFromEnv (tag-less internal struct)
     logging/                 — slog setup
   modes/
     onetoone/
-      handler.go  envelope.go  messages.go  heartbeat.go
-      room/                  — manager.go  room.go  state.go
+      handler.go             — wsserver.Mode adapter (NewHandler, ServeHTTP, NewSession)
+      heartbeat.go           — per-mode pong-timeout label constants
+      protocol/              — envelope.go  decode.go  messages.go  errors.go  wire.go
+      room/                  — manager.go  room.go  participant.go  fsm.go  conn.go
+      signaling/             — service.go  conn.go  dispatch.go  errorframe.go
+                               admission.go  negotiation.go  trickle.go  media.go  presence.go
     mesh/
-      handler.go  protocol*.go  manager.go  room.go  participant.go  pair.go  roster.go  heartbeat.go
+      handler.go             — wsserver.Mode adapter; SessionMesh per-WS state lives here too
+      heartbeat.go
+      protocol/              — envelope.go  decode.go  messages.go  pair.go  roster.go  errors.go  wire.go
+      room/                  — manager.go  room.go  participant.go  pair.go  roster.go  conn.go
+      signaling/             — service.go  conn.go  dispatch.go  errorframe.go
+                               admission.go  presence.go  roster.go
+                               media.go  pair_media.go
+                               pair_negotiation.go  pair_trickle.go  reconnect.go
 
 tests/
   modes/
@@ -82,7 +97,34 @@ tests/
     mesh/                    — mesh handler + admission + roster + media-failed tests
   shared/
     heartbeat_test.go        — locks observable-log behavior of the parameterized helper
+    wsserver_test.go         — locks observable-log behavior of the WS session lifecycle
 ```
+
+Component diagram (per-mode three-ring layout):
+
+```mermaid
+graph TB
+    app["internal/app/routes.go"]
+
+    app --> oneroot["modes/onetoone<br/>handler.go · heartbeat.go"]
+    oneroot --> oneprotocol["onetoone/protocol<br/>envelope · decode · messages · errors · wire"]
+    oneroot --> oneroom["onetoone/room<br/>manager · room · participant · fsm · conn"]
+    oneroot --> onesignaling["onetoone/signaling<br/>service · dispatch · errorframe · conn<br/>admission · negotiation · trickle · media · presence"]
+    onesignaling --> oneprotocol
+    onesignaling --> oneroom
+
+    app --> meshroot["modes/mesh<br/>handler.go · heartbeat.go"]
+    meshroot --> meshprotocol["mesh/protocol<br/>envelope · decode · messages · pair · roster · errors · wire"]
+    meshroot --> meshroom["mesh/room<br/>manager · room · participant · pair · roster · conn"]
+    meshroot --> meshsignaling["mesh/signaling<br/>service · dispatch · errorframe · conn<br/>admission · presence · roster · media · pair_media<br/>pair_negotiation · pair_trickle · reconnect"]
+    meshsignaling --> meshprotocol
+    meshsignaling --> meshroom
+
+    oneroot --> shared["shared/<br/>wsserver · heartbeat · config · logging"]
+    meshroot --> shared
+```
+
+Inside each mode the dependency direction is: `signaling/` → `protocol/` + `room/`, never the reverse. `signaling/` reaches the per-conn write surface only through the mode's `signaling.Conn` interface; the mode root implements it. The mode root is the only package that imports `shared/wsserver` directly. These rules are enforced by `scripts/audit-boundaries.sh` per-mode ring checks (see §2.4 of `signaling-architecture.md`).
 
 ## Adding a new mode
 
@@ -95,13 +137,29 @@ Suppose we add `sfu` (Selective Forwarding Unit, contract v3):
      ```ts
      { id: "sfu", label: "SFU mode", path: "/sfu/:roomId", component: SfuApp, signalingPath: "/ws/sfu" }
      ```
-3. **Backend**:
-   - Create `signaling/internal/modes/sfu/` with the handler + protocol files. The `handler.go` is a `wsserver.Mode` adapter — see `signaling/internal/modes/{onetoone,mesh}/handler.go` as templates: a `Handler` struct holding the room manager + ICE config, `NewHandler` returning `*Handler` and constructing a private `*wsserver.Server`, `ServeHTTP` delegating to it, and a per-WS struct (e.g. `sfuConn`) implementing `wsserver.SessionHandler` (and the mode's own `Conn` interface if the room manager broadcasts to it).
-   - Wire `mux.Handle("/ws/sfu", sfu.NewHandler(...))` inside `internal/app/routes.go`.
+3. **Backend**: create `signaling/internal/modes/sfu/` following the three-ring layout in [`signaling-architecture.md`](signaling-architecture.md) §5.1 — a thin mode root (`handler.go` + per-mode heartbeat labels) plus three sibling sub-packages (`protocol/`, `room/`, `signaling/`). `handler.go` is a `wsserver.Mode` adapter; `signaling.Service` hosts the WebRTC verbs; `SessionSFU` (the per-WS struct on the mode root) implements both `wsserver.SessionHandler` (the transport contract) and the mode's `signaling.Conn` (the verb-side contract). Then wire `mux.Handle("/ws/sfu", sfu.NewHandler(...))` inside `internal/app/routes.go`.
 4. **Tests**: `signaling/tests/modes/sfu/` for Go protocol-flow tests; `frontend/src/modes/sfu/tests/` for Vitest reducer / dispatcher specs.
-5. **Boundary audit**: append `sfu` to the `FRONT_MODES` and `BACK_MODES` arrays in `scripts/audit-boundaries.sh`. Without this, cross-mode-imports involving `sfu` would slip past the gate.
+5. **Boundary audit**: append `sfu` to the `FRONT_MODES` and `BACK_MODES` arrays in `scripts/audit-boundaries.sh`. Without this, cross-mode imports involving `sfu` and the new mode's per-mode ring rules would slip past the gate.
 6. **Architecture doc**: append a row to the table at the top of this file.
 7. **Validation**: `npm run typecheck && npx vitest run && go test ./... && bash scripts/audit-boundaries.sh`.
+
+```mermaid
+graph LR
+    spec["1. specs/003-webrtc-sfu/<br/>spec · plan · contracts"]
+    proto["2. modes/sfu/protocol/<br/>envelope · decode · messages"]
+    room["3. modes/sfu/room/<br/>state machines"]
+    signaling["4. modes/sfu/signaling/<br/>verbs (admission, negotiation, …)"]
+    moderoot["5. modes/sfu/<br/>handler.go · heartbeat.go<br/>SessionSFU implements signaling.Conn"]
+    routes["6. internal/app/routes.go<br/>mux.Handle('/ws/sfu', …)"]
+    audit["7. scripts/audit-boundaries.sh<br/>BACK_MODES += sfu"]
+
+    spec --> proto
+    proto --> room
+    room --> signaling
+    signaling --> moderoot
+    moderoot --> routes
+    routes --> audit
+```
 
 The boundary audit is heuristic-by-design (regex over imports + `go list -deps`). The mode list inside the script is hand-maintained — that's the documented maintenance cost of the per-mode pattern.
 
