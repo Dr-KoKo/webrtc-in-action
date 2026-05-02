@@ -1,15 +1,34 @@
 // Package room implements the server-side participant / room model
-// from data-model.md Part A. The public surface is:
+// from data-model.md Part A. The public surface is split across:
 //
-//   - MediaReadiness + CallPhase enums (this file) — the two
-//     orthogonal state machines that together describe a
-//     Participant.
-//   - Room (room.go) — two reserved slots + derived call-readiness.
-//   - RoomManager (manager.go) — admit / release, concurrent-safe.
-//
-// Intentionally NOT here (Phase 3 scope): offer/answer/ICE relay
-// validation. Those helpers arrive in Phase 4 (T034A).
+//   - participant.go — Participant struct + MediaReadiness +
+//     CallPhase enums (the two orthogonal state machines that
+//     together describe a Participant), AdvanceMedia / AdvanceCall
+//     transition validators, IsInCall classifier.
+//   - fsm.go         — relay validators (CanSendOffer / Answer /
+//     IceCandidate / MediaState), ParticipantRole, RelayError.
+//   - room.go        — Room (two reserved slots) + derived
+//     CallReadiness.
+//   - manager.go     — RoomManager (admit / release; concurrent-safe).
+//   - conn.go        — Conn interface (write surface).
+
 package room
+
+import "time"
+
+// Participant mirrors data-model §A.3. The WS reference is stored as
+// an opaque Conn to avoid importing coder/websocket here (that import
+// lives in the mode root and would otherwise create a cycle).
+type Participant struct {
+	PeerID         string
+	RoomID         string
+	AdmissionOrder int
+	MediaReadiness MediaReadiness
+	CallPhase      CallPhase
+	Conn           Conn
+	JoinedAt       time.Time
+	LastSeen       time.Time
+}
 
 // MediaReadiness — data-model §A.3 first enum.
 type MediaReadiness string
@@ -30,16 +49,6 @@ const (
 	CallPhaseNegotiating  CallPhase = "negotiating"
 	CallPhaseConnected    CallPhase = "connected"
 	CallPhaseLeaving      CallPhase = "leaving"
-)
-
-// CallReadiness — derived room state from data-model §A.2.
-type CallReadiness string
-
-const (
-	CallReadinessEmpty            CallReadiness = "empty"
-	CallReadinessWaitingForMedia  CallReadiness = "waiting_for_media"
-	CallReadinessWaitingForPeer   CallReadiness = "waiting_for_peer"
-	CallReadinessPaired           CallReadiness = "paired"
 )
 
 // AdvanceMedia returns true if the MediaReadiness transition from→to
