@@ -27,7 +27,7 @@ import {
   MESH_CONTRACT_VERSION,
   meshServerMessageSchema,
   type MeshServerMessage,
-} from "./schema";
+} from "../protocol/schema";
 import type { MeshRootAction } from "../state";
 import { makeMeshEventEntry } from "../state/eventLog";
 import type { MeshSignalingClient } from "./client";

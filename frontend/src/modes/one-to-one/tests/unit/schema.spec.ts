@@ -18,7 +18,7 @@ import {
   leaveRoomSchema,
   errorSchema,
   signalingMessageSchema,
-} from "@/modes/one-to-one/signaling/schema";
+} from "@/modes/one-to-one/protocol/schema";
 
 // A stable UUIDv4 used across all fixtures — generating fresh UUIDs per
 // test is unnecessary and makes failures harder to read.

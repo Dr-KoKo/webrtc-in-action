@@ -14,7 +14,7 @@
 //   per the MVP scope (plan review-pass-4).
 
 import type { SignalingTransportState } from "../state/session";
-import { signalingMessageSchema, type SignalingMessage } from "./schema";
+import { signalingMessageSchema, type SignalingMessage } from "../protocol/schema";
 
 type MessageListener = (raw: string) => void;
 type TransportListener = (state: SignalingTransportState) => void;

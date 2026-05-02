@@ -18,7 +18,7 @@
 import {
   meshClientMessageSchema,
   type MeshClientMessage,
-} from "./schema";
+} from "../protocol/schema";
 
 export type MeshTransportState =
   | "idle"

@@ -37,7 +37,7 @@ import {
   type MeshClientMessage,
   type MicState,
   type PairMediaStatePayload,
-} from "../signaling/schema";
+} from "../protocol/schema";
 import type { MeshPairContext } from "./pairContext";
 import { findOutboundVideoSender } from "./senders";
 

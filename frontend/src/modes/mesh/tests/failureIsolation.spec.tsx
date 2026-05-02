@@ -23,7 +23,7 @@ import {
   makePCFactory,
   type FakeRTCPeerConnection,
 } from "./pairTestHelpers";
-import type { MeshClientMessage } from "../signaling/schema";
+import type { MeshClientMessage } from "../protocol/schema";
 import { PartialMeshBadge } from "../components/PartialMeshBadge";
 import {
   MeshStoreProvider,

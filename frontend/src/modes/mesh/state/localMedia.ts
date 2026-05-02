@@ -17,7 +17,7 @@ import type {
   CameraState,
   MicState,
   ScreenShareState,
-} from "../signaling/schema";
+} from "../protocol/schema";
 
 export type LocalMicState = MicState; // "on" | "off"
 export type LocalCameraState = CameraState; // "on" | "off"

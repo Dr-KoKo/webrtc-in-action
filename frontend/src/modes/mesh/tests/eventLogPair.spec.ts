@@ -17,7 +17,7 @@ import {
   makePCFactory,
   type FakeRTCPeerConnection,
 } from "./pairTestHelpers";
-import type { MeshClientMessage } from "../signaling/schema";
+import type { MeshClientMessage } from "../protocol/schema";
 import type { MeshEventEntry } from "../state/eventLog";
 
 const ROOM_ID = "demo";

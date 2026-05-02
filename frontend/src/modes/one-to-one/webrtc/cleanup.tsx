@@ -52,13 +52,16 @@ import {
   type ReactNode,
 } from "react";
 import { useDispatch, useRootState } from "../state";
-import { makeEventLogEntry } from "../state/event-log";
-import { useSignalingClient } from "../signaling/provider";
+import {
+  useFrameSubscription,
+  useSignalingClient,
+} from "../signaling/provider";
 import { useLocalMedia } from "./local-media-provider";
 import { usePeerConnection } from "./peer-connection-provider";
 import { useScreenShare } from "./screen-share-provider";
-import { signalingMessageSchema } from "../signaling/schema";
+import { signalingMessageSchema } from "../protocol/schema";
 import { CONTRACT_VERSION } from "../types/contract";
+import { makeLog } from "./log";
 import type { SessionState } from "../state/session";
 
 export interface CleanupContextValue {
@@ -123,6 +126,13 @@ export function CleanupProvider({ children }: CleanupProviderProps) {
   screenShareRef.current = screenShare;
   const dispatchRef = useRef(dispatch);
   dispatchRef.current = dispatch;
+  // Stable log helper — closes over dispatchRef so it always writes
+  // through the latest dispatch fn without being recreated.
+  const logRef = useRef(
+    makeLog((entry) =>
+      dispatchRef.current({ type: "EVENT_LOG_APPEND", entry }),
+    ),
+  );
 
   const leaveSession = useCallback(async (): Promise<void> => {
     const s = sessionRef.current;
@@ -158,14 +168,10 @@ export function CleanupProvider({ children }: CleanupProviderProps) {
           roomId: s.roomId,
           payload: {},
         });
-        dispatchRef.current({
-          type: "EVENT_LOG_APPEND",
-          entry: makeEventLogEntry({
-            type: "leave_requested",
-            direction: "local",
-            summary: "leave_room sent",
-            transport: "signaling",
-          }),
+        logRef.current.signaling({
+          type: "leave_requested",
+          direction: "local",
+          summary: "leave_room sent",
         });
       } catch {
         // Best-effort; WS might have closed between state read and
@@ -186,14 +192,11 @@ export function CleanupProvider({ children }: CleanupProviderProps) {
     // 9. Emit the cleanup-completed narration. code: "local_leave" is
     //    the only enum value here — NEVER raw error messages, WS
     //    close codes, or user-derived strings (NFR-006).
-    dispatchRef.current({
-      type: "EVENT_LOG_APPEND",
-      entry: makeEventLogEntry({
-        type: "cleanup_completed",
-        direction: "system",
-        summary: "cleanup completed (path=local_leave)",
-        code: "local_leave",
-      }),
+    logRef.current.system({
+      type: "cleanup_completed",
+      direction: "system",
+      summary: "cleanup completed (path=local_leave)",
+      code: "local_leave",
     });
   }, []);
 
@@ -212,8 +215,7 @@ export function CleanupProvider({ children }: CleanupProviderProps) {
   // intact and let this handler drive the actual cleanup — the
   // dispatcher's `peer_left` row becomes a narration complement, not
   // a duplicate.
-  useEffect(() => {
-    const unsubscribe = clientRef.current.onMessage((raw) => {
+  useFrameSubscription((raw) => {
       let json: unknown;
       try {
         json = JSON.parse(raw);
@@ -232,15 +234,11 @@ export function CleanupProvider({ children }: CleanupProviderProps) {
       // itself idempotent, but the reducer transition would
       // incorrectly collapse our session state.
       if (peerConnectionRef.current.getHandle() === null) {
-        dispatchRef.current({
-          type: "EVENT_LOG_APPEND",
-          entry: makeEventLogEntry({
-            type: "error_occurred",
-            direction: "system",
-            summary: "peer_left received but no active PC; ignoring",
-            code: "unexpected_peer_left",
-            transport: "signaling",
-          }),
+        logRef.current.signaling({
+          type: "error_occurred",
+          direction: "system",
+          summary: "peer_left received but no active PC; ignoring",
+          code: "unexpected_peer_left",
         });
         return;
       }
@@ -254,17 +252,12 @@ export function CleanupProvider({ children }: CleanupProviderProps) {
       //    WS stays open.
       dispatchRef.current({ type: "PEER_LEFT" });
       // 5. Event-log narration.
-      dispatchRef.current({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "cleanup_completed",
-          direction: "system",
-          summary: "cleanup completed (path=remote_peer_left)",
-          code: "remote_peer_left",
-        }),
+      logRef.current.system({
+        type: "cleanup_completed",
+        direction: "system",
+        summary: "cleanup completed (path=remote_peer_left)",
+        code: "remote_peer_left",
       });
-    });
-    return unsubscribe;
   }, []);
 
   // ----- Transport-disconnect branching (§B.1.1) -----
@@ -290,39 +283,28 @@ export function CleanupProvider({ children }: CleanupProviderProps) {
         dispatchRef.current({ type: "CONNECTION_FAILED" });
         dispatchRef.current({ type: "REMOTE_MEDIA_STATE_CLEARED" });
         peerConnectionRef.current.teardownPeerConnection("local_failure");
-        dispatchRef.current({
-          type: "EVENT_LOG_APPEND",
-          entry: makeEventLogEntry({
-            type: "error_occurred",
-            direction: "system",
-            summary: "signaling transport dropped before P2P — session failed",
-            code: "transport_error_pre_connected",
-            transport: "signaling",
-          }),
+        logRef.current.signaling({
+          type: "error_occurred",
+          direction: "system",
+          summary: "signaling transport dropped before P2P — session failed",
+          code: "transport_error_pre_connected",
         });
-        dispatchRef.current({
-          type: "EVENT_LOG_APPEND",
-          entry: makeEventLogEntry({
-            type: "cleanup_completed",
-            direction: "system",
-            summary: "cleanup completed (path=local_failure)",
-            code: "local_failure",
-          }),
+        logRef.current.system({
+          type: "cleanup_completed",
+          direction: "system",
+          summary: "cleanup completed (path=local_failure)",
+          code: "local_failure",
         });
       } else if (current === "connected") {
         // Teachable moment: media stays P2P; only the warning log
         // line surfaces. SessionState stays `connected`; the
         // transport slice's `error` drives the UI warning.
-        dispatchRef.current({
-          type: "EVENT_LOG_APPEND",
-          entry: makeEventLogEntry({
-            type: "error_occurred",
-            direction: "system",
-            summary:
-              "signaling transport dropped — media continues P2P (§B.1.1)",
-            code: "transport_error_during_connected",
-            transport: "signaling",
-          }),
+        logRef.current.signaling({
+          type: "error_occurred",
+          direction: "system",
+          summary:
+            "signaling transport dropped — media continues P2P (§B.1.1)",
+          code: "transport_error_during_connected",
         });
       }
     });

@@ -1,155 +1,41 @@
-// Mesh root reducer + React context. Composes the three M4/M5 slices
-// (data-model §B): `LocalParticipant`, `Roster`, `EventLog`. The pair
-// map (B.3) lands in M6 and will hang off this root.
+// React bindings for the mesh Zustand store (Phase F3 of the
+// frontend rings refactor). The reducer lives in `./reducer.ts`; the
+// store in `./store.ts`; this file is the thin React surface
+// (StoreProvider + useMeshState/useMeshDispatch hooks).
+//
+// `useMeshState`/`useMeshDispatch` keep the public API stable so
+// existing components don't need to change. F5's verb files reach
+// the store directly via the runtime context (no React).
 
 import {
   createContext,
   createElement,
   useContext,
-  useMemo,
-  useReducer,
-  type Dispatch,
+  useState,
   type ReactNode,
 } from "react";
+import { useStoreWithEqualityFn } from "zustand/traditional";
 import {
-  initialMeshLocalParticipant,
-  meshLocalReducer,
-  type MeshLocalAction,
-  type MeshLocalParticipant,
-} from "./local";
+  createMeshStore,
+  type MeshStore,
+  type MeshStoreState,
+} from "./store";
 import {
-  initialMeshRosterSlice,
-  meshRosterReducer,
-  type MeshRosterAction,
-  type MeshRosterSlice,
-} from "./roster";
-import {
-  initialMeshEventLogSlice,
-  meshEventLogReducer,
-  type MeshEventLogAction,
-  type MeshEventLogSlice,
-} from "./eventLog";
-import {
-  initialMeshPairsSlice,
-  meshPairsReducer,
-  type MeshPairsAction,
-  type MeshPairsSlice,
-} from "./pairs";
-import {
-  initialMeshChatSlice,
-  meshChatReducer,
-  type MeshChatAction,
-  type MeshChatSlice,
-} from "./chat";
-import {
-  initialMeshLocalMediaSlice,
-  meshLocalMediaReducer,
-  type MeshLocalMediaAction,
-  type MeshLocalMediaSlice,
-} from "./localMedia";
+  initialMeshRootState,
+  type MeshRootAction,
+  type MeshRootState,
+} from "./reducer";
 
-export interface MeshRootState {
-  local: MeshLocalParticipant;
-  roster: MeshRosterSlice;
-  eventLog: MeshEventLogSlice;
-  pairs: MeshPairsSlice;
-  chat: MeshChatSlice;
-  localMedia: MeshLocalMediaSlice;
-}
+export {
+  initialMeshRootState,
+  meshRootReducer,
+  type MeshRootAction,
+  type MeshRootState,
+} from "./reducer";
+export { createMeshStore } from "./store";
+export type { MeshStore, MeshStoreState } from "./store";
 
-export type MeshRootAction =
-  | MeshLocalAction
-  | MeshRosterAction
-  | MeshEventLogAction
-  | MeshPairsAction
-  | MeshChatAction
-  | MeshLocalMediaAction;
-
-export const initialMeshRootState: MeshRootState = {
-  local: initialMeshLocalParticipant,
-  roster: initialMeshRosterSlice,
-  eventLog: initialMeshEventLogSlice,
-  pairs: initialMeshPairsSlice,
-  chat: initialMeshChatSlice,
-  localMedia: initialMeshLocalMediaSlice,
-};
-
-function isRosterAction(a: MeshRootAction): a is MeshRosterAction {
-  return (
-    a.type === "MESH_ROSTER_SNAPSHOT_APPLIED" ||
-    a.type === "MESH_ROSTER_UPDATE_APPLIED" ||
-    a.type === "MESH_REMOTE_MEDIA_STATE_APPLIED" ||
-    a.type === "MESH_ROSTER_RESET"
-  );
-}
-
-function isLocalMediaAction(a: MeshRootAction): a is MeshLocalMediaAction {
-  return (
-    a.type === "MESH_LOCAL_MEDIA_MIC_TOGGLED" ||
-    a.type === "MESH_LOCAL_MEDIA_CAMERA_TOGGLED" ||
-    a.type === "MESH_LOCAL_MEDIA_SCREEN_SHARE_STARTED" ||
-    a.type === "MESH_LOCAL_MEDIA_SCREEN_SHARE_STOPPED" ||
-    a.type === "MESH_LOCAL_MEDIA_RESET"
-  );
-}
-
-function isEventLogAction(a: MeshRootAction): a is MeshEventLogAction {
-  return a.type === "MESH_EVENT_APPEND" || a.type === "MESH_EVENT_LOG_RESET";
-}
-
-function isPairsAction(a: MeshRootAction): a is MeshPairsAction {
-  return (
-    a.type === "MESH_PAIR_REGISTERED" ||
-    a.type === "MESH_PAIR_VIEW_PATCHED" ||
-    a.type === "MESH_PAIR_REMOVED" ||
-    a.type === "MESH_PAIRS_RESET"
-  );
-}
-
-function isChatAction(a: MeshRootAction): a is MeshChatAction {
-  return (
-    a.type === "MESH_CHAT_LOCAL_APPENDED" ||
-    a.type === "MESH_CHAT_INBOUND_APPENDED" ||
-    a.type === "MESH_CHAT_VALIDATION_FAILED" ||
-    a.type === "MESH_CHAT_VALIDATION_CLEARED" ||
-    a.type === "MESH_CHAT_RESET"
-  );
-}
-
-export function meshRootReducer(
-  state: MeshRootState,
-  action: MeshRootAction,
-): MeshRootState {
-  if (isRosterAction(action)) {
-    return { ...state, roster: meshRosterReducer(state.roster, action) };
-  }
-  if (isEventLogAction(action)) {
-    return {
-      ...state,
-      eventLog: meshEventLogReducer(state.eventLog, action),
-    };
-  }
-  if (isPairsAction(action)) {
-    return { ...state, pairs: meshPairsReducer(state.pairs, action) };
-  }
-  if (isChatAction(action)) {
-    return { ...state, chat: meshChatReducer(state.chat, action) };
-  }
-  if (isLocalMediaAction(action)) {
-    return {
-      ...state,
-      localMedia: meshLocalMediaReducer(state.localMedia, action),
-    };
-  }
-  return { ...state, local: meshLocalReducer(state.local, action) };
-}
-
-interface MeshStoreValue {
-  state: MeshRootState;
-  dispatch: Dispatch<MeshRootAction>;
-}
-
-const MeshStoreContext = createContext<MeshStoreValue | null>(null);
+const MeshStoreContext = createContext<MeshStore | null>(null);
 
 export interface MeshStoreProviderProps {
   children: ReactNode;
@@ -160,25 +46,59 @@ export function MeshStoreProvider({
   children,
   initialState = initialMeshRootState,
 }: MeshStoreProviderProps) {
-  const [state, dispatch] = useReducer(meshRootReducer, initialState);
-  const value = useMemo(() => ({ state, dispatch }), [state]);
-  return createElement(MeshStoreContext.Provider, { value }, children);
+  const [store] = useState(() => createMeshStore(initialState));
+  return createElement(
+    MeshStoreContext.Provider,
+    { value: store },
+    children,
+  );
 }
 
-function useMeshStore(): MeshStoreValue {
-  const ctx = useContext(MeshStoreContext);
-  if (!ctx) {
+function useStoreApi(): MeshStore {
+  const store = useContext(MeshStoreContext);
+  if (!store) {
     throw new Error(
       "useMeshStore must be used inside <MeshStoreProvider>",
     );
   }
-  return ctx;
+  return store;
+}
+
+const meshRootSelector = (s: MeshStoreState): MeshRootState => ({
+  local: s.local,
+  roster: s.roster,
+  eventLog: s.eventLog,
+  pairs: s.pairs,
+  chat: s.chat,
+  localMedia: s.localMedia,
+});
+
+function meshRootEqual(a: MeshRootState, b: MeshRootState): boolean {
+  return (
+    a.local === b.local &&
+    a.roster === b.roster &&
+    a.eventLog === b.eventLog &&
+    a.pairs === b.pairs &&
+    a.chat === b.chat &&
+    a.localMedia === b.localMedia
+  );
 }
 
 export function useMeshState(): MeshRootState {
-  return useMeshStore().state;
+  const store = useStoreApi();
+  return useStoreWithEqualityFn(store, meshRootSelector, meshRootEqual);
 }
 
-export function useMeshDispatch(): Dispatch<MeshRootAction> {
-  return useMeshStore().dispatch;
+export function useMeshDispatch(): (action: MeshRootAction) => void {
+  const store = useStoreApi();
+  return store.getState().dispatch;
+}
+
+/**
+ * Test/runtime escape hatch — gives F5's verb files (which run
+ * outside React) direct access to the store without re-subscribing
+ * via a hook. Components should prefer the hooks above.
+ */
+export function useMeshStoreApi(): MeshStore {
+  return useStoreApi();
 }

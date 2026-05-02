@@ -24,7 +24,7 @@ import { CONTRACT_VERSION, ROOM_ID_REGEX } from "../types/contract";
 import { useDispatch, useRootState } from "../state";
 import { useSignalingClient } from "../signaling/provider";
 import { useCleanup } from "../webrtc/cleanup";
-import { makeEventLogEntry } from "../state/event-log";
+import { useLog } from "../webrtc/log";
 
 // Same-origin signaling URL — mirrors JoinForm.resolveSignalingUrl so
 // rejoin-after-failure uses identical transport setup to the initial
@@ -39,6 +39,7 @@ function resolveSignalingUrl(): string {
 export function FailurePanel() {
   const { session } = useRootState();
   const dispatch = useDispatch();
+  const log = useLog();
   const client = useSignalingClient();
   const { leaveSession, rejoin } = useCleanup();
   const [busy, setBusy] = useState(false);
@@ -74,15 +75,11 @@ export function FailurePanel() {
         try {
           await client.connect(resolveSignalingUrl());
         } catch (err) {
-          dispatch({
-            type: "EVENT_LOG_APPEND",
-            entry: makeEventLogEntry({
-              type: "error_occurred",
-              direction: "local",
-              summary: `ws connect failed: ${(err as Error).message ?? "unknown"}`,
-              code: "transport_error",
-              transport: "signaling",
-            }),
+          log.signaling({
+            type: "error_occurred",
+            direction: "local",
+            summary: `ws connect failed: ${(err as Error).message ?? "unknown"}`,
+            code: "transport_error",
           });
           dispatch({ type: "LEAVE_REQUESTED" });
           return;
@@ -96,25 +93,17 @@ export function FailurePanel() {
             requestId,
             payload: {},
           });
-          dispatch({
-            type: "EVENT_LOG_APPEND",
-            entry: makeEventLogEntry({
-              type: "join_room_sent",
-              direction: "local",
-              summary: `join_room sent (roomId=${previousRoomId})`,
-              transport: "signaling",
-            }),
+          log.signaling({
+            type: "join_room_sent",
+            direction: "local",
+            summary: `join_room sent (roomId=${previousRoomId})`,
           });
         } catch (err) {
-          dispatch({
-            type: "EVENT_LOG_APPEND",
-            entry: makeEventLogEntry({
-              type: "error_occurred",
-              direction: "local",
-              summary: `join_room send failed: ${(err as Error).message ?? "unknown"}`,
-              code: "transport_error",
-              transport: "signaling",
-            }),
+          log.signaling({
+            type: "error_occurred",
+            direction: "local",
+            summary: `join_room send failed: ${(err as Error).message ?? "unknown"}`,
+            code: "transport_error",
           });
           dispatch({ type: "LEAVE_REQUESTED" });
         }
@@ -122,7 +111,7 @@ export function FailurePanel() {
         setBusy(false);
       }
     },
-    [busy, client, dispatch, rejoin],
+    [busy, client, dispatch, log, rejoin],
   );
 
   if (!visible) return null;

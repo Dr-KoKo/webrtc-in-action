@@ -38,7 +38,7 @@ import {
   type MicState,
   type PairMediaStatePayload,
   type ScreenShareState,
-} from "../signaling/schema";
+} from "../protocol/schema";
 import {
   createScreenShareController,
   getActiveScreenTrack,

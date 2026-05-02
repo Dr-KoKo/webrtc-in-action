@@ -14,7 +14,10 @@ import type {
   RootState,
 } from "@/modes/one-to-one/state";
 import { __resetEventLogSequence } from "@/modes/one-to-one/state/event-log";
-import { rootReducer, initialRootState } from "@/modes/one-to-one/state";
+import {
+  initialRootState,
+  rootReducer,
+} from "@/modes/one-to-one/state";
 import type { SignalingClient } from "@/modes/one-to-one/signaling/client";
 
 const ROOM = "demo";

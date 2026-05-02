@@ -16,7 +16,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { fanOutMeshChat, type MeshChatSendablePair } from "../webrtc/dataChannel";
-import { meshAllMessageTypes, type MeshMessageType } from "../signaling/schema";
+import { meshAllMessageTypes, type MeshMessageType } from "../protocol/schema";
 import type { MeshRootAction } from "../state";
 
 class FakeChannel {

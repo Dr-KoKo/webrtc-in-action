@@ -29,7 +29,7 @@ import {
   peerLeftPayloadSchema,
   presenceValues,
   reconnectPairPayloadSchema,
-} from "../signaling/schema";
+} from "../protocol/schema";
 
 const PEER_A = "11111111-2222-4333-8444-555555555555";
 const PEER_B = "22222222-3333-4444-8555-666666666666";
