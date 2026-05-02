@@ -14,7 +14,10 @@
 // stays in memory). React tiles wire it to <video>.srcObject /
 // <audio>.srcObject inside an effect.
 
-import type { MeshPairRole } from "../webrtc/pairContext";
+// Simple wire-shaped role tag. Lives in state/ (Ring 2) per
+// specs/frontend-architecture.md §2.4 — the webrtc/ pairContext
+// re-exports it so existing pair-side callers don't change paths.
+export type MeshPairRole = "offerer" | "answerer";
 
 export type DataChannelDisplayState = RTCDataChannelState | "pending";
 

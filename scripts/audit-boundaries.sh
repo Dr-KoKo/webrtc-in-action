@@ -72,6 +72,56 @@ if grep -RInE 'from "(\.\./){2,}' frontend/src/shared/ >/dev/null; then
     grep -RInE 'from "(\.\./){2,}' frontend/src/shared/
 fi
 
+# 1e. Frontend per-mode ring rules (specs/frontend-architecture.md §2.4).
+#     Skips modes whose ring sub-dirs are not present yet, so a mode mid-
+#     migration does not fail the gate; once a sub-dir exists, the rules
+#     for it are enforced.
+#
+#       protocol/  must not import state/ or webrtc/ or components/ or route/
+#       state/     must not import webrtc/ or components/ or route/
+#       webrtc/    must not import components/ or route/
+#       only route/ and mode/ may construct <StoreProvider>
+for m in "${FRONT_MODES[@]}"; do
+  base="frontend/src/modes/$m"
+
+  if [ -d "$base/protocol" ]; then
+    if grep -RInE 'from[[:space:]]+"(\.\./)+(state|webrtc|components|route)(/|")' "$base/protocol" >/dev/null 2>&1; then
+      fail "frontend $m/protocol/ imports state|webrtc|components|route (Ring 2 schema isolation)" \
+        grep -RInE 'from[[:space:]]+"(\.\./)+(state|webrtc|components|route)(/|")' "$base/protocol"
+    fi
+  fi
+
+  if [ -d "$base/state" ]; then
+    if grep -RInE 'from[[:space:]]+"(\.\./)+(webrtc|components|route)(/|")' "$base/state" >/dev/null 2>&1; then
+      fail "frontend $m/state/ imports webrtc|components|route (Ring 2 store isolation)" \
+        grep -RInE 'from[[:space:]]+"(\.\./)+(webrtc|components|route)(/|")' "$base/state"
+    fi
+  fi
+
+  if [ -d "$base/webrtc" ]; then
+    if grep -RInE 'from[[:space:]]+"(\.\./)+(components|route)(/|")' "$base/webrtc" >/dev/null 2>&1; then
+      fail "frontend $m/webrtc/ imports components|route (Ring 3 verb isolation)" \
+        grep -RInE 'from[[:space:]]+"(\.\./)+(components|route)(/|")' "$base/webrtc"
+    fi
+  fi
+
+  # <StoreProvider> may only be constructed by route/ or mode/. Scan
+  # JSX-style usage; the export itself lives in state/index.tsx and is
+  # exempted explicitly. Tests/ are exempted because spec files
+  # legitimately mount the provider in custom render rigs.
+  while IFS= read -r f; do
+    case "$f" in
+      "$base"/route/*|"$base"/mode/*|"$base"/state/index.tsx|"$base"/tests/*)
+        continue
+        ;;
+    esac
+    if grep -nE '<StoreProvider' "$f" >/dev/null 2>&1; then
+      fail "frontend $m: <StoreProvider> constructed outside route/ or mode/ ($f)" \
+        grep -nE '<StoreProvider' "$f"
+    fi
+  done < <(find "$base" -type f \( -name '*.ts' -o -name '*.tsx' \))
+done
+
 # 2a. Backend shared/ MUST NOT depend on internal/modes/*.
 (
   cd signaling

@@ -16,7 +16,12 @@
 
 import type { IceBuffer } from "./iceBuffer";
 
-export type MeshPairRole = "offerer" | "answerer";
+// Re-exported from the state slice (Ring 2) per
+// specs/frontend-architecture.md §2.4. The canonical declaration
+// lives in state/pairs.ts; this re-export keeps existing pair-side
+// imports stable.
+export type { MeshPairRole } from "../state/pairs";
+import type { MeshPairRole } from "../state/pairs";
 
 export type MeshPairState =
   | "new"

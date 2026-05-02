@@ -11,7 +11,15 @@
 // by `readyState` events on the underlying channel (see
 // `wrapDataChannel` in `webrtc/data-channel.ts`).
 
-import type { DataChannelStateValue } from "../webrtc/data-channel";
+// Reducer-friendly enum mirror of RTCDataChannel.readyState. Lives
+// here (state/ Ring 2) per specs/frontend-architecture.md §2.4 — the
+// webrtc/ wrapper imports it from state/, not the other way around.
+export type DataChannelStateValue =
+  | "absent"
+  | "connecting"
+  | "open"
+  | "closing"
+  | "closed";
 
 export interface DataChannelSlice {
   readonly state: DataChannelStateValue;

@@ -19,12 +19,12 @@
 // The wrapper is deliberately pure — no React, no reducer, no
 // signaling. Providers wire it to the reducer via the callbacks.
 
-export type DataChannelStateValue =
-  | "absent"
-  | "connecting"
-  | "open"
-  | "closing"
-  | "closed";
+// Re-exported from the state slice (Ring 2) per
+// specs/frontend-architecture.md §2.4. Kept here as a barrel so
+// existing webrtc-side callers (data-channel tests, datachannel-attach,
+// chat verb) don't need an extra import path.
+export type { DataChannelStateValue } from "../state/data-channel";
+import type { DataChannelStateValue } from "../state/data-channel";
 
 export type ChatSendResult =
   | { ok: true; bytes: number }

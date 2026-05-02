@@ -46,7 +46,7 @@ import {
   type SessionSlice,
   type SignalingTransportState,
 } from "./session";
-import type { DataChannelStateValue } from "../webrtc/data-channel";
+import type { DataChannelStateValue } from "./data-channel";
 import type {
   JoinAcceptedMessage,
   JoinRejectedMessage,
