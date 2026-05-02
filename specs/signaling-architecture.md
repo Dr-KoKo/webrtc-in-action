@@ -1,15 +1,30 @@
 # Signaling architecture v2
 
-**Status**: design proposal. **Date**: 2026-05-01.
+**Status**: implemented (canonical reference for per-mode internal
+layout). **Drafted**: 2026-05-01. **Implemented**: 2026-05-02.
 **Scope**: `signaling/` backend redesign. Sits **under** the cross-mode
 boundary rules in `specs/architecture.md` — those rules (rules 1–7,
 the per-mode pattern, `scripts/audit-boundaries.sh`) stay in force.
 This document describes the *internal* layout of each mode, not the
 cross-mode boundary.
 
-This is a paper design (deliverable type B from the brainstorming
-session). Per-task migration sequencing belongs in a separate
-`plan.md` cut from this doc.
+The three-ring layout described here landed in three PRs against
+`main`:
+
+- **PR #1** (`refactor/signaling-1to1-rings`, merged 2026-05-02) —
+  Phases A–C for 1:1 (`onetoone/{protocol,room,signaling}/`).
+- **PR #2** (`refactor/signaling-mesh-rings`, merged 2026-05-02) —
+  Phases F1–F5 for mesh (`mesh/{protocol,room,signaling}/`).
+- **PR #3** (`refactor/signaling-audit-rings`, in review) — extends
+  `scripts/audit-boundaries.sh` with ring-level rules (this doc's
+  §2.4) and updates `specs/architecture.md` to reference this doc.
+
+The §4.2 / §4.4 "future state" diagrams now describe the *current*
+state on `main`. The §4.1 / §4.3 "current state" diagrams and the
+§6 "Migration approach" section are retained as **historical
+record** of the pre-refactor structure and the phased migration
+that produced it — they are accurate snapshots of the codebase
+before PR #1 and should not be edited as the code drifts further.
 
 ## Decision summary
 
