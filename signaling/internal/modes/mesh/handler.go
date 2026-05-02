@@ -23,11 +23,12 @@ import (
 
 	"github.com/coder/websocket"
 
+	"webrtc-lab/signaling/internal/modes/mesh/protocol"
+	"webrtc-lab/signaling/internal/modes/mesh/room"
+	"webrtc-lab/signaling/internal/modes/mesh/signaling"
 	"webrtc-lab/signaling/internal/shared/config"
 	"webrtc-lab/signaling/internal/shared/heartbeat"
 	"webrtc-lab/signaling/internal/shared/wsserver"
-
-	"webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // Handler is the `/ws/mesh` upgrader for the 002 mesh contract. It
@@ -35,7 +36,7 @@ import (
 // lifecycle (Accept, conn-id, heartbeat, read loop, write mutex,
 // error classification, teardown) lives in
 // internal/shared/wsserver. Mesh-specific state (admission, roster,
-// pair negotiation) lives on meshConn below — that's the lesson.
+// pair negotiation) lives on SessionMesh below — that's the lesson.
 //
 // NewHandler returns *Handler so existing tests that reach
 // h.Manager (mesh_roster_test.go:206) and mutate h.Heartbeat
@@ -45,10 +46,17 @@ import (
 type Handler struct {
 	Log           *slog.Logger
 	Heartbeat     heartbeat.Config
-	Manager       *MeshRoomManager
+	Manager       *room.RoomManager
 	AcceptOptions *websocket.AcceptOptions
 
-	server *wsserver.Server
+	// IceServers is the v2 RTCIceServer list relayed in
+	// `join_accepted`, `pair_negotiation_instruction`, and
+	// `pair_reconnect_instruction`. Loaded once at construction from
+	// env; never logged (TURN credentials are secrets per NFR-003).
+	IceServers []protocol.IceServer
+
+	service *signaling.Service
+	server  *wsserver.Server
 }
 
 // NewHandler returns a Handler with sensible defaults loaded from
@@ -58,10 +66,18 @@ func NewHandler(log *slog.Logger) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
+	ice := iceServersFromConfig(config.LoadIceServersFromEnv())
+	if len(ice) == 0 {
+		// Mesh contract §3.2 + §3.9 require iceServers non-empty.
+		// Default to the public Google STUN entry so a fresh clone
+		// works on localhost without a TURN configuration.
+		ice = []protocol.IceServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
+	}
 	h := &Handler{
-		Log:       log,
-		Heartbeat: heartbeat.LoadFromEnv(),
-		Manager:   NewMeshRoomManager(ManagerConfig{IceServers: iceServersFromConfig(config.LoadIceServersFromEnv())}),
+		Log:        log,
+		Heartbeat:  heartbeat.LoadFromEnv(),
+		Manager:    room.NewRoomManager(),
+		IceServers: ice,
 		AcceptOptions: &websocket.AcceptOptions{
 			// Dev convenience: mirror 001's allow-any-origin policy
 			// so the Vite dev server can connect through its `/ws`
@@ -69,6 +85,7 @@ func NewHandler(log *slog.Logger) *Handler {
 			InsecureSkipVerify: true,
 		},
 	}
+	h.service = signaling.NewService(log, h.Manager, h.IceServers)
 	h.server = wsserver.New(h, wsserver.Config{
 		Logger:          log,
 		Heartbeat:       &h.Heartbeat,
@@ -92,7 +109,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // NewSession satisfies wsserver.Mode — one call per accepted WS.
 func (h *Handler) NewSession(sess wsserver.Session, log *slog.Logger) (wsserver.SessionHandler, error) {
-	return &meshConn{sess: sess, handler: h, log: log}, nil
+	return &SessionMesh{sess: sess, handler: h, log: log}, nil
 }
 
 // iceServersFromConfig converts the shared internal protocol.IceServer
@@ -110,13 +127,13 @@ func iceServersFromConfig(in []config.IceServer) []protocol.IceServer {
 	return out
 }
 
-// meshConn is the per-WS mesh state. Implements both
+// SessionMesh is the per-WS mesh state. Implements both
 // wsserver.SessionHandler (HandleFrame + OnDisconnect) AND the
 // mode-local mesh.Conn interface (SendJSON, used by the manager
 // and roster code to fan out frames). Transport-level fields (the
 // *websocket.Conn, write mutex, conn-id) live on the wrapped
 // wsserver.Session.
-type meshConn struct {
+type SessionMesh struct {
 	sess     wsserver.Session
 	handler  *Handler
 	log      *slog.Logger
@@ -125,11 +142,11 @@ type meshConn struct {
 	released atomic.Bool
 }
 
-// sendJSON marshals v as a text frame and forwards to
+// SendJSON marshals v as a text frame and forwards to
 // wsserver.Session, which serializes the write under its mutex.
 // Marshal happens outside the lock — a marginal upside over the
 // pre-refactor pattern.
-func (c *meshConn) sendJSON(ctx context.Context, v any) error {
+func (c *SessionMesh) SendJSON(ctx context.Context, v any) error {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -137,13 +154,63 @@ func (c *meshConn) sendJSON(ctx context.Context, v any) error {
 	return c.sess.Send(ctx, raw)
 }
 
-// SendJSON satisfies mesh.Conn so the manager + roster helpers can
-// fan out frames to a participant without depending on coder/websocket.
-// Uses the per-session base context (cancelled at teardown) — same
-// semantic as the pre-refactor connCtx.baseCtx field.
-func (c *meshConn) SendJSON(v any) error {
-	return c.sendJSON(c.sess.BaseContext(), v)
+// ID returns the per-WS connection identifier assigned by wsserver.
+func (c *SessionMesh) ID() string { return c.sess.ID() }
+
+// CloseNormal sends a normal-closure frame with the given reason.
+// Hides coder/websocket.StatusCode from the signaling layer.
+func (c *SessionMesh) CloseNormal(reason string) error {
+	return c.sess.Close(websocket.StatusNormalClosure, reason)
 }
+
+// BaseContext returns the per-session base context (cancelled at
+// teardown). Async fan-outs (roster updates, peer_left, pair
+// instructions) thread this ctx when writing to other sessions whose
+// lifetime is unrelated to the caller's request ctx.
+func (c *SessionMesh) BaseContext() context.Context { return c.sess.BaseContext() }
+
+// State returns a snapshot of the per-conn join/release state.
+// Returned by value so the caller cannot mutate the session
+// indirectly.
+func (c *SessionMesh) State() signaling.ConnState {
+	return signaling.ConnState{
+		PeerID:   c.peerID,
+		RoomID:   c.roomID,
+		Released: c.released.Load(),
+	}
+}
+
+// MarkJoined records the peerID/roomID pair after the room manager
+// admits this connection. Called once per successful admission
+// before any verb fires.
+func (c *SessionMesh) MarkJoined(peerID, roomID string) {
+	c.peerID = peerID
+	c.roomID = roomID
+}
+
+// ClearJoined wipes the joined identifiers after release. Must
+// only be called after a successful ReleaseOnce; the ordering is
+// codified in specs/signaling-architecture.md §3.4.
+func (c *SessionMesh) ClearJoined() {
+	c.peerID = ""
+	c.roomID = ""
+}
+
+// ReleaseOnce atomically transitions released from false to true.
+// Returns true on the first call (the caller has claimed cleanup
+// duty), false thereafter. Replaces the pre-refactor pattern of
+// `if !released.Load() { releaseAndNotify; released.Store(true) }`
+// with a TOCTOU-free single CAS.
+func (c *SessionMesh) ReleaseOnce() bool {
+	return c.released.CompareAndSwap(false, true)
+}
+
+// ResetReleaseLatch flips released back to false so a subsequent
+// disconnect on the SAME connection (e.g. after a media_failed
+// retry) still triggers cleanup. The only valid call site is the
+// media_failed retry path; calling it elsewhere re-arms a latch
+// that does not need re-arming.
+func (c *SessionMesh) ResetReleaseLatch() { c.released.Store(false) }
 
 // HandleFrame is the wsserver-side dispatch entry point. Decodes
 // the v2 envelope; on decode failure writes a typed `error` frame
@@ -151,7 +218,7 @@ func (c *meshConn) SendJSON(v any) error {
 // the read loop continues. Dispatch errors are already surfaced to
 // the client via writeError inside the per-type handlers; we log
 // and return nil for the same continue-on-non-fatal reason.
-func (c *meshConn) HandleFrame(ctx context.Context, frame []byte) error {
+func (c *SessionMesh) HandleFrame(ctx context.Context, frame []byte) error {
 	decoded, derr := protocol.DecodeEnvelope(frame)
 	if derr != nil {
 		var perr *protocol.ProtocolError
@@ -181,18 +248,18 @@ func (c *meshConn) HandleFrame(ctx context.Context, frame []byte) error {
 // always called with protocol.RosterReasonDisconnect for non-graceful exits
 // (data-model §C.4). Returns nil attrs (matches pre-refactor
 // disconnect log lines 140-144).
-func (c *meshConn) OnDisconnect(transportReason string) []slog.Attr {
+func (c *SessionMesh) OnDisconnect(transportReason string) []slog.Attr {
 	_ = transportReason
-	if c.peerID != "" && !c.released.Load() {
-		c.handler.releaseAndNotify(c, "disconnect", protocol.RosterReasonDisconnect)
-	}
+	// releaseAndNotify uses ReleaseOnce internally so a graceful
+	// leave_room and an ungraceful disconnect cannot both run cleanup.
+	c.handler.releaseAndNotify(c, "disconnect", protocol.RosterReasonDisconnect)
 	return nil
 }
 
 // writeError sends a typed `error` envelope back to the originating
 // peer. Used both for envelope decode failures and for state-level
 // rejections (M3+).
-func (h *Handler) writeError(ctx context.Context, cc *meshConn, perr *protocol.ProtocolError, correlates string) {
+func (h *Handler) writeError(ctx context.Context, cc *SessionMesh, perr *protocol.ProtocolError, correlates string) {
 	payload, _ := json.Marshal(protocol.ErrorPayload{
 		Code:       perr.Code,
 		Message:    perr.Message,
@@ -204,13 +271,13 @@ func (h *Handler) writeError(ctx context.Context, cc *meshConn, perr *protocol.P
 		TS:      time.Now().UnixMilli(),
 		Payload: payload,
 	}
-	_ = cc.sendJSON(ctx, env)
+	_ = cc.SendJSON(ctx, env)
 }
 
 // dispatch routes a decoded envelope to the correct handler. M3+M5
 // arms: join_room, leave_room, media_ready, media_failed, error (echo
 // to log). M6+ extends the switch with pair handlers.
-func (h *Handler) dispatch(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+func (h *Handler) dispatch(ctx context.Context, cc *SessionMesh, d *protocol.Decoded) error {
 	switch d.Envelope.Type {
 	case protocol.TypeJoinRoom:
 		return h.handleJoinRoom(ctx, cc, d)
@@ -265,7 +332,7 @@ func (h *Handler) dispatch(ctx context.Context, cc *meshConn, d *protocol.Decode
 }
 
 // handleJoinRoom implements §3.1 + §3.2 + §3.3 + §3.4.
-func (h *Handler) handleJoinRoom(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+func (h *Handler) handleJoinRoom(ctx context.Context, cc *SessionMesh, d *protocol.Decoded) error {
 	if cc.peerID != "" {
 		h.writeError(ctx, cc, &protocol.ProtocolError{
 			Code:    protocol.CodeAlreadyJoined,
@@ -277,7 +344,7 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *meshConn, d *protocol.
 	// Done at handler entry rather than inside protocol.ValidateRoomID so the
 	// validator stays a pure regex check; trimmed value is used for
 	// every downstream lookup so "demo " and "demo" map to the same
-	// MeshRoom.
+	// room.Room.
 	roomID := strings.TrimSpace(d.Envelope.RoomID)
 	if err := protocol.ValidateRoomID(roomID); err != nil {
 		h.sendJoinRejected(ctx, cc, roomID, d.Envelope.RequestID,
@@ -287,33 +354,27 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *meshConn, d *protocol.
 	}
 	outcome := h.Manager.JoinOrCreate(roomID, cc)
 	switch outcome.Result {
-	case JoinRejectedInvalidRoom2:
-		h.sendJoinRejected(ctx, cc, roomID, d.Envelope.RequestID,
-			protocol.JoinRejectedInvalidRoom, protocol.ReasonInvalidRoomID,
-			"Room ID must match ^[A-Za-z0-9._-]{1,64}$.")
-		return nil
-	case JoinRejectedRoomFullRes:
+	case room.JoinRejectedRoomFullRes:
 		h.sendJoinRejected(ctx, cc, roomID, d.Envelope.RequestID,
 			protocol.JoinRejectedRoomFull, protocol.ReasonRoomFull,
 			"Mesh room '"+roomID+"' already has 4 reserved participants.")
 		return nil
-	case JoinAccepted:
-		cc.peerID = outcome.Participant.PeerID
-		cc.roomID = roomID
+	case room.JoinAccepted:
+		cc.MarkJoined(outcome.Participant.PeerID, roomID)
 		// Reset the disconnect-cleanup latch so a future ungraceful
 		// close on this WS triggers `releaseAndNotify` for the freshly
 		// admitted participant. Important when the user retries after
 		// a `media_failed` release.
-		cc.released.Store(false)
+		cc.ResetReleaseLatch()
 	}
 
 	// join_accepted (§3.2)
 	acceptPayload, _ := json.Marshal(protocol.JoinAcceptedPayload{
 		PeerID:         outcome.Participant.PeerID,
 		AdmissionIndex: outcome.Participant.AdmissionIndex,
-		IceServers:     h.Manager.IceServers(),
+		IceServers:     h.IceServers,
 	})
-	if err := cc.sendJSON(ctx, protocol.Envelope{
+	if err := cc.SendJSON(ctx, protocol.Envelope{
 		V:         protocol.ContractVersion,
 		Type:      protocol.TypeJoinAccepted,
 		RoomID:    roomID,
@@ -331,7 +392,7 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *meshConn, d *protocol.
 	snapshot := BuildRosterSnapshot(rm)
 	rm.Unlock()
 	snapshotPayload, _ := json.Marshal(snapshot)
-	if err := cc.sendJSON(ctx, protocol.Envelope{
+	if err := cc.SendJSON(ctx, protocol.Envelope{
 		V:       protocol.ContractVersion,
 		Type:    protocol.TypeMeshRosterSnapshot,
 		RoomID:  roomID,
@@ -357,7 +418,7 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *meshConn, d *protocol.
 }
 
 // handleLeaveRoom implements §3.18.
-func (h *Handler) handleLeaveRoom(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+func (h *Handler) handleLeaveRoom(ctx context.Context, cc *SessionMesh, d *protocol.Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &protocol.ProtocolError{
 			Code:    protocol.CodeNotInRoom,
@@ -366,9 +427,8 @@ func (h *Handler) handleLeaveRoom(ctx context.Context, cc *meshConn, d *protocol
 		return nil
 	}
 	h.releaseAndNotify(cc, "graceful_leave", protocol.RosterReasonGracefulLeave)
-	cc.peerID = ""
-	cc.roomID = ""
-	_ = cc.sess.Close(websocket.StatusNormalClosure, "graceful_leave")
+	cc.ClearJoined()
+	_ = cc.CloseNormal("graceful_leave")
 	return nil
 }
 
@@ -385,17 +445,25 @@ func (h *Handler) handleLeaveRoom(ctx context.Context, cc *meshConn, d *protocol
 // room-wide failed presence here. The leaver presence is `left`; each
 // remaining client closes ONLY the pair local↔leaver, leaving healthy
 // pairs alone.
-func (h *Handler) releaseAndNotify(cc *meshConn, reason string, rosterReason protocol.RosterReason) {
-	if cc.released.Load() || cc.peerID == "" {
+func (h *Handler) releaseAndNotify(cc *SessionMesh, reason string, rosterReason protocol.RosterReason) {
+	state := cc.State()
+	if state.PeerID == "" {
+		return
+	}
+	// Atomically claim the cleanup. If a graceful leave_room and an
+	// ungraceful disconnect race, only the first caller proceeds; the
+	// second observes ReleaseOnce()=false and returns. Replaces the
+	// pre-refactor `Released-check + Store(true)-after-Release` pattern
+	// with a single CAS, closing the TOCTOU window.
+	if !cc.ReleaseOnce() {
 		return
 	}
 	// Snapshot the readiness BEFORE Release frees the slot (Release
 	// drops the participant from the room's map so a post-release lookup
 	// would return nil). Used to gate `peer_left` emission below: only
 	// in-call leavers (media-ready) had pairs that need teardown.
-	departingReadiness := h.peerReadiness(cc.roomID, cc.peerID)
-	outcome := h.Manager.Release(cc.roomID, cc.peerID)
-	cc.released.Store(true)
+	departingReadiness := h.peerReadiness(state.RoomID, state.PeerID)
+	outcome := h.Manager.Release(state.RoomID, state.PeerID)
 	if outcome.Departing == nil {
 		return
 	}
@@ -416,7 +484,7 @@ func (h *Handler) releaseAndNotify(cc *meshConn, reason string, rosterReason pro
 	// media-ready at the moment of release). A `joined`-state leaver
 	// had no pairs yet, so the roster `left` update alone is enough.
 	var peerLeftEnv *protocol.Envelope
-	if departingReadiness == ReadinessMediaReady {
+	if departingReadiness == room.ReadinessMediaReady {
 		peerLeftReason := protocol.PeerLeftDisconnect
 		if rosterReason == protocol.RosterReasonGracefulLeave {
 			peerLeftReason = protocol.PeerLeftGracefulLeave
@@ -438,13 +506,13 @@ func (h *Handler) releaseAndNotify(cc *meshConn, reason string, rosterReason pro
 		if p.Conn == nil {
 			continue
 		}
-		if err := p.Conn.SendJSON(rosterEnv); err != nil {
+		if err := p.Conn.SendJSON(p.Conn.BaseContext(), rosterEnv); err != nil {
 			h.Log.Warn("mesh_roster_update send failed",
 				slog.String("peer_id", p.PeerID),
 				slog.String("error", err.Error()))
 		}
 		if peerLeftEnv != nil {
-			if err := p.Conn.SendJSON(*peerLeftEnv); err != nil {
+			if err := p.Conn.SendJSON(p.Conn.BaseContext(), *peerLeftEnv); err != nil {
 				h.Log.Warn("peer_left send failed",
 					slog.String("peer_id", p.PeerID),
 					slog.String("error", err.Error()))
@@ -465,7 +533,7 @@ func (h *Handler) releaseAndNotify(cc *meshConn, reason string, rosterReason pro
 // peerReadiness returns the current readiness for the named participant
 // or empty string when the room or participant is unknown. Caller must
 // NOT hold the room mutex; the helper acquires it.
-func (h *Handler) peerReadiness(roomID, peerID string) Readiness {
+func (h *Handler) peerReadiness(roomID, peerID string) room.Readiness {
 	rm := h.Manager.Room(roomID)
 	if rm == nil {
 		return ""
@@ -482,7 +550,7 @@ func (h *Handler) peerReadiness(roomID, peerID string) Readiness {
 // broadcastRosterUpdate fans out a single mesh_roster_update to ALL
 // participants in the room (including the subject). Caller does NOT
 // hold the room lock — this method takes and releases it internally.
-func (h *Handler) broadcastRosterUpdate(rm *MeshRoom, subject *Participant, presence protocol.Presence, reason protocol.RosterReason) {
+func (h *Handler) broadcastRosterUpdate(rm *room.Room, subject *room.Participant, presence protocol.Presence, reason protocol.RosterReason) {
 	rm.Lock()
 	update := BuildRosterUpdate(rm, subject, presence, reason)
 	targets := rm.ParticipantsSnapshot()
@@ -499,7 +567,7 @@ func (h *Handler) broadcastRosterUpdate(rm *MeshRoom, subject *Participant, pres
 		if p.Conn == nil {
 			continue
 		}
-		if err := p.Conn.SendJSON(env); err != nil {
+		if err := p.Conn.SendJSON(p.Conn.BaseContext(), env); err != nil {
 			h.Log.Warn("mesh_roster_update send failed",
 				slog.String("peer_id", p.PeerID),
 				slog.String("error", err.Error()))
@@ -513,7 +581,7 @@ func (h *Handler) broadcastRosterUpdate(rm *MeshRoom, subject *Participant, pres
 //
 // Per data-model §A.3, media_ready arriving from a non-`joined`
 // readiness is rejected with `error { code: "unexpected_media_ready" }`.
-func (h *Handler) handleMediaReady(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+func (h *Handler) handleMediaReady(ctx context.Context, cc *SessionMesh, d *protocol.Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &protocol.ProtocolError{
 			Code:    protocol.CodeNotInRoom,
@@ -561,7 +629,7 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *meshConn, d *protoco
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	if subject.Readiness != ReadinessJoined {
+	if subject.Readiness != room.ReadinessJoined {
 		rm.Unlock()
 		h.writeError(ctx, cc, &protocol.ProtocolError{
 			Code:    protocol.CodeUnexpectedMediaReady,
@@ -569,13 +637,13 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *meshConn, d *protoco
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	subject.Readiness = ReadinessMediaReady
+	subject.Readiness = room.ReadinessMediaReady
 	subject.LastSeen = time.Now()
 	rm.Unlock()
 
 	// Broadcast roster update presence:media-ready (FR-012b).
 	h.broadcastRosterUpdate(rm, subject, protocol.PresenceMediaReady, protocol.RosterReasonMediaReady)
-	// Pair eligibility evaluator (T045 / §3.9). Emits one
+	// room.Pair eligibility evaluator (T045 / §3.9). Emits one
 	// `pair_negotiation_instruction` to each endpoint of every NEW
 	// pair the subject formed with already-media-ready peers.
 	h.EvaluateAndEmitInstructions(rm, subject)
@@ -593,7 +661,7 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *meshConn, d *protoco
 // `mesh_roster_update { presence: "released", reason: "media_failed" }`
 // to the remaining participants. The admissionIndex value is preserved
 // (data-model §A.4 — never reused).
-func (h *Handler) handleMediaFailed(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+func (h *Handler) handleMediaFailed(ctx context.Context, cc *SessionMesh, d *protocol.Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &protocol.ProtocolError{
 			Code:    protocol.CodeNotInRoom,
@@ -610,7 +678,7 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *meshConn, d *protoc
 	// Step 1: release the slot (data-model §C.4). Captures the
 	// remaining participants for the roster broadcast.
 	outcome := h.Manager.Release(cc.roomID, cc.peerID)
-	cc.released.Store(true)
+	cc.ReleaseOnce()
 	if outcome.Departing == nil {
 		// Already released somehow — emit nothing (idempotent).
 		return nil
@@ -631,7 +699,7 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *meshConn, d *protoc
 		TS:      time.Now().UnixMilli(),
 		Payload: releasedPayload,
 	}
-	if err := cc.sendJSON(ctx, releasedEnv); err != nil {
+	if err := cc.SendJSON(ctx, releasedEnv); err != nil {
 		h.Log.Warn("participant_released send failed",
 			slog.String("peer_id", cc.peerID),
 			slog.String("error", err.Error()))
@@ -655,7 +723,7 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *meshConn, d *protoc
 		if p.Conn == nil {
 			continue
 		}
-		if err := p.Conn.SendJSON(updateEnv); err != nil {
+		if err := p.Conn.SendJSON(p.Conn.BaseContext(), updateEnv); err != nil {
 			h.Log.Warn("mesh_roster_update send failed",
 				slog.String("peer_id", p.PeerID),
 				slog.String("error", err.Error()))
@@ -665,8 +733,7 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *meshConn, d *protoc
 	// Local connCtx no longer references a participant. The WS stays
 	// open so the user can Retry with a fresh `join_room` (contract
 	// §3.8 client behavior).
-	cc.peerID = ""
-	cc.roomID = ""
+	cc.ClearJoined()
 
 	h.Log.Info("mesh peer released (media_failed)",
 		slog.String("event", "mesh_peer_released"),
@@ -679,7 +746,7 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *meshConn, d *protoc
 }
 
 // sendJoinRejected centralizes the join_rejected send.
-func (h *Handler) sendJoinRejected(ctx context.Context, cc *meshConn, roomID, requestID string, result protocol.JoinRejectedResult, reason protocol.JoinRejectedReason, message string) {
+func (h *Handler) sendJoinRejected(ctx context.Context, cc *SessionMesh, roomID, requestID string, result protocol.JoinRejectedResult, reason protocol.JoinRejectedReason, message string) {
 	payload, _ := json.Marshal(protocol.JoinRejectedPayload{
 		Result:  result,
 		Reason:  reason,
@@ -693,5 +760,5 @@ func (h *Handler) sendJoinRejected(ctx context.Context, cc *meshConn, roomID, re
 		TS:        time.Now().UnixMilli(),
 		Payload:   payload,
 	}
-	_ = cc.sendJSON(ctx, env)
+	_ = cc.SendJSON(ctx, env)
 }

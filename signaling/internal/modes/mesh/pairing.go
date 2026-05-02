@@ -1,4 +1,4 @@
-// Pair eligibility evaluator (T045, contract §3.9, FR-022 + FR-022a).
+// room.Pair eligibility evaluator (T045, contract §3.9, FR-022 + FR-022a).
 //
 // When a participant transitions to `media-ready`, this module looks at
 // every other already-`media-ready` participant in the same room, asks
@@ -16,7 +16,7 @@
 //
 // The caller (handler.handleMediaReady) holds NO locks when calling
 // EvaluateAndEmit; the function takes the room mutex internally.
-// Sends fan out under the per-conn write mutex inside `meshConn`.
+// Sends fan out under the per-conn write mutex inside `SessionMesh`.
 
 package mesh
 
@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"webrtc-lab/signaling/internal/modes/mesh/protocol"
+
+	"webrtc-lab/signaling/internal/modes/mesh/room"
 )
 
 // pairInstruction is one (pairId, role, recipient, remote) tuple
@@ -36,8 +38,8 @@ type pairInstruction struct {
 	pairID    string
 	pairEpoch uint64
 	role      protocol.PairRole
-	recipient *Participant
-	remote    *Participant
+	recipient *room.Participant
+	remote    *room.Participant
 }
 
 // EvaluateAndEmitInstructions runs the §3.9 evaluator for the supplied
@@ -45,7 +47,7 @@ type pairInstruction struct {
 // number of pair_negotiation_instruction envelopes the server emitted.
 //
 // Caller must NOT hold the room lock.
-func (h *Handler) EvaluateAndEmitInstructions(rm *MeshRoom, subject *Participant) int {
+func (h *Handler) EvaluateAndEmitInstructions(rm *room.Room, subject *room.Participant) int {
 	if rm == nil || subject == nil {
 		return 0
 	}
@@ -53,30 +55,31 @@ func (h *Handler) EvaluateAndEmitInstructions(rm *MeshRoom, subject *Participant
 	// Recompute the eligibility set under the lock so we don't race a
 	// concurrent media_ready / leave / release on a peer.
 	current := rm.FindByPeerID(subject.PeerID)
-	if current == nil || current.Readiness != ReadinessMediaReady {
+	if current == nil || current.Readiness != room.ReadinessMediaReady {
 		rm.Unlock()
 		return 0
 	}
-	ledger, ok := rm.PairLedger().(*pairLedger)
+	ledger := rm.PairLedger()
+	ok := ledger != nil
 	if !ok || ledger == nil {
 		rm.Unlock()
 		return 0
 	}
 	parts := rm.ParticipantsSnapshot()
-	iceServers := h.Manager.IceServers()
+	iceServers := h.IceServers
 
 	instructions := make([]pairInstruction, 0, 2*(len(parts)-1))
 	for _, peer := range parts {
 		if peer.PeerID == current.PeerID {
 			continue
 		}
-		if peer.Readiness != ReadinessMediaReady {
+		if peer.Readiness != room.ReadinessMediaReady {
 			continue
 		}
 		// Evaluate against the ledger's current state; pre-existing
 		// pairs MUST NOT receive instructions (FR-022a / L18).
 		var loIdx, hiIdx uint64
-		var loPeer, hiPeer *Participant
+		var loPeer, hiPeer *room.Participant
 		if current.AdmissionIndex < peer.AdmissionIndex {
 			loIdx, hiIdx = current.AdmissionIndex, peer.AdmissionIndex
 			loPeer, hiPeer = current, peer
@@ -85,16 +88,16 @@ func (h *Handler) EvaluateAndEmitInstructions(rm *MeshRoom, subject *Participant
 			loPeer, hiPeer = peer, current
 		}
 		pairID := protocol.MakePairID(loIdx, hiIdx)
-		if _, exists := ledger.pairs[pairID]; exists {
+		if _, exists := ledger.Lookup(pairID); exists {
 			// Existing pair (any state) — defensive no-op; preserves
 			// pc, dc, senders, states, pairEpoch on both clients.
 			continue
 		}
-		pair, epoch := ledger.Register(loPeer.PeerID, hiPeer.PeerID, loIdx, hiIdx)
+		pair, epoch := ledger.Register(pairID, loPeer.PeerID, hiPeer.PeerID)
 		// Mark as Pairing so future evaluator passes recognize it as
 		// in-flight (also lets future M11 reconnect logic differentiate
-		// from PairIdle).
-		pair.State = PairPairing
+		// from room.PairIdle).
+		pair.State = room.PairPairing
 		instructions = append(instructions,
 			pairInstruction{
 				pairID:    pairID,
@@ -141,7 +144,7 @@ func (h *Handler) EvaluateAndEmitInstructions(rm *MeshRoom, subject *Participant
 		if ins.recipient.Conn == nil {
 			continue
 		}
-		if err := ins.recipient.Conn.SendJSON(env); err != nil {
+		if err := ins.recipient.Conn.SendJSON(ins.recipient.Conn.BaseContext(), env); err != nil {
 			h.Log.Warn("pair_negotiation_instruction send failed",
 				slog.String("event", "mesh_pair_instruction_send_failed"),
 				slog.String("peer_id", ins.recipient.PeerID),

@@ -26,10 +26,12 @@ import (
 	"time"
 
 	"webrtc-lab/signaling/internal/modes/mesh/protocol"
+
+	"webrtc-lab/signaling/internal/modes/mesh/room"
 )
 
 // handlePairMediaState — §3.13 server-fan-out.
-func (h *Handler) handlePairMediaState(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+func (h *Handler) handlePairMediaState(ctx context.Context, cc *SessionMesh, d *protocol.Decoded) error {
 	// Sender must be admitted in some mesh room.
 	if cc.peerID == "" || cc.roomID == "" {
 		h.writeError(ctx, cc, &protocol.ProtocolError{
@@ -74,7 +76,7 @@ func (h *Handler) handlePairMediaState(ctx context.Context, cc *meshConn, d *pro
 	// §3.13 server validation: a `released` or `left` sender (or one
 	// still in `joined` pre-media-acquisition) must not leak media-state
 	// to the room. media-ready is the only readiness that may publish.
-	if subject.Readiness != ReadinessMediaReady {
+	if subject.Readiness != room.ReadinessMediaReady {
 		rm.Unlock()
 		h.writeError(ctx, cc, &protocol.ProtocolError{
 			Code:    protocol.CodeNotInRoom,
@@ -113,7 +115,7 @@ func (h *Handler) handlePairMediaState(ctx context.Context, cc *meshConn, d *pro
 			skipped++
 			continue
 		}
-		if err := p.Conn.SendJSON(envOut); err != nil {
+		if err := p.Conn.SendJSON(p.Conn.BaseContext(), envOut); err != nil {
 			skipped++
 			h.Log.Warn("pair_media_state fan-out send failed",
 				slog.String("event", "mesh_pair_media_state_send_failed"),

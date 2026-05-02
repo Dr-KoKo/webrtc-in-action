@@ -4,13 +4,16 @@
 
 package mesh
 
-import "webrtc-lab/signaling/internal/modes/mesh/protocol"
+import (
+	"webrtc-lab/signaling/internal/modes/mesh/protocol"
+	"webrtc-lab/signaling/internal/modes/mesh/room"
+)
 
 // BuildRosterSnapshot returns the §3.4 payload for the supplied room.
 // Includes EVERY participant (subject + all others). Participants are
 // sorted by admissionIndex ascending.
 //
-// protocol.Presence values are derived from each participant's Readiness:
+// protocol.Presence values are derived from each participant's room.Readiness:
 //
 //	joined        → "joined"
 //	media-ready   → "media-ready"
@@ -32,10 +35,10 @@ import "webrtc-lab/signaling/internal/modes/mesh/protocol"
 // keeps the wire shape unambiguous regardless of client behavior.
 //
 // Caller must hold the room lock.
-func BuildRosterSnapshot(r *MeshRoom) protocol.MeshRosterSnapshotPayload {
+func BuildRosterSnapshot(r *room.Room) protocol.MeshRosterSnapshotPayload {
 	parts := r.ParticipantsSnapshot()
 	out := protocol.MeshRosterSnapshotPayload{
-		ServerSeq:    r.nextRosterSeq(),
+		ServerSeq:    r.NextRosterSeq(),
 		Participants: make([]protocol.RosterParticipant, 0, len(parts)),
 	}
 	for _, p := range parts {
@@ -53,8 +56,8 @@ func BuildRosterSnapshot(r *MeshRoom) protocol.MeshRosterSnapshotPayload {
 // fan-out to all participants via FanOutRoster.
 //
 // Caller must hold the room lock.
-func BuildRosterUpdate(r *MeshRoom, subject *Participant, presence protocol.Presence, reason protocol.RosterReason) protocol.MeshRosterUpdatePayload {
-	seq := r.nextRosterSeq()
+func BuildRosterUpdate(r *room.Room, subject *room.Participant, presence protocol.Presence, reason protocol.RosterReason) protocol.MeshRosterUpdatePayload {
+	seq := r.NextRosterSeq()
 	return protocol.MeshRosterUpdatePayload{
 		ServerSeq:      seq,
 		SubjectPeerID:  subject.PeerID,
@@ -64,17 +67,17 @@ func BuildRosterUpdate(r *MeshRoom, subject *Participant, presence protocol.Pres
 	}
 }
 
-// presenceForReadiness maps the server-side Readiness FSM (§A.3) to
+// presenceForReadiness maps the server-side room.Readiness FSM (§A.3) to
 // the wire-level protocol.Presence enum used in roster messages.
-func presenceForReadiness(r Readiness) protocol.Presence {
+func presenceForReadiness(r room.Readiness) protocol.Presence {
 	switch r {
-	case ReadinessJoined:
+	case room.ReadinessJoined:
 		return protocol.PresenceJoined
-	case ReadinessMediaReady:
+	case room.ReadinessMediaReady:
 		return protocol.PresenceMediaReady
-	case ReadinessReleased:
+	case room.ReadinessReleased:
 		return protocol.PresenceReleased
-	case ReadinessLeft:
+	case room.ReadinessLeft:
 		return protocol.PresenceLeft
 	}
 	return protocol.PresenceJoined

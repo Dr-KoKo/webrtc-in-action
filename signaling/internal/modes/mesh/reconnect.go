@@ -5,7 +5,7 @@
 //
 //   1. `pair_failed` (C→S→C) — endpoint-detected pair failure. The
 //      server validates `pairId` + `pairEpoch`, marks the server-side
-//      Pair.State = PairFailed (bookkeeping), forwards the original
+//      room.Pair.State = room.PairFailed (bookkeeping), forwards the original
 //      payload bytes to the OTHER endpoint of the pair only, and does
 //      NOT broadcast `mesh_roster_update { presence: "failed" }` to
 //      the room (FR-025: failed presence is per-(viewer, subject) and
@@ -15,8 +15,8 @@
 //      tile. The server validates pair membership + state + observed
 //      epoch under the per-room mutex (which serializes simultaneous
 //      clicks → exactly one winner); on success it increments
-//      `pairEpoch[pairId]` by exactly +1, transitions Pair.State =
-//      PairReconnecting, and emits `pair_reconnect_instruction` to
+//      `pairEpoch[pairId]` by exactly +1, transitions room.Pair.State =
+//      room.PairReconnecting, and emits `pair_reconnect_instruction` to
 //      both endpoints with the new epoch. The losing side of a
 //      simultaneous-click race observes `stale_pair_epoch` and does
 //      not increment a second time.
@@ -37,13 +37,15 @@ import (
 	"time"
 
 	"webrtc-lab/signaling/internal/modes/mesh/protocol"
+
+	"webrtc-lab/signaling/internal/modes/mesh/room"
 )
 
 // handlePairFailed implements §3.16 — endpoint-detected failure relay.
 // Mirrors the validation shape of `relayPairIce` (relay_ice.go) but
-// also flips the server-side Pair.State so a subsequent
+// also flips the server-side room.Pair.State so a subsequent
 // `reconnect_pair` can validate the failed precondition.
-func (h *Handler) handlePairFailed(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+func (h *Handler) handlePairFailed(ctx context.Context, cc *SessionMesh, d *protocol.Decoded) error {
 	payload, ok := d.Message.(*protocol.PairFailedPayload)
 	if !ok || payload == nil {
 		h.writeError(ctx, cc, &protocol.ProtocolError{
@@ -69,7 +71,7 @@ func (h *Handler) handlePairFailed(ctx context.Context, cc *meshConn, d *protoco
 	}
 
 	rm.Lock()
-	ledger, _ := rm.PairLedger().(*pairLedger)
+	ledger := rm.PairLedger()
 	if ledger == nil {
 		rm.Unlock()
 		h.writeError(ctx, cc, &protocol.ProtocolError{
@@ -78,7 +80,7 @@ func (h *Handler) handlePairFailed(ctx context.Context, cc *meshConn, d *protoco
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	pair, exists := ledger.pairs[payload.PairID]
+	pair, exists := ledger.Lookup(payload.PairID)
 	if !exists {
 		rm.Unlock()
 		// Mirrors the relay path's "unknown pair = canonical stale".
@@ -105,7 +107,7 @@ func (h *Handler) handlePairFailed(ctx context.Context, cc *meshConn, d *protoco
 	}
 	// Server-side bookkeeping: mark the pair failed so a follow-up
 	// `reconnect_pair` can validate the precondition.
-	pair.State = PairFailed
+	pair.State = room.PairFailed
 	var recipientPeerID string
 	if senderIsLo {
 		recipientPeerID = pair.HiPeerID
@@ -137,7 +139,7 @@ func (h *Handler) handlePairFailed(ctx context.Context, cc *meshConn, d *protoco
 		// Forward original payload bytes verbatim (NFR-003).
 		Payload: d.Envelope.Payload,
 	}
-	if err := recipient.Conn.SendJSON(envOut); err != nil {
+	if err := recipient.Conn.SendJSON(recipient.Conn.BaseContext(), envOut); err != nil {
 		h.Log.Warn("pair_failed forward failed",
 			slog.String("event", "mesh_pair_failed_send_failed"),
 			slog.String("pair_id", payload.PairID),
@@ -160,12 +162,12 @@ func (h *Handler) handlePairFailed(ctx context.Context, cc *meshConn, d *protoco
 
 // handleReconnectPair implements §3.14 — request a fresh attempt for
 // one pair. Per-pair mutual exclusion is provided by the room mutex
-// (the only path that mutates `pairLedger`); a simultaneous-click race
+// (the only path that mutates `room.PairLedger`); a simultaneous-click race
 // resolves deterministically: one request acquires the lock first,
 // validates observedEpoch == current, increments epoch, and emits the
 // pair_reconnect_instruction; the second request observes the
 // already-incremented epoch and receives `stale_pair_epoch`.
-func (h *Handler) handleReconnectPair(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+func (h *Handler) handleReconnectPair(ctx context.Context, cc *SessionMesh, d *protocol.Decoded) error {
 	payload, ok := d.Message.(*protocol.ReconnectPairPayload)
 	if !ok || payload == nil {
 		h.writeError(ctx, cc, &protocol.ProtocolError{
@@ -191,7 +193,7 @@ func (h *Handler) handleReconnectPair(ctx context.Context, cc *meshConn, d *prot
 	}
 
 	rm.Lock()
-	ledger, _ := rm.PairLedger().(*pairLedger)
+	ledger := rm.PairLedger()
 	if ledger == nil {
 		rm.Unlock()
 		h.writeError(ctx, cc, &protocol.ProtocolError{
@@ -200,7 +202,7 @@ func (h *Handler) handleReconnectPair(ctx context.Context, cc *meshConn, d *prot
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	pair, exists := ledger.pairs[payload.PairID]
+	pair, exists := ledger.Lookup(payload.PairID)
 	if !exists {
 		rm.Unlock()
 		// canonical-equivalent of an `unknown_pair` code; same shape as
@@ -230,12 +232,12 @@ func (h *Handler) handleReconnectPair(ctx context.Context, cc *meshConn, d *prot
 	}
 	// Order matters: validate observedEpoch BEFORE state. In a
 	// simultaneous-click race the first request bumps the epoch AND
-	// flips state to PairReconnecting; the loser observes BOTH the new
+	// flips state to room.PairReconnecting; the loser observes BOTH the new
 	// epoch AND the new state, but the canonical signal per contract
 	// §3.14 is `stale_pair_epoch` (so both clients can self-correct
 	// onto the winner's epoch). State-check first would shadow the
 	// epoch signal with a misleading `pair_not_failed`.
-	current, _ := ledger.epochs[payload.PairID]
+	current, _ := ledger.CurrentPairEpoch(payload.PairID)
 	if payload.ObservedEpoch != current {
 		// Includes both stale (< current — common simultaneous-click
 		// race outcome) and futuristic (> current — client invented an
@@ -252,7 +254,7 @@ func (h *Handler) handleReconnectPair(ctx context.Context, cc *meshConn, d *prot
 		})
 		return nil
 	}
-	if pair.State != PairFailed {
+	if pair.State != room.PairFailed {
 		rm.Unlock()
 		h.writeErrorWithContext(ctx, cc, &protocol.ProtocolError{
 			Code:    protocol.CodeMalformed,
@@ -291,17 +293,17 @@ func (h *Handler) handleReconnectPair(ctx context.Context, cc *meshConn, d *prot
 	// All validation passed — increment the epoch under the lock so a
 	// second simultaneous click cannot also mint a new attempt.
 	newEpoch, _ := ledger.Increment(payload.PairID)
-	pair.State = PairReconnecting
+	pair.State = room.PairReconnecting
 	loIdx := loPeer.AdmissionIndex
 	hiIdx := hiPeer.AdmissionIndex
 	roomID := rm.ID()
-	iceServers := h.Manager.IceServers()
+	iceServers := h.IceServers
 	rm.Unlock()
 
 	// Emit `pair_reconnect_instruction` to both endpoints. The lower
 	// admissionIndex is always the offerer (§3.9) so the same
 	// deterministic role rule applies after every fresh attempt.
-	emitOne := func(recipient *Participant, role protocol.PairRole, remote *Participant, remoteIdx uint64) {
+	emitOne := func(recipient *room.Participant, role protocol.PairRole, remote *room.Participant, remoteIdx uint64) {
 		if recipient == nil || recipient.Conn == nil || remote == nil {
 			return
 		}
@@ -325,7 +327,7 @@ func (h *Handler) handleReconnectPair(ctx context.Context, cc *meshConn, d *prot
 			TS:      time.Now().UnixMilli(),
 			Payload: body,
 		}
-		if err := recipient.Conn.SendJSON(env); err != nil {
+		if err := recipient.Conn.SendJSON(recipient.Conn.BaseContext(), env); err != nil {
 			h.Log.Warn("pair_reconnect_instruction send failed",
 				slog.String("event", "mesh_pair_reconnect_instruction_send_failed"),
 				slog.String("pair_id", payload.PairID),
@@ -354,7 +356,7 @@ func (h *Handler) handleReconnectPair(ctx context.Context, cc *meshConn, d *prot
 // matching PairContext / button without parsing the message string.
 func (h *Handler) writeErrorWithContext(
 	ctx context.Context,
-	cc *meshConn,
+	cc *SessionMesh,
 	perr *protocol.ProtocolError,
 	correlates string,
 	context map[string]any,
@@ -371,5 +373,5 @@ func (h *Handler) writeErrorWithContext(
 		TS:      time.Now().UnixMilli(),
 		Payload: payload,
 	}
-	_ = cc.sendJSON(ctx, env)
+	_ = cc.SendJSON(ctx, env)
 }

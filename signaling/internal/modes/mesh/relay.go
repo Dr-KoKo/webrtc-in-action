@@ -1,11 +1,11 @@
-// Pair offer/answer relay (T049, contract §3.10 + §3.11). Validates
+// room.Pair offer/answer relay (T049, contract §3.10 + §3.11). Validates
 // the inbound envelope (sender admitted, sender belongs to pairId,
 // pair exists, pairEpoch matches, role matches), stamps `from` =
 // sender peerId, and forwards once to the matched `to`.
 //
 // Stale epoch  → `error stale_pair_epoch` to the sender; no forward.
 // Wrong role   → `error unexpected_offer | unexpected_answer`; no forward.
-// Pair unknown → `error stale_pair_epoch` (mirrors the pair-ledger
+// room.Pair unknown → `error stale_pair_epoch` (mirrors the pair-ledger
 //                contract — an unknown pairId from the client side is
 //                always treated as "the server's epoch is canonical").
 //
@@ -35,7 +35,7 @@ const (
 )
 
 // handlePairOffer implements the §3.10 server-side relay path.
-func (h *Handler) handlePairOffer(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+func (h *Handler) handlePairOffer(ctx context.Context, cc *SessionMesh, d *protocol.Decoded) error {
 	payload, ok := d.Message.(*protocol.PairOfferPayload)
 	if !ok || payload == nil {
 		h.writeError(ctx, cc, &protocol.ProtocolError{
@@ -48,7 +48,7 @@ func (h *Handler) handlePairOffer(ctx context.Context, cc *meshConn, d *protocol
 }
 
 // handlePairAnswer implements the §3.11 server-side relay path.
-func (h *Handler) handlePairAnswer(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+func (h *Handler) handlePairAnswer(ctx context.Context, cc *SessionMesh, d *protocol.Decoded) error {
 	payload, ok := d.Message.(*protocol.PairAnswerPayload)
 	if !ok || payload == nil {
 		h.writeError(ctx, cc, &protocol.ProtocolError{
@@ -65,7 +65,7 @@ func (h *Handler) handlePairAnswer(ctx context.Context, cc *meshConn, d *protoco
 // server never parses sdp).
 func (h *Handler) relayPair(
 	ctx context.Context,
-	cc *meshConn,
+	cc *SessionMesh,
 	d *protocol.Decoded,
 	kind pairRelayKind,
 	pairID string,
@@ -92,7 +92,7 @@ func (h *Handler) relayPair(
 	}
 
 	rm.Lock()
-	ledger, _ := rm.PairLedger().(*pairLedger)
+	ledger := rm.PairLedger()
 	if ledger == nil {
 		rm.Unlock()
 		h.writeError(ctx, cc, &protocol.ProtocolError{
@@ -101,7 +101,7 @@ func (h *Handler) relayPair(
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	pair, exists := ledger.pairs[pairID]
+	pair, exists := ledger.Lookup(pairID)
 	if !exists {
 		rm.Unlock()
 		h.writeError(ctx, cc, &protocol.ProtocolError{
@@ -198,7 +198,7 @@ func (h *Handler) relayPair(
 		TS:      time.Now().UnixMilli(),
 		Payload: rawPayload,
 	}
-	if err := recipient.Conn.SendJSON(envOut); err != nil {
+	if err := recipient.Conn.SendJSON(recipient.Conn.BaseContext(), envOut); err != nil {
 		h.Log.Warn("pair relay forward failed",
 			slog.String("event", "mesh_pair_relay_send_failed"),
 			slog.String("kind", relayKindLabel(kind)),

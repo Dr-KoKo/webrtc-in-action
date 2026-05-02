@@ -1,4 +1,4 @@
-// Pair ICE-candidate relay (T055, contract §3.12). Validates the
+// room.Pair ICE-candidate relay (T055, contract §3.12). Validates the
 // inbound `pair_ice_candidate` envelope (sender admitted, sender
 // belongs to pairId, pair exists, pairEpoch matches, candidate shape
 // is object|null), then forwards the original payload bytes verbatim
@@ -16,7 +16,7 @@
 //     as `malformed`; the relay never sees it.
 //
 // Stale epoch  → `error stale_pair_epoch` to the sender; no forward.
-// Pair unknown → `error stale_pair_epoch` (mirrors the SDP relay path
+// room.Pair unknown → `error stale_pair_epoch` (mirrors the SDP relay path
 //                in relay.go; an unknown pairId from the client side is
 //                treated as "the server's epoch is canonical").
 
@@ -32,7 +32,7 @@ import (
 )
 
 // handlePairIceCandidate implements the §3.12 server-side relay path.
-func (h *Handler) handlePairIceCandidate(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+func (h *Handler) handlePairIceCandidate(ctx context.Context, cc *SessionMesh, d *protocol.Decoded) error {
 	payload, ok := d.Message.(*protocol.PairIceCandidatePayload)
 	if !ok || payload == nil {
 		h.writeError(ctx, cc, &protocol.ProtocolError{
@@ -49,7 +49,7 @@ func (h *Handler) handlePairIceCandidate(ctx context.Context, cc *meshConn, d *p
 // either endpoint of a pair may emit ICE candidates.
 func (h *Handler) relayPairIce(
 	ctx context.Context,
-	cc *meshConn,
+	cc *SessionMesh,
 	d *protocol.Decoded,
 	pairID string,
 	pairEpoch uint64,
@@ -73,7 +73,7 @@ func (h *Handler) relayPairIce(
 	}
 
 	rm.Lock()
-	ledger, _ := rm.PairLedger().(*pairLedger)
+	ledger := rm.PairLedger()
 	if ledger == nil {
 		rm.Unlock()
 		h.writeError(ctx, cc, &protocol.ProtocolError{
@@ -82,7 +82,7 @@ func (h *Handler) relayPairIce(
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	pair, exists := ledger.pairs[pairID]
+	pair, exists := ledger.Lookup(pairID)
 	if !exists {
 		rm.Unlock()
 		h.writeError(ctx, cc, &protocol.ProtocolError{
@@ -139,7 +139,7 @@ func (h *Handler) relayPairIce(
 		// the candidate string (NFR-003).
 		Payload: rawPayload,
 	}
-	if err := recipient.Conn.SendJSON(envOut); err != nil {
+	if err := recipient.Conn.SendJSON(recipient.Conn.BaseContext(), envOut); err != nil {
 		h.Log.Warn("pair_ice_candidate forward failed",
 			slog.String("event", "mesh_pair_ice_relay_send_failed"),
 			slog.String("pair_id", pairID),
