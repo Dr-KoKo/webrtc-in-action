@@ -16,6 +16,7 @@ import (
 	"github.com/coder/websocket"
 
 	sig "webrtc-lab/signaling/internal/modes/onetoone"
+	proto "webrtc-lab/signaling/internal/modes/onetoone/protocol"
 )
 
 // silentLogger drops everything. Tests that want to assert log output
@@ -202,20 +203,20 @@ func TestHandlerRejectsUnsupportedVersion(t *testing.T) {
 		t.Fatalf("read failed: %v", err)
 	}
 
-	var env sig.Envelope
+	var env proto.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		t.Fatalf("server reply not JSON: %v", err)
 	}
-	if env.Type != sig.TypeError {
-		t.Fatalf("server reply type = %q, want %q", env.Type, sig.TypeError)
+	if env.Type != proto.TypeError {
+		t.Fatalf("server reply type = %q, want %q", env.Type, proto.TypeError)
 	}
 
-	var payload sig.ErrorPayload
+	var payload proto.ErrorPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
 		t.Fatalf("server reply payload not ErrorPayload: %v", err)
 	}
-	if payload.Code != sig.CodeUnsupportedVersion {
-		t.Fatalf("error code = %q, want %q", payload.Code, sig.CodeUnsupportedVersion)
+	if payload.Code != proto.CodeUnsupportedVersion {
+		t.Fatalf("error code = %q, want %q", payload.Code, proto.CodeUnsupportedVersion)
 	}
 }
 

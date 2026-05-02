@@ -34,6 +34,7 @@ import (
 	"github.com/coder/websocket"
 
 	sig "webrtc-lab/signaling/internal/modes/onetoone"
+	proto "webrtc-lab/signaling/internal/modes/onetoone/protocol"
 )
 
 // ---------------------------------------------------------------------
@@ -43,12 +44,12 @@ import (
 
 // joinRoom sends a v1 join_room frame for roomID and returns the
 // matching join_accepted envelope.
-func joinRoom(t *testing.T, ctx context.Context, conn *websocket.Conn, roomID, requestID string) sig.Envelope {
+func joinRoom(t *testing.T, ctx context.Context, conn *websocket.Conn, roomID, requestID string) proto.Envelope {
 	t.Helper()
-	payload, _ := json.Marshal(sig.JoinRoomPayload{})
-	env := sig.Envelope{
-		V:         sig.ContractVersion,
-		Type:      sig.TypeJoinRoom,
+	payload, _ := json.Marshal(proto.JoinRoomPayload{})
+	env := proto.Envelope{
+		V:         proto.ContractVersion,
+		Type:      proto.TypeJoinRoom,
 		RoomID:    roomID,
 		RequestID: requestID,
 		Payload:   payload,
@@ -58,20 +59,20 @@ func joinRoom(t *testing.T, ctx context.Context, conn *websocket.Conn, roomID, r
 		t.Fatalf("write join_room: %v", err)
 	}
 	got := readEnvelope(t, ctx, conn)
-	if got.Type != sig.TypeJoinAccepted {
+	if got.Type != proto.TypeJoinAccepted {
 		t.Fatalf("expected join_accepted, got %q (raw payload %s)", got.Type, string(got.Payload))
 	}
 	return got
 }
 
 // readEnvelope reads one text frame and decodes it as an Envelope.
-func readEnvelope(t *testing.T, ctx context.Context, conn *websocket.Conn) sig.Envelope {
+func readEnvelope(t *testing.T, ctx context.Context, conn *websocket.Conn) proto.Envelope {
 	t.Helper()
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	var env sig.Envelope
+	var env proto.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		t.Fatalf("unmarshal envelope: %v (raw=%s)", err, string(raw))
 	}
@@ -80,9 +81,9 @@ func readEnvelope(t *testing.T, ctx context.Context, conn *websocket.Conn) sig.E
 
 // readUntilType drains frames until one of `wants` appears, returning
 // it. Fails the test if ctx expires before a match.
-func readUntilType(t *testing.T, ctx context.Context, conn *websocket.Conn, wants ...sig.Type) sig.Envelope {
+func readUntilType(t *testing.T, ctx context.Context, conn *websocket.Conn, wants ...proto.Type) proto.Envelope {
 	t.Helper()
-	wantSet := make(map[sig.Type]bool, len(wants))
+	wantSet := make(map[proto.Type]bool, len(wants))
 	for _, w := range wants {
 		wantSet[w] = true
 	}
@@ -249,10 +250,10 @@ func TestLifecycle_UngracefulCloseCleanupOnBackground(t *testing.T) {
 	//   2. A's admission (same broadcast call when A joins).
 	// Drain both so the next presence frame B reads is A's disconnect.
 	for i := 0; i < 2; i++ {
-		got := readUntilType(t, ctx, connB, sig.TypePeerPresenceChanged)
-		var p sig.PeerPresenceChangedPayload
+		got := readUntilType(t, ctx, connB, proto.TypePeerPresenceChanged)
+		var p proto.PeerPresenceChangedPayload
 		_ = json.Unmarshal(got.Payload, &p)
-		if p.Reason != sig.PresenceReasonAdmitted {
+		if p.Reason != proto.PresenceReasonAdmitted {
 			t.Fatalf("drain[%d]: expected admission frame, got presence=%q reason=%q", i, p.Presence, p.Reason)
 		}
 	}
@@ -265,16 +266,16 @@ func TestLifecycle_UngracefulCloseCleanupOnBackground(t *testing.T) {
 
 	// B should receive presence:released, reason:disconnect for the
 	// pending-media departure.
-	got := readUntilType(t, ctx, connB, sig.TypePeerPresenceChanged)
-	var p sig.PeerPresenceChangedPayload
+	got := readUntilType(t, ctx, connB, proto.TypePeerPresenceChanged)
+	var p proto.PeerPresenceChangedPayload
 	if err := json.Unmarshal(got.Payload, &p); err != nil {
 		t.Fatalf("unmarshal presence: %v", err)
 	}
-	if p.Presence != sig.PresenceReleased {
-		t.Errorf("expected presence=%q, got %q", sig.PresenceReleased, p.Presence)
+	if p.Presence != proto.PresenceReleased {
+		t.Errorf("expected presence=%q, got %q", proto.PresenceReleased, p.Presence)
 	}
-	if p.Reason != sig.PresenceReasonDisconnect {
-		t.Errorf("expected reason=%q, got %q", sig.PresenceReasonDisconnect, p.Reason)
+	if p.Reason != proto.PresenceReasonDisconnect {
+		t.Errorf("expected reason=%q, got %q", proto.PresenceReasonDisconnect, p.Reason)
 	}
 
 	// Cleanup must not have logged any context-related errors.
@@ -313,13 +314,13 @@ func TestLifecycle_MalformedFrameContinuation(t *testing.T) {
 		t.Fatalf("write malformed: %v", err)
 	}
 	errEnv := readEnvelope(t, ctx, conn)
-	if errEnv.Type != sig.TypeError {
+	if errEnv.Type != proto.TypeError {
 		t.Fatalf("expected error frame for malformed input, got %q", errEnv.Type)
 	}
 
 	// Step 2: send a valid join_room and assert it dispatches.
 	got := joinRoom(t, ctx, conn, "demo", uuidLike("3"))
-	if got.Type != sig.TypeJoinAccepted {
+	if got.Type != proto.TypeJoinAccepted {
 		t.Fatalf("post-malformed join_room did not produce join_accepted: got %q", got.Type)
 	}
 }
@@ -355,16 +356,16 @@ func TestLifecycle_LeaveRoomDoubleClose(t *testing.T) {
 
 	// Drain self-admission presence frame so the next read is the
 	// server-driven close after leave_room.
-	_ = readUntilType(t, ctx, conn, sig.TypePeerPresenceChanged)
+	_ = readUntilType(t, ctx, conn, proto.TypePeerPresenceChanged)
 
 	// Send leave_room. handleLeaveRoom (handler.go:357 +366) calls
 	// releaseAndNotify and then `_ = cc.conn.Close(... "graceful_leave")`.
 	// The read loop unblocks; teardown calls `_ = conn.Close(... "bye")`
 	// at handler.go:175. Both close calls swallow errors via `_ =`.
 	leavePayload, _ := json.Marshal(struct{}{})
-	leave := sig.Envelope{
-		V:         sig.ContractVersion,
-		Type:      sig.TypeLeaveRoom,
+	leave := proto.Envelope{
+		V:         proto.ContractVersion,
+		Type:      proto.TypeLeaveRoom,
 		RoomID:    "demo",
 		RequestID: uuidLike("6"),
 		Payload:   leavePayload,

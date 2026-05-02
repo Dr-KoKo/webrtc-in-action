@@ -112,11 +112,17 @@ in sibling packages instead of a single Ring 2 package:
   message types, error codes, decode, payload validators. No I/O, no
   state.
 - `room/` answers "what state does the server keep" — `Room` registry,
-  `Participant` FSM, `Pair` FSM (mesh only), presence enums. No I/O,
-  no schema.
+  `Participant` FSM, `Pair` FSM (mesh only), presence enums. No
+  schema, no envelope decode, no HTTP/WebSocket lifecycle. It may hold
+  an opaque outbound write handle (`room.Conn`) on `Participant` so
+  async fan-out (presence-changed, peer-left) reaches targets without
+  round-tripping through Ring 3; the handle's implementation lives in
+  the mode root, not in `room/`. `room/` is *state-only* in the sense
+  that it does not parse, encode, or own transport — not in the
+  stricter sense of having no write surface at all.
 
-Both are pure: they may import `protocol` from `shared/` packages but
-not from each other or from Ring 3.
+Both may import from `shared/` but not from each other and not from
+Ring 3.
 
 ### 2.3 Ring 3 — per-mode `signaling/`
 
@@ -154,6 +160,26 @@ mode root    wires shared/wsserver to signaling.Service; satisfies
 `signaling/` reaches the per-conn write surface only through the
 `signaling.Conn` interface declared in `signaling/`. The mode root
 implements that interface; `signaling/` never imports the mode root.
+
+**Wire ↔ domain enum mapping lives only in `signaling/`.** `protocol/`
+owns wire enums (`Role`, `Presence`, `MediaReadiness` as JSON
+strings); `room/` owns domain enums (e.g. `room.MediaReadiness`,
+`room.CallPhase`). Neither imports the other. Conversion functions
+(wire→domain on inbound, domain→wire on outbound) live in
+`signaling/` so the ring rule above stays clean — there is no
+"shared enum types" package and no cross-ring import.
+
+**Enforcement.** The rules in this section are enforced by
+`scripts/audit-boundaries.sh` after the migration. The audit extends
+the existing cross-mode checks with per-mode ring checks:
+
+- `protocol/` must not import `room/` or `signaling/`
+- `room/` must not import `protocol/` or `signaling/`
+- `signaling/` must not import the mode root or `shared/wsserver`
+- the mode root is the only package that wires `shared/wsserver`
+
+Wiring those checks into the audit script is part of the migration's
+final verification phase, not a separate task.
 
 ## 3. Per-mode internal layout
 
@@ -324,6 +350,30 @@ Notes:
   Service's broadcast call sites pass each target's context
   explicitly: `p.Conn.SendJSON(p.Conn.BaseContext(), env)`. (See
   §6.1 Phase B for when the deletion lands.)
+
+**Allowed `Conn` mutation sequences.** The 9-method surface keeps
+verbs explicit, but the methods are not freely composable — the order
+matters and the wrong order leaves the session in a partial state.
+The valid sequences are:
+
+| Trigger | Sequence |
+|---|---|
+| Join accepted | `MarkJoined(peerID, roomID)` |
+| Graceful leave / disconnect | `ReleaseOnce()` (returns true) → `ClearJoined()` |
+| `media_failed` retry | `ReleaseOnce()` → `ClearJoined()` → `ResetReleaseLatch()` |
+
+Invariants enforced by these sequences:
+
+- No verb may call `ClearJoined()` without a preceding
+  `ReleaseOnce()` that returned `true`. `ClearJoined` exists to wipe
+  per-conn state *after* the room slot has been released, not to
+  short-circuit release.
+- `ResetReleaseLatch()` is only valid after `ClearJoined()` on the
+  `media_failed` retry path; calling it on any other path re-arms a
+  latch the session does not need re-armed.
+- `MarkJoined` is the only successful entry into the joined state;
+  there is no rollback method, because join-failure paths never
+  call `MarkJoined` in the first place.
 
 The mesh equivalents (`mesh/room/conn.go` and `mesh/signaling/conn.go`)
 follow the same pattern with no shared types between modes. Per
@@ -678,9 +728,27 @@ modes/sfu/
 pure state — it owns goroutines, RTP packets, and Pion peer-connection
 objects. It does not belong in Ring 3's `signaling/` because it is not
 a verb on a JSON message. It is parallel to (not below) the signaling
-stack. The dependency direction is: `mediafabric/` is referenced
-through *opaque IDs* held in `room/`; `room/` does not import
-`mediafabric/`.
+stack.
+
+Dependency direction (when 003 chooses the same-Go-service path):
+
+- `room/` stores only opaque media IDs and does not import
+  `mediafabric/`.
+- `signaling/` may call `mediafabric/` through an interface — the
+  interface lives in `signaling/` (preferred, keeps the dependency
+  cycle obvious in one place) or in `mediafabric/`, depending on
+  what 003 decides.
+- `mediafabric/` must not import `signaling/`. It owns its own
+  goroutine and Pion lifecycle and exposes a control surface
+  (publish, subscribe, teardown) that `signaling/` calls.
+- The mode root remains the only package that wires Ring 1
+  (`shared/wsserver`) to Ring 3 (`signaling.Service`); it may also
+  construct `mediafabric/` and inject it into `signaling.Service`
+  if 003 wires it that way.
+
+These rules are not prescriptive for 003 — they are the dependency
+shape this redesign expects, written down so 003 can confirm or
+override it explicitly.
 
 ## 6. Migration approach
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	sig "webrtc-lab/signaling/internal/modes/onetoone"
+	proto "webrtc-lab/signaling/internal/modes/onetoone/protocol"
 )
 
 // Stable test UUIDs. Per contract §1 / §3.1–§3.3 and the F3 fix,
@@ -25,7 +25,7 @@ const (
 // returns the parsed struct cast to *T.
 func decodeOK[T any](t *testing.T, raw string) *T {
 	t.Helper()
-	d, err := sig.Decode([]byte(raw))
+	d, err := proto.Decode([]byte(raw))
 	if err != nil {
 		t.Fatalf("Decode failed unexpectedly: %v", err)
 	}
@@ -37,13 +37,13 @@ func decodeOK[T any](t *testing.T, raw string) *T {
 }
 
 // decodeFail asserts Decode fails with the expected ErrorCode.
-func decodeFail(t *testing.T, raw string, want sig.ErrorCode) {
+func decodeFail(t *testing.T, raw string, want proto.ErrorCode) {
 	t.Helper()
-	_, err := sig.Decode([]byte(raw))
+	_, err := proto.Decode([]byte(raw))
 	if err == nil {
 		t.Fatalf("Decode unexpectedly succeeded for %s", raw)
 	}
-	var d *sig.DecodeError
+	var d *proto.DecodeError
 	if !errors.As(err, &d) {
 		t.Fatalf("Decode returned non-DecodeError: %v", err)
 	}
@@ -58,24 +58,24 @@ func decodeFail(t *testing.T, raw string, want sig.ErrorCode) {
 
 func TestUnsupportedVersion(t *testing.T) {
 	decodeFail(t, `{"v":2,"type":"join_room","roomId":"demo","payload":{}}`,
-		sig.CodeUnsupportedVersion)
+		proto.CodeUnsupportedVersion)
 }
 
 func TestMalformedJSON(t *testing.T) {
-	decodeFail(t, `not json`, sig.CodeMalformed)
+	decodeFail(t, `not json`, proto.CodeMalformed)
 }
 
 func TestUnknownType(t *testing.T) {
 	// room_full was removed in review-pass 4; it must be rejected.
 	decodeFail(t, `{"v":1,"type":"room_full","roomId":"demo","payload":{}}`,
-		sig.CodeMalformed)
+		proto.CodeMalformed)
 }
 
 func TestStaleTypesRejected(t *testing.T) {
 	stale := []string{"peer_joined", "peer_state_changed", "participant_released_media_failed"}
 	for _, tp := range stale {
 		raw := `{"v":1,"type":"` + tp + `","roomId":"demo","payload":{}}`
-		decodeFail(t, raw, sig.CodeMalformed)
+		decodeFail(t, raw, proto.CodeMalformed)
 	}
 }
 
@@ -95,7 +95,7 @@ func TestRoomIDValidation(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := sig.ValidateRoomID(c.id)
+			err := proto.ValidateRoomID(c.id)
 			if (err == nil) != c.ok {
 				t.Fatalf("ValidateRoomID(%q) ok=%v, want %v (err=%v)", c.id, err == nil, c.ok, err)
 			}
@@ -109,24 +109,24 @@ func TestRoomIDValidation(t *testing.T) {
 
 func TestJoinRoomRoundtrip(t *testing.T) {
 	raw := `{"v":1,"type":"join_room","roomId":"demo","requestId":"d9428888-122b-11e1-b85c-61cd3cbb3210","payload":{}}`
-	d, err := sig.Decode([]byte(raw))
+	d, err := proto.Decode([]byte(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Envelope.Type != sig.TypeJoinRoom {
+	if d.Envelope.Type != proto.TypeJoinRoom {
 		t.Fatalf("type=%q want join_room", d.Envelope.Type)
 	}
-	if _, ok := d.Message.(*sig.JoinRoomPayload); !ok {
+	if _, ok := d.Message.(*proto.JoinRoomPayload); !ok {
 		t.Fatalf("message type = %T", d.Message)
 	}
 }
 
 func TestJoinAcceptedMarshalUnmarshal(t *testing.T) {
-	remote := sig.RemotePeerSnapshot{PeerID: testPeerB, MediaReadiness: sig.MediaReady}
-	payload := sig.JoinAcceptedPayload{
+	remote := proto.RemotePeerSnapshot{PeerID: testPeerB, MediaReadiness: proto.MediaReady}
+	payload := proto.JoinAcceptedPayload{
 		PeerID:         testPeerA,
 		AdmissionOrder: 1,
-		RoomReadiness:  sig.RoomWaitingForMedia,
+		RoomReadiness:  proto.RoomWaitingForMedia,
 		RemotePeer:     &remote,
 	}
 	if err := payload.Validate(); err != nil {
@@ -137,31 +137,31 @@ func TestJoinAcceptedMarshalUnmarshal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := sig.Envelope{V: 1, Type: sig.TypeJoinAccepted, RoomID: "demo", RequestID: testReqA, Payload: body}
+	env := proto.Envelope{V: 1, Type: proto.TypeJoinAccepted, RoomID: "demo", RequestID: testReqA, Payload: body}
 	raw, err := json.Marshal(env)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	d, err := sig.Decode(raw)
+	d, err := proto.Decode(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, ok := d.Message.(*sig.JoinAcceptedPayload)
+	p, ok := d.Message.(*proto.JoinAcceptedPayload)
 	if !ok {
 		t.Fatalf("wrong type: %T", d.Message)
 	}
-	if p.AdmissionOrder != 1 || p.RemotePeer.MediaReadiness != sig.MediaReady {
+	if p.AdmissionOrder != 1 || p.RemotePeer.MediaReadiness != proto.MediaReady {
 		t.Fatalf("roundtrip mismatch: %+v", p)
 	}
 }
 
 func TestJoinRejectedResultEnum(t *testing.T) {
 	ok := `{"v":1,"type":"join_rejected","roomId":"demo","requestId":"` + testReqA + `","payload":{"result":"join_rejected_room_full","reason":"room_full","message":"x"}}`
-	decodeOK[sig.JoinRejectedPayload](t, ok)
+	decodeOK[proto.JoinRejectedPayload](t, ok)
 
 	bad := `{"v":1,"type":"join_rejected","roomId":"demo","requestId":"` + testReqA + `","payload":{"result":"room_full","reason":"room_full","message":"x"}}`
-	decodeFail(t, bad, sig.CodeMalformed)
+	decodeFail(t, bad, proto.CodeMalformed)
 }
 
 // ---------------------------------------------------------------------
@@ -170,23 +170,23 @@ func TestJoinRejectedResultEnum(t *testing.T) {
 
 func TestMediaReadyRequiresBothAudioAndVideo(t *testing.T) {
 	ok := `{"v":1,"type":"media_ready","roomId":"demo","payload":{"mediaCapabilities":{"audio":true,"video":true}}}`
-	decodeOK[sig.MediaReadyPayload](t, ok)
+	decodeOK[proto.MediaReadyPayload](t, ok)
 
 	noAudio := `{"v":1,"type":"media_ready","roomId":"demo","payload":{"mediaCapabilities":{"audio":false,"video":true}}}`
-	decodeFail(t, noAudio, sig.CodeUnsupportedMediaCapability)
+	decodeFail(t, noAudio, proto.CodeUnsupportedMediaCapability)
 
 	noVideo := `{"v":1,"type":"media_ready","roomId":"demo","payload":{"mediaCapabilities":{"audio":true,"video":false}}}`
-	decodeFail(t, noVideo, sig.CodeUnsupportedMediaCapability)
+	decodeFail(t, noVideo, proto.CodeUnsupportedMediaCapability)
 }
 
 func TestMediaFailedReasons(t *testing.T) {
 	for _, reason := range []string{"permission_denied", "device_not_found", "device_in_use", "other"} {
 		raw := `{"v":1,"type":"media_failed","roomId":"demo","payload":{"reason":"` + reason + `"}}`
-		decodeOK[sig.MediaFailedPayload](t, raw)
+		decodeOK[proto.MediaFailedPayload](t, raw)
 	}
 	decodeFail(t,
 		`{"v":1,"type":"media_failed","roomId":"demo","payload":{"reason":"timeout"}}`,
-		sig.CodeMalformed)
+		proto.CodeMalformed)
 }
 
 // ---------------------------------------------------------------------
@@ -195,10 +195,10 @@ func TestMediaFailedReasons(t *testing.T) {
 
 func TestPeerPresenceChangedEnums(t *testing.T) {
 	ok := `{"v":1,"type":"peer_presence_changed","roomId":"demo","payload":{"subjectPeerId":"` + testPeerB + `","admissionOrder":2,"presence":"pending-media","reason":"admitted"}}`
-	decodeOK[sig.PeerPresenceChangedPayload](t, ok)
+	decodeOK[proto.PeerPresenceChangedPayload](t, ok)
 
 	bad := `{"v":1,"type":"peer_presence_changed","roomId":"demo","payload":{"subjectPeerId":"` + testPeerB + `","admissionOrder":2,"presence":"joined","reason":"admitted"}}`
-	decodeFail(t, bad, sig.CodeMalformed)
+	decodeFail(t, bad, proto.CodeMalformed)
 }
 
 // ---------------------------------------------------------------------
@@ -207,10 +207,10 @@ func TestPeerPresenceChangedEnums(t *testing.T) {
 
 func TestReadyForOfferRoles(t *testing.T) {
 	ok := `{"v":1,"type":"ready_for_offer","roomId":"demo","to":"` + testPeerA + `","payload":{"role":"offerer","remotePeer":{"peerId":"` + testPeerB + `","admissionOrder":2},"iceServers":[{"urls":["stun:stun.l.google.com:19302"]}]}}`
-	decodeOK[sig.ReadyForOfferPayload](t, ok)
+	decodeOK[proto.ReadyForOfferPayload](t, ok)
 
 	badRole := `{"v":1,"type":"ready_for_offer","roomId":"demo","to":"` + testPeerA + `","payload":{"role":"initiator","remotePeer":{"peerId":"` + testPeerB + `","admissionOrder":2},"iceServers":[]}}`
-	decodeFail(t, badRole, sig.CodeMalformed)
+	decodeFail(t, badRole, proto.CodeMalformed)
 }
 
 // ---------------------------------------------------------------------
@@ -219,16 +219,16 @@ func TestReadyForOfferRoles(t *testing.T) {
 
 func TestOfferAnswerSDPType(t *testing.T) {
 	okOffer := `{"v":1,"type":"offer","roomId":"demo","payload":{"sdp":{"type":"offer","sdp":"v=0\r\n"}}}`
-	decodeOK[sig.OfferPayload](t, okOffer)
+	decodeOK[proto.OfferPayload](t, okOffer)
 
 	badOffer := `{"v":1,"type":"offer","roomId":"demo","payload":{"sdp":{"type":"answer","sdp":"v=0\r\n"}}}`
-	decodeFail(t, badOffer, sig.CodeMalformed)
+	decodeFail(t, badOffer, proto.CodeMalformed)
 
 	okAnswer := `{"v":1,"type":"answer","roomId":"demo","payload":{"sdp":{"type":"answer","sdp":"v=0\r\n"}}}`
-	decodeOK[sig.AnswerPayload](t, okAnswer)
+	decodeOK[proto.AnswerPayload](t, okAnswer)
 
 	badAnswer := `{"v":1,"type":"answer","roomId":"demo","payload":{"sdp":{"type":"offer","sdp":"v=0\r\n"}}}`
-	decodeFail(t, badAnswer, sig.CodeMalformed)
+	decodeFail(t, badAnswer, proto.CodeMalformed)
 }
 
 // ---------------------------------------------------------------------
@@ -237,7 +237,7 @@ func TestOfferAnswerSDPType(t *testing.T) {
 
 func TestIceCandidateAcceptsNull(t *testing.T) {
 	raw := `{"v":1,"type":"ice_candidate","roomId":"demo","payload":{"candidate":null}}`
-	m := decodeOK[sig.IceCandidatePayload](t, raw)
+	m := decodeOK[proto.IceCandidatePayload](t, raw)
 	if m.Candidate != nil {
 		t.Fatalf("expected nil candidate for end-of-candidates")
 	}
@@ -245,7 +245,7 @@ func TestIceCandidateAcceptsNull(t *testing.T) {
 
 func TestIceCandidateAcceptsPopulated(t *testing.T) {
 	raw := `{"v":1,"type":"ice_candidate","roomId":"demo","payload":{"candidate":{"candidate":"candidate:1 1 UDP ...","sdpMid":"0","sdpMLineIndex":0,"usernameFragment":"ufrag"}}}`
-	m := decodeOK[sig.IceCandidatePayload](t, raw)
+	m := decodeOK[proto.IceCandidatePayload](t, raw)
 	if m.Candidate == nil || m.Candidate.Candidate == "" {
 		t.Fatalf("expected populated candidate, got %+v", m.Candidate)
 	}
@@ -253,12 +253,12 @@ func TestIceCandidateAcceptsPopulated(t *testing.T) {
 
 func TestIceCandidateRejectsEmptyString(t *testing.T) {
 	raw := `{"v":1,"type":"ice_candidate","roomId":"demo","payload":{"candidate":{"candidate":"","sdpMid":"0","sdpMLineIndex":0}}}`
-	decodeFail(t, raw, sig.CodeMalformed)
+	decodeFail(t, raw, proto.CodeMalformed)
 }
 
 func TestIceCandidateRejectsMissingKey(t *testing.T) {
 	raw := `{"v":1,"type":"ice_candidate","roomId":"demo","payload":{}}`
-	decodeFail(t, raw, sig.CodeMalformed)
+	decodeFail(t, raw, proto.CodeMalformed)
 }
 
 // ---------------------------------------------------------------------
@@ -267,10 +267,10 @@ func TestIceCandidateRejectsMissingKey(t *testing.T) {
 
 func TestMediaStateRequiresAllFields(t *testing.T) {
 	full := `{"v":1,"type":"media_state","roomId":"demo","payload":{"microphone":"off","camera":"on","screenShare":"inactive"}}`
-	decodeOK[sig.MediaStatePayload](t, full)
+	decodeOK[proto.MediaStatePayload](t, full)
 
 	bad := `{"v":1,"type":"media_state","roomId":"demo","payload":{"microphone":"muted","camera":"on","screenShare":"inactive"}}`
-	decodeFail(t, bad, sig.CodeMalformed)
+	decodeFail(t, bad, proto.CodeMalformed)
 }
 
 // ---------------------------------------------------------------------
@@ -279,23 +279,23 @@ func TestMediaStateRequiresAllFields(t *testing.T) {
 
 func TestPeerLeftReasonEnum(t *testing.T) {
 	ok := `{"v":1,"type":"peer_left","roomId":"demo","payload":{"peerId":"` + testPeerB + `","reason":"disconnect"}}`
-	decodeOK[sig.PeerLeftPayload](t, ok)
+	decodeOK[proto.PeerLeftPayload](t, ok)
 
 	bad := `{"v":1,"type":"peer_left","roomId":"demo","payload":{"peerId":"` + testPeerB + `","reason":"media_failed"}}`
-	decodeFail(t, bad, sig.CodeMalformed)
+	decodeFail(t, bad, proto.CodeMalformed)
 }
 
 func TestParticipantReleasedResultEnum(t *testing.T) {
 	ok := `{"v":1,"type":"participant_released","roomId":"demo","payload":{"result":"participant_released_disconnect","reason":"disconnect"}}`
-	decodeOK[sig.ParticipantReleasedPayload](t, ok)
+	decodeOK[proto.ParticipantReleasedPayload](t, ok)
 
 	bad := `{"v":1,"type":"participant_released","roomId":"demo","payload":{"result":"participant_released_other","reason":"media_failed"}}`
-	decodeFail(t, bad, sig.CodeMalformed)
+	decodeFail(t, bad, proto.CodeMalformed)
 }
 
 func TestLeaveRoomEmptyPayload(t *testing.T) {
 	raw := `{"v":1,"type":"leave_room","roomId":"demo","payload":{}}`
-	decodeOK[sig.LeaveRoomPayload](t, raw)
+	decodeOK[proto.LeaveRoomPayload](t, raw)
 }
 
 // F3 regression — validateEnvelope rules at the Decode boundary.
@@ -308,15 +308,15 @@ func TestLeaveRoomEmptyPayload(t *testing.T) {
 func TestLeaveRoomRequiresRoomId(t *testing.T) {
 	// Missing roomId → malformed.
 	decodeFail(t, `{"v":1,"type":"leave_room","payload":{}}`,
-		sig.CodeMalformed)
+		proto.CodeMalformed)
 
 	// Well-formed envelope → accepted.
-	decodeOK[sig.LeaveRoomPayload](t,
+	decodeOK[proto.LeaveRoomPayload](t,
 		`{"v":1,"type":"leave_room","roomId":"demo","payload":{}}`)
 
 	// Present-but-malformed roomId → malformed.
 	decodeFail(t, `{"v":1,"type":"leave_room","roomId":"bad room!","payload":{}}`,
-		sig.CodeMalformed)
+		proto.CodeMalformed)
 }
 
 func TestEnvelopeFromToFieldsRequireUUIDWhenPresent(t *testing.T) {
@@ -325,47 +325,47 @@ func TestEnvelopeFromToFieldsRequireUUIDWhenPresent(t *testing.T) {
 	// (Phase-3 type, no per-type envelope rules beyond roomId) to
 	// probe this.
 	badFrom := `{"v":1,"type":"peer_left","roomId":"demo","from":"not-a-uuid","payload":{"peerId":"` + testPeerB + `","reason":"disconnect"}}`
-	decodeFail(t, badFrom, sig.CodeMalformed)
+	decodeFail(t, badFrom, proto.CodeMalformed)
 
 	badTo := `{"v":1,"type":"peer_left","roomId":"demo","to":"not-a-uuid","payload":{"peerId":"` + testPeerB + `","reason":"disconnect"}}`
-	decodeFail(t, badTo, sig.CodeMalformed)
+	decodeFail(t, badTo, proto.CodeMalformed)
 
 	okFrom := `{"v":1,"type":"peer_left","roomId":"demo","from":"` + testPeerA + `","payload":{"peerId":"` + testPeerB + `","reason":"disconnect"}}`
-	decodeOK[sig.PeerLeftPayload](t, okFrom)
+	decodeOK[proto.PeerLeftPayload](t, okFrom)
 }
 
 func TestJoinRoomRequiresRequestId(t *testing.T) {
 	// Missing requestId on join_room → malformed.
 	decodeFail(t,
 		`{"v":1,"type":"join_room","roomId":"demo","payload":{}}`,
-		sig.CodeMalformed)
+		proto.CodeMalformed)
 
 	// Non-UUID requestId → malformed (universal rule).
 	decodeFail(t,
 		`{"v":1,"type":"join_room","roomId":"demo","requestId":"not-uuid","payload":{}}`,
-		sig.CodeMalformed)
+		proto.CodeMalformed)
 
 	// Valid UUID requestId → accepted.
-	decodeOK[sig.JoinRoomPayload](t,
+	decodeOK[proto.JoinRoomPayload](t,
 		`{"v":1,"type":"join_room","roomId":"demo","requestId":"`+testReqA+`","payload":{}}`)
 }
 
 func TestErrorCodeEnum(t *testing.T) {
-	codes := []sig.ErrorCode{
-		sig.CodeAlreadyJoined, sig.CodeUnexpectedMediaReady,
-		sig.CodeUnsupportedMediaCapability, sig.CodeUnexpectedOffer,
-		sig.CodeUnexpectedAnswer, sig.CodeNotInRoom, sig.CodeMalformed,
-		sig.CodeUnsupportedVersion, sig.CodeInternalError,
+	codes := []proto.ErrorCode{
+		proto.CodeAlreadyJoined, proto.CodeUnexpectedMediaReady,
+		proto.CodeUnsupportedMediaCapability, proto.CodeUnexpectedOffer,
+		proto.CodeUnexpectedAnswer, proto.CodeNotInRoom, proto.CodeMalformed,
+		proto.CodeUnsupportedVersion, proto.CodeInternalError,
 	}
 	for _, c := range codes {
 		raw := `{"v":1,"type":"error","payload":{"code":"` + string(c) + `","message":"x"}}`
-		decodeOK[sig.ErrorPayload](t, raw)
+		decodeOK[proto.ErrorPayload](t, raw)
 	}
 
 	// room_full and invalid_room_id are NOT error codes — they are
 	// join_rejected results.
 	for _, bad := range []string{"room_full", "invalid_room_id"} {
 		raw := `{"v":1,"type":"error","payload":{"code":"` + bad + `","message":"x"}}`
-		decodeFail(t, raw, sig.CodeMalformed)
+		decodeFail(t, raw, proto.CodeMalformed)
 	}
 }

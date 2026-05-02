@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	sig "webrtc-lab/signaling/internal/modes/onetoone"
+	proto "webrtc-lab/signaling/internal/modes/onetoone/protocol"
 )
 
 // newRequestID returns a fresh UUID suitable for a contract-§3.1
@@ -90,7 +91,7 @@ func (c *testClient) send(v any) {
 // expect reads one frame with a 2 s timeout and asserts it parses to
 // the expected envelope type. Returns the parsed Envelope + raw
 // payload bytes for the caller to decode.
-func (c *testClient) expect(wantType sig.Type) (sig.Envelope, json.RawMessage) {
+func (c *testClient) expect(wantType proto.Type) (proto.Envelope, json.RawMessage) {
 	c.t.Helper()
 	rctx, cancel := context.WithTimeout(c.ctx, 2*time.Second)
 	defer cancel()
@@ -98,7 +99,7 @@ func (c *testClient) expect(wantType sig.Type) (sig.Envelope, json.RawMessage) {
 	if err != nil {
 		c.t.Fatalf("read: %v", err)
 	}
-	var env sig.Envelope
+	var env proto.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		c.t.Fatalf("unmarshal envelope: %v (raw=%s)", err, string(raw))
 	}
@@ -175,15 +176,15 @@ func parsePayload[T any](t *testing.T, raw json.RawMessage) T {
 func (c *testClient) joinAndAck(roomID, requestID string) string {
 	c.t.Helper()
 	c.send(joinRoomMsg(roomID, requestID))
-	_, raw := c.expect(sig.TypeJoinAccepted)
-	accepted := parsePayload[sig.JoinAcceptedPayload](c.t, raw)
+	_, raw := c.expect(proto.TypeJoinAccepted)
+	accepted := parsePayload[proto.JoinAcceptedPayload](c.t, raw)
 
 	// Per §3.4, peer_presence_changed is broadcast to every reserved
 	// slot (including the subject). The newly-admitted peer therefore
 	// receives a self-targeted pending-media / admitted event right
 	// after join_accepted.
-	_, rawP := c.expect(sig.TypePeerPresenceChanged)
-	selfEvent := parsePayload[sig.PeerPresenceChangedPayload](c.t, rawP)
+	_, rawP := c.expect(proto.TypePeerPresenceChanged)
+	selfEvent := parsePayload[proto.PeerPresenceChangedPayload](c.t, rawP)
 	if selfEvent.SubjectPeerID != accepted.PeerID {
 		c.t.Fatalf("post-admit self-presence: subject=%s, want peerId=%s",
 			selfEvent.SubjectPeerID, accepted.PeerID)
@@ -205,8 +206,8 @@ func TestTwoClientsJoinAndSeePresence(t *testing.T) {
 	b.send(joinRoomMsg("demo", newRequestID()))
 
 	// B receives join_accepted with remotePeer=A.
-	_, raw := b.expect(sig.TypeJoinAccepted)
-	acceptedB := parsePayload[sig.JoinAcceptedPayload](t, raw)
+	_, raw := b.expect(proto.TypeJoinAccepted)
+	acceptedB := parsePayload[proto.JoinAcceptedPayload](t, raw)
 	if acceptedB.AdmissionOrder != 2 {
 		t.Fatalf("B admissionOrder = %d, want 2", acceptedB.AdmissionOrder)
 	}
@@ -216,18 +217,18 @@ func TestTwoClientsJoinAndSeePresence(t *testing.T) {
 	}
 
 	// Both A and B receive peer_presence_changed(subject=B).
-	_, rawA := a.expect(sig.TypePeerPresenceChanged)
-	presA := parsePayload[sig.PeerPresenceChangedPayload](t, rawA)
+	_, rawA := a.expect(proto.TypePeerPresenceChanged)
+	presA := parsePayload[proto.PeerPresenceChangedPayload](t, rawA)
 	if presA.SubjectPeerID != acceptedB.PeerID {
 		t.Fatalf("A presence subject=%s, want %s", presA.SubjectPeerID, acceptedB.PeerID)
 	}
-	if presA.Presence != sig.PresencePendingMedia || presA.Reason != sig.PresenceReasonAdmitted {
+	if presA.Presence != proto.PresencePendingMedia || presA.Reason != proto.PresenceReasonAdmitted {
 		t.Fatalf("A presence = {presence:%s reason:%s}, want {pending-media, admitted}",
 			presA.Presence, presA.Reason)
 	}
 
-	_, rawB := b.expect(sig.TypePeerPresenceChanged)
-	presB := parsePayload[sig.PeerPresenceChangedPayload](t, rawB)
+	_, rawB := b.expect(proto.TypePeerPresenceChanged)
+	presB := parsePayload[proto.PeerPresenceChangedPayload](t, rawB)
 	if presB.SubjectPeerID != acceptedB.PeerID {
 		t.Fatalf("B presence subject=%s, want self=%s",
 			presB.SubjectPeerID, acceptedB.PeerID)
@@ -244,17 +245,17 @@ func TestThirdJoinRejectedRoomFull(t *testing.T) {
 	b.joinAndAck("demo", newRequestID())
 
 	// Drain B's join-triggered presence event from A's queue.
-	_, _ = a.expect(sig.TypePeerPresenceChanged)
+	_, _ = a.expect(proto.TypePeerPresenceChanged)
 
 	c := dialClient(t, ts)
 	c.send(joinRoomMsg("demo", newRequestID()))
 
-	_, raw := c.expect(sig.TypeJoinRejected)
-	rej := parsePayload[sig.JoinRejectedPayload](t, raw)
-	if rej.Result != sig.JoinRejectedRoomFull {
+	_, raw := c.expect(proto.TypeJoinRejected)
+	rej := parsePayload[proto.JoinRejectedPayload](t, raw)
+	if rej.Result != proto.JoinRejectedRoomFull {
 		t.Fatalf("third join result=%q, want join_rejected_room_full", rej.Result)
 	}
-	if rej.Reason != sig.ReasonRoomFull {
+	if rej.Reason != proto.ReasonRoomFull {
 		t.Fatalf("third join reason=%q, want room_full", rej.Reason)
 	}
 
@@ -281,12 +282,12 @@ func TestInvalidRoomIDRejected(t *testing.T) {
 		"payload":   map[string]any{},
 	})
 
-	_, raw := c.expect(sig.TypeJoinRejected)
-	rej := parsePayload[sig.JoinRejectedPayload](t, raw)
-	if rej.Result != sig.JoinRejectedInvalidRoom {
+	_, raw := c.expect(proto.TypeJoinRejected)
+	rej := parsePayload[proto.JoinRejectedPayload](t, raw)
+	if rej.Result != proto.JoinRejectedInvalidRoom {
 		t.Fatalf("result=%q, want join_rejected_invalid_room", rej.Result)
 	}
-	if rej.Reason != sig.ReasonInvalidRoomID {
+	if rej.Reason != proto.ReasonInvalidRoomID {
 		t.Fatalf("reason=%q, want invalid_room_id", rej.Reason)
 	}
 }
@@ -310,7 +311,7 @@ func TestGracefulLeavePrePairingNoPeerLeft(t *testing.T) {
 	b := dialClient(t, ts)
 	b.joinAndAck("demo", newRequestID())
 	// Drain B's admission event from A's queue.
-	_, _ = a.expect(sig.TypePeerPresenceChanged)
+	_, _ = a.expect(proto.TypePeerPresenceChanged)
 
 	b.send(leaveRoomMsg("demo"))
 
@@ -318,12 +319,12 @@ func TestGracefulLeavePrePairingNoPeerLeft(t *testing.T) {
 	// reason=graceful_leave). It MUST NOT receive peer_left, because
 	// B never reached callPhase ∈ {role-assigned, negotiating,
 	// connected}.
-	_, raw := a.expect(sig.TypePeerPresenceChanged)
-	pres := parsePayload[sig.PeerPresenceChangedPayload](t, raw)
-	if pres.Presence != sig.PresenceReleased {
+	_, raw := a.expect(proto.TypePeerPresenceChanged)
+	pres := parsePayload[proto.PeerPresenceChangedPayload](t, raw)
+	if pres.Presence != proto.PresenceReleased {
 		t.Fatalf("presence=%q, want released", pres.Presence)
 	}
-	if pres.Reason != sig.PresenceReasonGracefulLeave {
+	if pres.Reason != proto.PresenceReasonGracefulLeave {
 		t.Fatalf("reason=%q, want graceful_leave", pres.Reason)
 	}
 	a.expectNone(200 * time.Millisecond)
@@ -343,13 +344,13 @@ func TestPendingMediaLeaveDoesNotEmitPeerLeft(t *testing.T) {
 
 	b := dialClient(t, ts)
 	b.joinAndAck("demo", newRequestID())
-	_, _ = a.expect(sig.TypePeerPresenceChanged)
+	_, _ = a.expect(proto.TypePeerPresenceChanged)
 
 	b.send(leaveRoomMsg("demo"))
 
-	_, raw := a.expect(sig.TypePeerPresenceChanged)
-	pres := parsePayload[sig.PeerPresenceChangedPayload](t, raw)
-	if pres.Presence == sig.PresenceLeft {
+	_, raw := a.expect(proto.TypePeerPresenceChanged)
+	pres := parsePayload[proto.PeerPresenceChangedPayload](t, raw)
+	if pres.Presence == proto.PresenceLeft {
 		t.Fatalf("pending-media leave must not produce presence=left")
 	}
 	a.expectNone(200 * time.Millisecond)
@@ -363,17 +364,17 @@ func TestPendingMediaDisconnectDoesNotEmitPeerLeft(t *testing.T) {
 
 	b := dialClient(t, ts)
 	b.joinAndAck("demo", newRequestID())
-	_, _ = a.expect(sig.TypePeerPresenceChanged)
+	_, _ = a.expect(proto.TypePeerPresenceChanged)
 
 	// Ungraceful close: abort B's WS without sending leave_room.
 	_ = b.conn.Close(websocket.StatusAbnormalClosure, "test disconnect")
 
-	_, raw := a.expect(sig.TypePeerPresenceChanged)
-	pres := parsePayload[sig.PeerPresenceChangedPayload](t, raw)
-	if pres.Presence != sig.PresenceReleased {
+	_, raw := a.expect(proto.TypePeerPresenceChanged)
+	pres := parsePayload[proto.PeerPresenceChangedPayload](t, raw)
+	if pres.Presence != proto.PresenceReleased {
 		t.Fatalf("presence=%q, want released (pre-pairing disconnect)", pres.Presence)
 	}
-	if pres.Reason != sig.PresenceReasonDisconnect {
+	if pres.Reason != proto.PresenceReasonDisconnect {
 		t.Fatalf("reason=%q, want disconnect", pres.Reason)
 	}
 
@@ -388,10 +389,11 @@ func TestPendingMediaDisconnectDoesNotEmitPeerLeft(t *testing.T) {
 
 // F2 regression — contract §3.14 step 5 requires the server to close
 // the sender's WS on leave_room. We verify both halves:
-//   1. A (remaining) sees a peer_presence_changed(released,
-//      graceful_leave).
-//   2. B's next Read reports a close status (not a generic read
-//      error, not context cancellation).
+//  1. A (remaining) sees a peer_presence_changed(released,
+//     graceful_leave).
+//  2. B's next Read reports a close status (not a generic read
+//     error, not context cancellation).
+//
 // Asserting on the readable side is the robust signal; "next Write
 // fails" would race the close handshake.
 func TestLeaveRoomClosesWSAndNotifiesPeer(t *testing.T) {
@@ -402,17 +404,17 @@ func TestLeaveRoomClosesWSAndNotifiesPeer(t *testing.T) {
 
 	b := dialClient(t, ts)
 	b.joinAndAck("demo", newRequestID())
-	_, _ = a.expect(sig.TypePeerPresenceChanged) // drain B's admit event on A
+	_, _ = a.expect(proto.TypePeerPresenceChanged) // drain B's admit event on A
 
 	b.send(leaveRoomMsg("demo"))
 
 	// (1) A sees the presence event.
-	_, raw := a.expect(sig.TypePeerPresenceChanged)
-	pres := parsePayload[sig.PeerPresenceChangedPayload](t, raw)
-	if pres.Presence != sig.PresenceReleased {
+	_, raw := a.expect(proto.TypePeerPresenceChanged)
+	pres := parsePayload[proto.PeerPresenceChangedPayload](t, raw)
+	if pres.Presence != proto.PresenceReleased {
 		t.Fatalf("A presence=%q, want released", pres.Presence)
 	}
-	if pres.Reason != sig.PresenceReasonGracefulLeave {
+	if pres.Reason != proto.PresenceReasonGracefulLeave {
 		t.Fatalf("A reason=%q, want graceful_leave", pres.Reason)
 	}
 
@@ -448,9 +450,9 @@ func TestJoinRoomRejectsNonUUIDRequestId(t *testing.T) {
 		"payload":   map[string]any{},
 	})
 
-	env, raw := c.expect(sig.TypeError)
-	payload := parsePayload[sig.ErrorPayload](t, raw)
-	if payload.Code != sig.CodeMalformed {
+	env, raw := c.expect(proto.TypeError)
+	payload := parsePayload[proto.ErrorPayload](t, raw)
+	if payload.Code != proto.CodeMalformed {
 		t.Fatalf("error.code=%q want malformed", payload.Code)
 	}
 	_ = env
@@ -516,7 +518,7 @@ func joinBoth(t *testing.T, a, b *testClient, roomID string) (peerA, peerB strin
 	peerA = a.joinAndAck(roomID, newRequestID())
 	peerB = b.joinAndAck(roomID, newRequestID())
 	// A sees B's admission presence event.
-	_, _ = a.expect(sig.TypePeerPresenceChanged)
+	_, _ = a.expect(proto.TypePeerPresenceChanged)
 	return peerA, peerB
 }
 
@@ -524,29 +526,29 @@ func joinBoth(t *testing.T, a, b *testClient, roomID string) (peerA, peerB strin
 // reaches paired. Returns each client's ready_for_offer payload.
 // The sequence is:
 //
-//   A media_ready → presence(A, ready) to {A, B}
-//   B media_ready → presence(B, ready) to {A, B} → paired
-//                → ready_for_offer to {A, B}
+//	A media_ready → presence(A, ready) to {A, B}
+//	B media_ready → presence(B, ready) to {A, B} → paired
+//	             → ready_for_offer to {A, B}
 //
 // Any extra message in a client's queue when this returns is a bug
 // either in the server or this helper.
-func bothReady(t *testing.T, a, b *testClient, roomID string) (sig.ReadyForOfferPayload, sig.ReadyForOfferPayload) {
+func bothReady(t *testing.T, a, b *testClient, roomID string) (proto.ReadyForOfferPayload, proto.ReadyForOfferPayload) {
 	t.Helper()
 
 	a.send(mediaReadyMsg(roomID, true, true))
 	// presence(A, ready) fans out to both A and B.
-	_, _ = a.expect(sig.TypePeerPresenceChanged)
-	_, _ = b.expect(sig.TypePeerPresenceChanged)
+	_, _ = a.expect(proto.TypePeerPresenceChanged)
+	_, _ = b.expect(proto.TypePeerPresenceChanged)
 
 	b.send(mediaReadyMsg(roomID, true, true))
 	// presence(B, ready) fans out to both A and B.
-	_, _ = a.expect(sig.TypePeerPresenceChanged)
-	_, _ = b.expect(sig.TypePeerPresenceChanged)
+	_, _ = a.expect(proto.TypePeerPresenceChanged)
+	_, _ = b.expect(proto.TypePeerPresenceChanged)
 
-	_, rawA := a.expect(sig.TypeReadyForOffer)
-	_, rawB := b.expect(sig.TypeReadyForOffer)
-	return parsePayload[sig.ReadyForOfferPayload](t, rawA),
-		parsePayload[sig.ReadyForOfferPayload](t, rawB)
+	_, rawA := a.expect(proto.TypeReadyForOffer)
+	_, rawB := b.expect(proto.TypeReadyForOffer)
+	return parsePayload[proto.ReadyForOfferPayload](t, rawA),
+		parsePayload[proto.ReadyForOfferPayload](t, rawB)
 }
 
 // ---------------------------------------------------------------------
@@ -560,17 +562,17 @@ func TestMediaReadyRejectsIncompleteCapabilities(t *testing.T) {
 
 	// audio=false MUST be rejected — contract §3.5.
 	a.send(mediaReadyMsg("demo", false, true))
-	_, raw := a.expect(sig.TypeError)
-	payload := parsePayload[sig.ErrorPayload](t, raw)
-	if payload.Code != sig.CodeUnsupportedMediaCapability {
+	_, raw := a.expect(proto.TypeError)
+	payload := parsePayload[proto.ErrorPayload](t, raw)
+	if payload.Code != proto.CodeUnsupportedMediaCapability {
 		t.Fatalf("audio=false: error.code=%q want unsupported_media_capability", payload.Code)
 	}
 
 	// video=false MUST be rejected too.
 	a.send(mediaReadyMsg("demo", true, false))
-	_, raw = a.expect(sig.TypeError)
-	payload = parsePayload[sig.ErrorPayload](t, raw)
-	if payload.Code != sig.CodeUnsupportedMediaCapability {
+	_, raw = a.expect(proto.TypeError)
+	payload = parsePayload[proto.ErrorPayload](t, raw)
+	if payload.Code != proto.CodeUnsupportedMediaCapability {
 		t.Fatalf("video=false: error.code=%q want unsupported_media_capability", payload.Code)
 	}
 }
@@ -582,24 +584,24 @@ func TestMediaReadyAdvancesToReady(t *testing.T) {
 
 	a.send(mediaReadyMsg("demo", true, true))
 
-	_, raw := a.expect(sig.TypePeerPresenceChanged)
-	pres := parsePayload[sig.PeerPresenceChangedPayload](t, raw)
+	_, raw := a.expect(proto.TypePeerPresenceChanged)
+	pres := parsePayload[proto.PeerPresenceChangedPayload](t, raw)
 	if pres.SubjectPeerID != peerA {
 		t.Fatalf("subject=%s want %s", pres.SubjectPeerID, peerA)
 	}
-	if pres.Presence != sig.PresenceReady {
+	if pres.Presence != proto.PresenceReady {
 		t.Fatalf("presence=%q want ready", pres.Presence)
 	}
-	if pres.Reason != sig.PresenceReasonMediaReady {
+	if pres.Reason != proto.PresenceReasonMediaReady {
 		t.Fatalf("reason=%q want media_ready", pres.Reason)
 	}
 
 	// A second media_ready from the same peer MUST be rejected — the
 	// sender's mediaReadiness is already `ready`.
 	a.send(mediaReadyMsg("demo", true, true))
-	_, rawErr := a.expect(sig.TypeError)
-	perr := parsePayload[sig.ErrorPayload](t, rawErr)
-	if perr.Code != sig.CodeUnexpectedMediaReady {
+	_, rawErr := a.expect(proto.TypeError)
+	perr := parsePayload[proto.ErrorPayload](t, rawErr)
+	if perr.Code != proto.CodeUnexpectedMediaReady {
 		t.Fatalf("second media_ready: error.code=%q want unexpected_media_ready", perr.Code)
 	}
 
@@ -619,25 +621,25 @@ func TestMediaFailedAllowsRetry(t *testing.T) {
 	b.send(mediaFailedMsg("demo", "permission_denied"))
 
 	// B receives its own participant_released.
-	_, raw := b.expect(sig.TypeParticipantReleased)
-	rel := parsePayload[sig.ParticipantReleasedPayload](t, raw)
-	if rel.Result != sig.ParticipantReleasedMediaFailed {
+	_, raw := b.expect(proto.TypeParticipantReleased)
+	rel := parsePayload[proto.ParticipantReleasedPayload](t, raw)
+	if rel.Result != proto.ParticipantReleasedMediaFailed {
 		t.Fatalf("result=%q want participant_released_media_failed", rel.Result)
 	}
-	if rel.Reason != sig.ReleasedReasonMediaFailed {
+	if rel.Reason != proto.ReleasedReasonMediaFailed {
 		t.Fatalf("reason=%q want media_failed", rel.Reason)
 	}
 
 	// Same WS MUST be able to send another join_room without
 	// already_joined (contract §3.13 server-side retry support).
 	b.send(joinRoomMsg("demo", newRequestID()))
-	_, rawAcc := b.expect(sig.TypeJoinAccepted)
-	acc := parsePayload[sig.JoinAcceptedPayload](t, rawAcc)
+	_, rawAcc := b.expect(proto.TypeJoinAccepted)
+	acc := parsePayload[proto.JoinAcceptedPayload](t, rawAcc)
 	if acc.PeerID == "" {
 		t.Fatalf("retry join_accepted: peerID empty")
 	}
 	// And the self-presence(pending-media, admitted) arrives too.
-	_, _ = b.expect(sig.TypePeerPresenceChanged)
+	_, _ = b.expect(proto.TypePeerPresenceChanged)
 }
 
 func TestParticipantReleasedBroadcastsToRemaining(t *testing.T) {
@@ -650,20 +652,20 @@ func TestParticipantReleasedBroadcastsToRemaining(t *testing.T) {
 	b.send(mediaFailedMsg("demo", "device_in_use"))
 
 	// B receives participant_released.
-	_, _ = b.expect(sig.TypeParticipantReleased)
+	_, _ = b.expect(proto.TypeParticipantReleased)
 
 	// A receives peer_presence_changed(released, media_failed) and
 	// NO peer_left — pending-media release is pre-pairing by
 	// definition.
-	_, raw := a.expect(sig.TypePeerPresenceChanged)
-	pres := parsePayload[sig.PeerPresenceChangedPayload](t, raw)
+	_, raw := a.expect(proto.TypePeerPresenceChanged)
+	pres := parsePayload[proto.PeerPresenceChangedPayload](t, raw)
 	if pres.SubjectPeerID != peerB {
 		t.Fatalf("subject=%s want %s", pres.SubjectPeerID, peerB)
 	}
-	if pres.Presence != sig.PresenceReleased {
+	if pres.Presence != proto.PresenceReleased {
 		t.Fatalf("presence=%q want released", pres.Presence)
 	}
-	if pres.Reason != sig.PresenceReasonMediaFailed {
+	if pres.Reason != proto.PresenceReasonMediaFailed {
 		t.Fatalf("reason=%q want media_failed", pres.Reason)
 	}
 	a.expectNone(200 * time.Millisecond)
@@ -685,9 +687,9 @@ func TestReadyForOfferSentExactlyOncePerPairing(t *testing.T) {
 	// unexpected_media_ready and MUST NOT trigger a second
 	// ready_for_offer (rolesAssigned guard).
 	a.send(mediaReadyMsg("demo", true, true))
-	_, rawErr := a.expect(sig.TypeError)
-	perr := parsePayload[sig.ErrorPayload](t, rawErr)
-	if perr.Code != sig.CodeUnexpectedMediaReady {
+	_, rawErr := a.expect(proto.TypeError)
+	perr := parsePayload[proto.ErrorPayload](t, rawErr)
+	if perr.Code != proto.CodeUnexpectedMediaReady {
 		t.Fatalf("repeat media_ready: error.code=%q want unexpected_media_ready", perr.Code)
 	}
 	a.expectNone(200 * time.Millisecond)
@@ -703,7 +705,7 @@ func TestOffererIsLowerAdmissionOrder(t *testing.T) {
 	payloadA, payloadB := bothReady(t, a, b, "demo")
 
 	// A was admitted first → order 1 → offerer.
-	if payloadA.Role != sig.RoleOfferer {
+	if payloadA.Role != proto.RoleOfferer {
 		t.Fatalf("A role=%q want offerer", payloadA.Role)
 	}
 	if payloadA.RemotePeer.PeerID != peerB {
@@ -717,7 +719,7 @@ func TestOffererIsLowerAdmissionOrder(t *testing.T) {
 	}
 
 	// B was admitted second → order 2 → answerer.
-	if payloadB.Role != sig.RoleAnswerer {
+	if payloadB.Role != proto.RoleAnswerer {
 		t.Fatalf("B role=%q want answerer", payloadB.Role)
 	}
 	if payloadB.RemotePeer.PeerID != peerA {
@@ -738,21 +740,21 @@ func TestPendingMediaDisconnectReleasesSlotNoPeerLeft(t *testing.T) {
 	// A is media-ready but still waiting for B to send media_ready.
 	// B is pending-media.
 	a.send(mediaReadyMsg("demo", true, true))
-	_, _ = a.expect(sig.TypePeerPresenceChanged)
-	_, _ = b.expect(sig.TypePeerPresenceChanged)
+	_, _ = a.expect(proto.TypePeerPresenceChanged)
+	_, _ = b.expect(proto.TypePeerPresenceChanged)
 
 	// B disconnects ungracefully while pending-media.
 	_ = b.conn.Close(websocket.StatusAbnormalClosure, "test disconnect")
 
-	_, raw := a.expect(sig.TypePeerPresenceChanged)
-	pres := parsePayload[sig.PeerPresenceChangedPayload](t, raw)
+	_, raw := a.expect(proto.TypePeerPresenceChanged)
+	pres := parsePayload[proto.PeerPresenceChangedPayload](t, raw)
 	if pres.SubjectPeerID != peerB {
 		t.Fatalf("subject=%s want %s", pres.SubjectPeerID, peerB)
 	}
-	if pres.Presence != sig.PresenceReleased {
+	if pres.Presence != proto.PresenceReleased {
 		t.Fatalf("presence=%q want released", pres.Presence)
 	}
-	if pres.Reason != sig.PresenceReasonDisconnect {
+	if pres.Reason != proto.PresenceReasonDisconnect {
 		t.Fatalf("reason=%q want disconnect", pres.Reason)
 	}
 	// Must NOT emit peer_left for a pending-media departure.
@@ -767,17 +769,17 @@ func TestPendingMediaReleaseDoesNotEmitPeerLeft(t *testing.T) {
 
 	// A is media-ready; B is still pending-media. B gracefully leaves.
 	a.send(mediaReadyMsg("demo", true, true))
-	_, _ = a.expect(sig.TypePeerPresenceChanged)
-	_, _ = b.expect(sig.TypePeerPresenceChanged)
+	_, _ = a.expect(proto.TypePeerPresenceChanged)
+	_, _ = b.expect(proto.TypePeerPresenceChanged)
 
 	b.send(leaveRoomMsg("demo"))
 
-	_, raw := a.expect(sig.TypePeerPresenceChanged)
-	pres := parsePayload[sig.PeerPresenceChangedPayload](t, raw)
-	if pres.Presence != sig.PresenceReleased {
+	_, raw := a.expect(proto.TypePeerPresenceChanged)
+	pres := parsePayload[proto.PeerPresenceChangedPayload](t, raw)
+	if pres.Presence != proto.PresenceReleased {
 		t.Fatalf("presence=%q want released (pending-media graceful leave)", pres.Presence)
 	}
-	if pres.Reason != sig.PresenceReasonGracefulLeave {
+	if pres.Reason != proto.PresenceReasonGracefulLeave {
 		t.Fatalf("reason=%q want graceful_leave", pres.Reason)
 	}
 	a.expectNone(300 * time.Millisecond)
@@ -796,14 +798,14 @@ func TestOfferFromOffererRelayed(t *testing.T) {
 
 	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
 
-	env, raw := b.expect(sig.TypeOffer)
+	env, raw := b.expect(proto.TypeOffer)
 	if env.From != peerA {
 		t.Fatalf("offer envelope.from=%s want %s", env.From, peerA)
 	}
 	if env.To != "" && env.To != peerB {
 		t.Fatalf("offer envelope.to=%s want '' or %s", env.To, peerB)
 	}
-	offer := parsePayload[sig.OfferPayload](t, raw)
+	offer := parsePayload[proto.OfferPayload](t, raw)
 	if offer.SDP.Type != "offer" {
 		t.Fatalf("sdp.type=%q want offer", offer.SDP.Type)
 	}
@@ -822,9 +824,9 @@ func TestOfferFromAnswererRejected(t *testing.T) {
 	// unexpected_offer and MUST NOT be relayed to A.
 	b.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
 
-	_, raw := b.expect(sig.TypeError)
-	perr := parsePayload[sig.ErrorPayload](t, raw)
-	if perr.Code != sig.CodeUnexpectedOffer {
+	_, raw := b.expect(proto.TypeError)
+	perr := parsePayload[proto.ErrorPayload](t, raw)
+	if perr.Code != proto.CodeUnexpectedOffer {
 		t.Fatalf("error.code=%q want unexpected_offer", perr.Code)
 	}
 	a.expectNone(200 * time.Millisecond)
@@ -839,14 +841,14 @@ func TestDuplicateOfferRejected(t *testing.T) {
 
 	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
 	// Drain B's first relay.
-	_, _ = b.expect(sig.TypeOffer)
+	_, _ = b.expect(proto.TypeOffer)
 
 	// Second offer for the same pairing MUST be rejected.
 	a.send(offerMsg("demo", "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\n"))
 
-	_, raw := a.expect(sig.TypeError)
-	perr := parsePayload[sig.ErrorPayload](t, raw)
-	if perr.Code != sig.CodeUnexpectedOffer {
+	_, raw := a.expect(proto.TypeError)
+	perr := parsePayload[proto.ErrorPayload](t, raw)
+	if perr.Code != proto.CodeUnexpectedOffer {
 		t.Fatalf("duplicate offer: error.code=%q want unexpected_offer", perr.Code)
 	}
 	// B MUST NOT receive the duplicate.
@@ -862,18 +864,18 @@ func TestAnswerFromAnswererRelayed(t *testing.T) {
 
 	// Drive a complete offer first so the peers are mid-negotiation.
 	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
-	_, _ = b.expect(sig.TypeOffer)
+	_, _ = b.expect(proto.TypeOffer)
 
 	b.send(answerMsg("demo", "v=0\r\no=- 3 3 IN IP4 127.0.0.1\r\n"))
 
-	env, raw := a.expect(sig.TypeAnswer)
+	env, raw := a.expect(proto.TypeAnswer)
 	if env.From != peerB {
 		t.Fatalf("answer envelope.from=%s want %s", env.From, peerB)
 	}
 	if env.To != "" && env.To != peerA {
 		t.Fatalf("answer envelope.to=%s want '' or %s", env.To, peerA)
 	}
-	ans := parsePayload[sig.AnswerPayload](t, raw)
+	ans := parsePayload[proto.AnswerPayload](t, raw)
 	if ans.SDP.Type != "answer" {
 		t.Fatalf("sdp.type=%q want answer", ans.SDP.Type)
 	}
@@ -890,9 +892,9 @@ func TestAnswerFromOffererRejected(t *testing.T) {
 	// A is offerer — any answer from A MUST be rejected.
 	a.send(answerMsg("demo", "v=0\r\no=- 3 3 IN IP4 127.0.0.1\r\n"))
 
-	_, raw := a.expect(sig.TypeError)
-	perr := parsePayload[sig.ErrorPayload](t, raw)
-	if perr.Code != sig.CodeUnexpectedAnswer {
+	_, raw := a.expect(proto.TypeError)
+	perr := parsePayload[proto.ErrorPayload](t, raw)
+	if perr.Code != proto.CodeUnexpectedAnswer {
 		t.Fatalf("error.code=%q want unexpected_answer", perr.Code)
 	}
 	b.expectNone(200 * time.Millisecond)
@@ -910,15 +912,15 @@ func TestCallPhaseAdvancesOnOffer(t *testing.T) {
 	_, _ = bothReady(t, a, b, "demo")
 
 	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
-	_, _ = b.expect(sig.TypeOffer)
+	_, _ = b.expect(proto.TypeOffer)
 
 	// Without any answer, send another offer. Since the first accepted
 	// offer advances callPhase to negotiating, the second is rejected
 	// by the duplicate guard — observable evidence of the advance.
 	a.send(offerMsg("demo", "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\n"))
-	_, raw := a.expect(sig.TypeError)
-	perr := parsePayload[sig.ErrorPayload](t, raw)
-	if perr.Code != sig.CodeUnexpectedOffer {
+	_, raw := a.expect(proto.TypeError)
+	perr := parsePayload[proto.ErrorPayload](t, raw)
+	if perr.Code != proto.CodeUnexpectedOffer {
 		t.Fatalf("second offer in negotiating: error.code=%q want unexpected_offer", perr.Code)
 	}
 }
@@ -950,17 +952,17 @@ func TestNoGlare_OnlyOffererSendsOffer(t *testing.T) {
 		if err != nil {
 			t.Fatalf("B read %d: %v", i, err)
 		}
-		var env sig.Envelope
+		var env proto.Envelope
 		if err := json.Unmarshal(raw, &env); err != nil {
 			t.Fatalf("B unmarshal: %v", err)
 		}
 		switch env.Type {
-		case sig.TypeOffer:
+		case proto.TypeOffer:
 			sawOffer = true
-		case sig.TypeError:
+		case proto.TypeError:
 			sawError = true
-			perr := parsePayload[sig.ErrorPayload](t, env.Payload)
-			if perr.Code != sig.CodeUnexpectedOffer {
+			perr := parsePayload[proto.ErrorPayload](t, env.Payload)
+			if perr.Code != proto.CodeUnexpectedOffer {
 				t.Fatalf("B error.code=%q want unexpected_offer", perr.Code)
 			}
 		default:
@@ -1006,22 +1008,22 @@ func TestOnlyOffererSendsOffer(t *testing.T) {
 	// because further sends on A would follow, and expectNone leaves
 	// a Read goroutine parked that would race those sends.
 	b.send(offerMsg("demo", "v=0\r\no=- 10 10 IN IP4 127.0.0.1\r\n"))
-	_, rawErrB := b.expect(sig.TypeError)
-	peB := parsePayload[sig.ErrorPayload](t, rawErrB)
-	if peB.Code != sig.CodeUnexpectedOffer {
+	_, rawErrB := b.expect(proto.TypeError)
+	peB := parsePayload[proto.ErrorPayload](t, rawErrB)
+	if peB.Code != proto.CodeUnexpectedOffer {
 		t.Fatalf("answerer offer: code=%q want unexpected_offer", peB.Code)
 	}
 
 	// (2) Offerer sends a valid first offer — relayed to B.
 	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
-	_, _ = b.expect(sig.TypeOffer)
+	_, _ = b.expect(proto.TypeOffer)
 
 	// (3) Offerer sends a second offer in the same pairing — server
 	// must reject the duplicate with unexpected_offer.
 	a.send(offerMsg("demo", "v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\n"))
-	_, rawErrA := a.expect(sig.TypeError)
-	peA := parsePayload[sig.ErrorPayload](t, rawErrA)
-	if peA.Code != sig.CodeUnexpectedOffer {
+	_, rawErrA := a.expect(proto.TypeError)
+	peA := parsePayload[proto.ErrorPayload](t, rawErrA)
+	if peA.Code != proto.CodeUnexpectedOffer {
 		t.Fatalf("duplicate offer: code=%q want unexpected_offer", peA.Code)
 	}
 
@@ -1093,14 +1095,14 @@ func TestIceCandidateRelayed(t *testing.T) {
 	const candStr = "candidate:1 1 UDP 2130706431 192.0.2.10 54321 typ host"
 	a.send(iceCandidateMsg("demo", candStr, "0", 0))
 
-	env, raw := b.expect(sig.TypeIceCandidate)
+	env, raw := b.expect(proto.TypeIceCandidate)
 	if env.From != peerA {
 		t.Fatalf("ice_candidate envelope.from=%s want %s", env.From, peerA)
 	}
 	if env.To != "" && env.To != peerB {
 		t.Fatalf("ice_candidate envelope.to=%s want '' or %s", env.To, peerB)
 	}
-	pc := parsePayload[sig.IceCandidatePayload](t, raw)
+	pc := parsePayload[proto.IceCandidatePayload](t, raw)
 	if pc.Candidate == nil {
 		t.Fatalf("relayed payload.candidate=nil, want populated candidate")
 	}
@@ -1121,8 +1123,8 @@ func TestIceCandidateNullRelayed(t *testing.T) {
 
 	// End-of-candidates marker — contract §3.10: relay identically.
 	a.send(iceCandidateNullMsg("demo"))
-	_, raw := b.expect(sig.TypeIceCandidate)
-	pc := parsePayload[sig.IceCandidatePayload](t, raw)
+	_, raw := b.expect(proto.TypeIceCandidate)
+	pc := parsePayload[proto.IceCandidatePayload](t, raw)
 	if pc.Candidate != nil {
 		t.Fatalf("end-of-candidates relay: Candidate=%+v, want nil", pc.Candidate)
 	}
@@ -1140,9 +1142,9 @@ func TestIceCandidateEmptyRejected(t *testing.T) {
 	// before dispatch, so the sender gets `error{code:"malformed"}`
 	// and the remote peer sees nothing.
 	a.send(iceCandidateEmptyMsg("demo"))
-	_, rawErr := a.expect(sig.TypeError)
-	pe := parsePayload[sig.ErrorPayload](t, rawErr)
-	if pe.Code != sig.CodeMalformed {
+	_, rawErr := a.expect(proto.TypeError)
+	pe := parsePayload[proto.ErrorPayload](t, rawErr)
+	if pe.Code != proto.CodeMalformed {
 		t.Fatalf("empty candidate: code=%q want malformed", pe.Code)
 	}
 	b.expectNone(200 * time.Millisecond)
@@ -1161,9 +1163,9 @@ func TestIceCandidateFromWrongStateRejected(t *testing.T) {
 	// code + CanSendIceCandidate's rejection being exercised.
 	const candStr = "candidate:1 1 UDP 100 1.2.3.4 5678 typ host"
 	a.send(iceCandidateMsg("demo", candStr, "0", 0))
-	_, raw := a.expect(sig.TypeError)
-	pe := parsePayload[sig.ErrorPayload](t, raw)
-	if pe.Code != sig.CodeMalformed {
+	_, raw := a.expect(proto.TypeError)
+	pe := parsePayload[proto.ErrorPayload](t, raw)
+	if pe.Code != proto.CodeMalformed {
 		t.Fatalf("pre-ready candidate: code=%q want malformed", pe.Code)
 	}
 }
@@ -1200,7 +1202,7 @@ func TestServerNeverLogsCandidate(t *testing.T) {
 	const marker = "CAND-MARKER-9d5a7e2b1f0c4"
 	const candStr = "candidate:1 1 UDP 2130706431 10.0.0.1 12345 typ host " + marker
 	a.send(iceCandidateMsg("demo", candStr, "0", 0))
-	_, _ = b.expect(sig.TypeIceCandidate) // drain the relay so we know dispatch ran
+	_, _ = b.expect(proto.TypeIceCandidate) // drain the relay so we know dispatch ran
 
 	// Give the server a beat to flush the "ice_candidate relayed"
 	// structured log. 50ms is plenty on loopback; we are not waiting
@@ -1249,14 +1251,14 @@ func TestMediaStateRelayedToRemoteOnly(t *testing.T) {
 
 	a.send(mediaStateMsg("demo", "off", "on", "inactive"))
 
-	env, raw := b.expect(sig.TypeMediaState)
+	env, raw := b.expect(proto.TypeMediaState)
 	if env.From != peerA {
 		t.Fatalf("media_state envelope.from=%s want %s", env.From, peerA)
 	}
 	if env.To != "" && env.To != peerB {
 		t.Fatalf("media_state envelope.to=%s want '' or %s", env.To, peerB)
 	}
-	ms := parsePayload[sig.MediaStatePayload](t, raw)
+	ms := parsePayload[proto.MediaStatePayload](t, raw)
 	if ms.Microphone != "off" || ms.Camera != "on" || ms.ScreenShare != "inactive" {
 		t.Fatalf("relayed payload=%+v want {off,on,inactive}", ms)
 	}
@@ -1277,9 +1279,9 @@ func TestMediaStateRejectedFromPendingMedia(t *testing.T) {
 	// idle. A's attempt to send media_state must be rejected.
 	a.send(mediaStateMsg("demo", "on", "on", "inactive"))
 
-	_, raw := a.expect(sig.TypeError)
-	pe := parsePayload[sig.ErrorPayload](t, raw)
-	if pe.Code != sig.CodeMalformed {
+	_, raw := a.expect(proto.TypeError)
+	pe := parsePayload[proto.ErrorPayload](t, raw)
+	if pe.Code != proto.CodeMalformed {
 		t.Fatalf("pending-media media_state: code=%q want malformed", pe.Code)
 	}
 	// B MUST NOT receive any relayed media_state.
@@ -1312,9 +1314,9 @@ func TestMediaStateRequiresFullTriplet(t *testing.T) {
 			"roomId":  "demo",
 			"payload": tc.payload,
 		})
-		_, raw := a.expect(sig.TypeError)
-		pe := parsePayload[sig.ErrorPayload](t, raw)
-		if pe.Code != sig.CodeMalformed {
+		_, raw := a.expect(proto.TypeError)
+		pe := parsePayload[proto.ErrorPayload](t, raw)
+		if pe.Code != proto.CodeMalformed {
 			t.Fatalf("%s: code=%q want malformed", tc.name, pe.Code)
 		}
 	}
@@ -1341,21 +1343,21 @@ func TestInCallLeaveEmitsPeerLeft(t *testing.T) {
 	// A observes peer_presence_changed(left, graceful_leave) AND
 	// peer_left(graceful_leave). Order: presence first, then peer_left
 	// (matches releaseAndNotify's emit order).
-	_, rawPres := a.expect(sig.TypePeerPresenceChanged)
-	pres := parsePayload[sig.PeerPresenceChangedPayload](t, rawPres)
-	if pres.Presence != sig.PresenceLeft {
+	_, rawPres := a.expect(proto.TypePeerPresenceChanged)
+	pres := parsePayload[proto.PeerPresenceChangedPayload](t, rawPres)
+	if pres.Presence != proto.PresenceLeft {
 		t.Fatalf("presence=%q want left (in-call departure)", pres.Presence)
 	}
 	if pres.SubjectPeerID != peerB {
 		t.Fatalf("subject=%s want %s", pres.SubjectPeerID, peerB)
 	}
 
-	_, rawLeft := a.expect(sig.TypePeerLeft)
-	pl := parsePayload[sig.PeerLeftPayload](t, rawLeft)
+	_, rawLeft := a.expect(proto.TypePeerLeft)
+	pl := parsePayload[proto.PeerLeftPayload](t, rawLeft)
 	if pl.PeerID != peerB {
 		t.Fatalf("peer_left.peerId=%s want %s", pl.PeerID, peerB)
 	}
-	if pl.Reason != sig.PeerLeftGracefulLeave {
+	if pl.Reason != proto.PeerLeftGracefulLeave {
 		t.Fatalf("peer_left.reason=%q want graceful_leave", pl.Reason)
 	}
 }
@@ -1381,17 +1383,17 @@ func TestRoomFullRejectsWhilePending(t *testing.T) {
 	b.joinAndAck("demo", newRequestID())
 	// A sees B's admission event. Both slots now reserved; both peers
 	// still pending-media (no media_ready sent).
-	_, _ = a.expect(sig.TypePeerPresenceChanged)
+	_, _ = a.expect(proto.TypePeerPresenceChanged)
 
 	c := dialClient(t, ts)
 	c.send(joinRoomMsg("demo", newRequestID()))
 
-	_, raw := c.expect(sig.TypeJoinRejected)
-	rej := parsePayload[sig.JoinRejectedPayload](t, raw)
-	if rej.Result != sig.JoinRejectedRoomFull {
+	_, raw := c.expect(proto.TypeJoinRejected)
+	rej := parsePayload[proto.JoinRejectedPayload](t, raw)
+	if rej.Result != proto.JoinRejectedRoomFull {
 		t.Fatalf("third (pending-media) join result=%q, want join_rejected_room_full", rej.Result)
 	}
-	if rej.Reason != sig.ReasonRoomFull {
+	if rej.Reason != proto.ReasonRoomFull {
 		t.Fatalf("reason=%q want room_full", rej.Reason)
 	}
 
@@ -1443,7 +1445,7 @@ func TestWSPongTimeoutReleasesSlot(t *testing.T) {
 	// the auto-pong stays alive. Forward each decoded frame into a
 	// channel; test-thread asserts by consuming from the channel.
 	type aFrame struct {
-		env sig.Envelope
+		env proto.Envelope
 		raw json.RawMessage
 	}
 	aInbox := make(chan aFrame, 16)
@@ -1455,7 +1457,7 @@ func TestWSPongTimeoutReleasesSlot(t *testing.T) {
 				aReadErr <- err
 				return
 			}
-			var env sig.Envelope
+			var env proto.Envelope
 			if uerr := json.Unmarshal(raw, &env); uerr != nil {
 				aReadErr <- uerr
 				return
@@ -1464,7 +1466,7 @@ func TestWSPongTimeoutReleasesSlot(t *testing.T) {
 		}
 	}()
 
-	expectOn := func(want sig.Type) aFrame {
+	expectOn := func(want proto.Type) aFrame {
 		t.Helper()
 		select {
 		case f := <-aInbox:
@@ -1485,24 +1487,24 @@ func TestWSPongTimeoutReleasesSlot(t *testing.T) {
 	// Close(PolicyViolation, "pong_timeout") → deferred cleanup →
 	// releaseAndNotify(_, ccB, "disconnect").
 
-	f := expectOn(sig.TypePeerPresenceChanged)
-	pres := parsePayload[sig.PeerPresenceChangedPayload](t, f.raw)
-	if pres.Presence != sig.PresenceLeft {
+	f := expectOn(proto.TypePeerPresenceChanged)
+	pres := parsePayload[proto.PeerPresenceChangedPayload](t, f.raw)
+	if pres.Presence != proto.PresenceLeft {
 		t.Fatalf("presence=%q want left (in-call pong-timeout)", pres.Presence)
 	}
-	if pres.Reason != sig.PresenceReasonDisconnect {
+	if pres.Reason != proto.PresenceReasonDisconnect {
 		t.Fatalf("reason=%q want disconnect", pres.Reason)
 	}
 	if pres.SubjectPeerID != peerB {
 		t.Fatalf("subject=%s want %s", pres.SubjectPeerID, peerB)
 	}
 
-	f = expectOn(sig.TypePeerLeft)
-	pl := parsePayload[sig.PeerLeftPayload](t, f.raw)
+	f = expectOn(proto.TypePeerLeft)
+	pl := parsePayload[proto.PeerLeftPayload](t, f.raw)
 	if pl.PeerID != peerB {
 		t.Fatalf("peer_left.peerId=%s want %s", pl.PeerID, peerB)
 	}
-	if pl.Reason != sig.PeerLeftDisconnect {
+	if pl.Reason != proto.PeerLeftDisconnect {
 		t.Fatalf("peer_left.reason=%q want disconnect", pl.Reason)
 	}
 
@@ -1531,18 +1533,18 @@ func TestLeaveDuringNegotiation(t *testing.T) {
 	// A sends an offer; B receives it. A's callPhase advances
 	// role-assigned → negotiating at the relay.
 	a.send(offerMsg("demo", "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\n"))
-	_, _ = b.expect(sig.TypeOffer)
+	_, _ = b.expect(proto.TypeOffer)
 
 	// Now A hangs up without waiting for B's answer.
 	a.send(leaveRoomMsg("demo"))
 
 	// B observes peer_presence_changed(left, graceful_leave).
-	_, rawPres := b.expect(sig.TypePeerPresenceChanged)
-	pres := parsePayload[sig.PeerPresenceChangedPayload](t, rawPres)
-	if pres.Presence != sig.PresenceLeft {
+	_, rawPres := b.expect(proto.TypePeerPresenceChanged)
+	pres := parsePayload[proto.PeerPresenceChangedPayload](t, rawPres)
+	if pres.Presence != proto.PresenceLeft {
 		t.Fatalf("presence=%q want left (leave-during-negotiation is in-call)", pres.Presence)
 	}
-	if pres.Reason != sig.PresenceReasonGracefulLeave {
+	if pres.Reason != proto.PresenceReasonGracefulLeave {
 		t.Fatalf("reason=%q want graceful_leave", pres.Reason)
 	}
 	if pres.SubjectPeerID != peerA {
@@ -1551,12 +1553,12 @@ func TestLeaveDuringNegotiation(t *testing.T) {
 
 	// … followed by peer_left(graceful_leave) — the convenience
 	// cleanup trigger for Path B on the client side.
-	_, rawLeft := b.expect(sig.TypePeerLeft)
-	pl := parsePayload[sig.PeerLeftPayload](t, rawLeft)
+	_, rawLeft := b.expect(proto.TypePeerLeft)
+	pl := parsePayload[proto.PeerLeftPayload](t, rawLeft)
 	if pl.PeerID != peerA {
 		t.Fatalf("peer_left.peerId=%s want %s", pl.PeerID, peerA)
 	}
-	if pl.Reason != sig.PeerLeftGracefulLeave {
+	if pl.Reason != proto.PeerLeftGracefulLeave {
 		t.Fatalf("peer_left.reason=%q want graceful_leave", pl.Reason)
 	}
 
@@ -1590,24 +1592,24 @@ func TestInCallDisconnectEmitsPeerLeft(t *testing.T) {
 	// with B's CallPhase = role-assigned → in-call.
 	_ = b.conn.Close(websocket.StatusAbnormalClosure, "test disconnect")
 
-	_, rawPres := a.expect(sig.TypePeerPresenceChanged)
-	pres := parsePayload[sig.PeerPresenceChangedPayload](t, rawPres)
-	if pres.Presence != sig.PresenceLeft {
+	_, rawPres := a.expect(proto.TypePeerPresenceChanged)
+	pres := parsePayload[proto.PeerPresenceChangedPayload](t, rawPres)
+	if pres.Presence != proto.PresenceLeft {
 		t.Fatalf("presence=%q want left (in-call disconnect)", pres.Presence)
 	}
-	if pres.Reason != sig.PresenceReasonDisconnect {
+	if pres.Reason != proto.PresenceReasonDisconnect {
 		t.Fatalf("reason=%q want disconnect", pres.Reason)
 	}
 	if pres.SubjectPeerID != peerB {
 		t.Fatalf("subject=%s want %s", pres.SubjectPeerID, peerB)
 	}
 
-	_, rawLeft := a.expect(sig.TypePeerLeft)
-	pl := parsePayload[sig.PeerLeftPayload](t, rawLeft)
+	_, rawLeft := a.expect(proto.TypePeerLeft)
+	pl := parsePayload[proto.PeerLeftPayload](t, rawLeft)
 	if pl.PeerID != peerB {
 		t.Fatalf("peer_left.peerId=%s want %s", pl.PeerID, peerB)
 	}
-	if pl.Reason != sig.PeerLeftDisconnect {
+	if pl.Reason != proto.PeerLeftDisconnect {
 		t.Fatalf("peer_left.reason=%q want disconnect", pl.Reason)
 	}
 }

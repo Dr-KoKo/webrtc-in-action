@@ -20,9 +20,9 @@ var RoomIDRegex = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 type JoinResult string
 
 const (
-	JoinAccepted             JoinResult = "join_accepted"
-	JoinRejectedRoomFull     JoinResult = "join_rejected_room_full"
-	JoinRejectedInvalidRoom  JoinResult = "join_rejected_invalid_room"
+	JoinAccepted            JoinResult = "join_accepted"
+	JoinRejectedRoomFull    JoinResult = "join_rejected_room_full"
+	JoinRejectedInvalidRoom JoinResult = "join_rejected_invalid_room"
 )
 
 // AdmissionOutcome carries everything the handler needs to reply to a
