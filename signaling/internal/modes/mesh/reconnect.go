@@ -262,13 +262,36 @@ func (h *Handler) handleReconnectPair(ctx context.Context, cc *meshConn, d *Deco
 		})
 		return nil
 	}
+	// Resolve both endpoints under the lock BEFORE incrementing the
+	// epoch. If one of them disconnected between pair_failed and this
+	// reconnect_pair (Manager.Release removed it from r.participants
+	// while the pair entry survived), bumping the epoch here would
+	// corrupt the ledger: no `pair_reconnect_instruction` could be
+	// emitted (the original code would also have nil-deref'd
+	// `remote.PeerID` inside the emit closure), and the surviving
+	// peer's later reconnect would carry a stale observedEpoch and be
+	// rejected indefinitely. Refusing here lets the surviving peer
+	// self-correct once it processes the `mesh_roster_update
+	// presence=left` for the missing endpoint.
+	loPeer := rm.FindByPeerID(pair.LoPeerID)
+	hiPeer := rm.FindByPeerID(pair.HiPeerID)
+	if loPeer == nil || hiPeer == nil {
+		rm.Unlock()
+		h.writeErrorWithContext(ctx, cc, &ProtocolError{
+			Code:    CodeNotInRoom,
+			Message: "remote endpoint of pair " + payload.PairID + " is no longer in the room",
+		}, d.Envelope.RequestID, map[string]any{
+			"pairId":  payload.PairID,
+			"subcode": "remote_left",
+		})
+		return nil
+	}
 	// All validation passed — increment the epoch under the lock so a
 	// second simultaneous click cannot also mint a new attempt.
 	newEpoch, _ := ledger.Increment(payload.PairID)
 	pair.State = PairReconnecting
-	loIdx, hiIdx := decodePairAdmissionIndices(pair, rm)
-	loPeer := rm.FindByPeerID(pair.LoPeerID)
-	hiPeer := rm.FindByPeerID(pair.HiPeerID)
+	loIdx := loPeer.AdmissionIndex
+	hiIdx := hiPeer.AdmissionIndex
 	roomID := rm.ID()
 	iceServers := h.Manager.IceServers()
 	rm.Unlock()
@@ -277,7 +300,7 @@ func (h *Handler) handleReconnectPair(ctx context.Context, cc *meshConn, d *Deco
 	// admissionIndex is always the offerer (§3.9) so the same
 	// deterministic role rule applies after every fresh attempt.
 	emitOne := func(recipient *Participant, role PairRole, remote *Participant, remoteIdx uint64) {
-		if recipient == nil || recipient.Conn == nil {
+		if recipient == nil || recipient.Conn == nil || remote == nil {
 			return
 		}
 		body, _ := json.Marshal(PairReconnectInstructionPayload{
@@ -321,20 +344,6 @@ func (h *Handler) handleReconnectPair(ctx context.Context, cc *meshConn, d *Deco
 	emitOne(loPeer, RoleOfferer, hiPeer, hiIdx)
 	emitOne(hiPeer, RoleAnswerer, loPeer, loIdx)
 	return nil
-}
-
-// decodePairAdmissionIndices reads the lo/hi admission indices for a
-// Pair. The Pair struct only stores PeerIDs; the live indices live on
-// the participants. Caller must hold the room lock.
-func decodePairAdmissionIndices(pair *Pair, rm *MeshRoom) (uint64, uint64) {
-	var loIdx, hiIdx uint64
-	if p := rm.FindByPeerID(pair.LoPeerID); p != nil {
-		loIdx = p.AdmissionIndex
-	}
-	if p := rm.FindByPeerID(pair.HiPeerID); p != nil {
-		hiIdx = p.AdmissionIndex
-	}
-	return loIdx, hiIdx
 }
 
 // writeErrorWithContext is the same as writeError but also includes

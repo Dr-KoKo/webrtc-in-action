@@ -499,6 +499,57 @@ func TestReconnectPairSimultaneousClickRaceProducesOneWinner(t *testing.T) {
 	}
 }
 
+// TestReconnectPairRemoteEndpointDisconnectedRejected — race
+// coverage. After `pair_failed`, the failing peer's WebSocket closes
+// (Manager.Release runs and removes the participant from
+// r.participants while the pair entry survives because pairLedger.Drop
+// is not called on participant release). The surviving peer's
+// reconnect_pair MUST be rejected with `not_in_room` rather than
+// nil-deref'ing on the missing remote inside the `emitOne` closure or
+// silently corrupting the epoch (bumping with no instruction emitted,
+// which would leave the surviving client unable to ever reconnect that
+// pair — every later attempt would carry observedEpoch < server.epoch
+// and be rejected as stale_pair_epoch indefinitely).
+func TestReconnectPairRemoteEndpointDisconnectedRejected(t *testing.T) {
+	h := mesh.NewHandler(silentLogger())
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+
+	const roomID = "reconremoteleft"
+	connA, connB, pairID, epoch := admitPairAndReachInstruction(t, ts, ctx, roomID)
+	defer connA.CloseNow()
+	// Do NOT defer connB.CloseNow() — we close it explicitly below.
+
+	induceFailedPair(t, connA, connB, ctx, roomID, pairID, epoch)
+
+	// B disconnects ungracefully. Synchronize on A's `peer_left` —
+	// emitted by the same locked critical section as Manager.Release —
+	// so we know the participant is gone from r.participants by the
+	// time we send reconnect_pair below.
+	_ = connB.CloseNow()
+	_ = readUntilPeerLeft(t, ctx, connA, "")
+
+	// A clicks Reconnect on the orphaned pair. Server must refuse
+	// without panicking, without bumping the epoch, and without
+	// emitting any pair_reconnect_instruction.
+	sendReconnectPair(t, connA, ctx, roomID, pairID, epoch)
+	_, ep := readErrorEnvelope(t, connA, ctx)
+	if ep.Code != mesh.CodeNotInRoom {
+		t.Fatalf("error.code = %q; want not_in_room", ep.Code)
+	}
+	if subcode, _ := ep.Context["subcode"].(string); subcode != "remote_left" {
+		t.Fatalf("error.context.subcode = %q; want remote_left", subcode)
+	}
+	if pid, _ := ep.Context["pairId"].(string); pid != pairID {
+		t.Fatalf("error.context.pairId = %q; want %q", pid, pairID)
+	}
+	// No follow-up frames on A — no instruction was minted.
+	expectNoFurtherFrame(t, connA)
+}
+
 // TestReconnectPairOnlyTouchesAffectedPair — verify FR-025 isolation
 // at the server level: in a 3-peer room (A, B, C all paired), failing
 // + reconnecting A↔B does NOT mutate A↔C or B↔C ledger entries and

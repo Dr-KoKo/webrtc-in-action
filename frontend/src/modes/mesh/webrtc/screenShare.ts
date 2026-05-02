@@ -329,7 +329,30 @@ export function createScreenShareController(
       }
     }
 
-    for (const tracked of trackedSenders) {
+    // Re-derive the live sender list at stop time. PairContexts may
+    // have churned during the share — most importantly an M11 manual
+    // reconnect (`pair_reconnect_instruction`) replaces the failed
+    // pair's PC with a fresh one whose new outbound video sender is
+    // attached to `getActiveScreenTrack()` by `pairManager.allocateContext`
+    // (mode="reconnect"). Those reconnected senders are NOT in
+    // `trackedSenders` (which was snapshotted at start time), so
+    // iterating only that snapshot would leave the new sender holding
+    // the now-`ended` screen track and freeze the remote tile. Walking
+    // `getPairContexts()` here picks up every currently-active video
+    // sender — original AND reconnected — and reverts each to
+    // `replacementTrack` exactly once.
+    const liveTracked: TrackedSender[] = [];
+    for (const ctx of deps.getPairContexts()) {
+      if (ctx.state === "closed") continue;
+      const sender = findOutboundVideoSender(ctx);
+      if (!sender) continue;
+      liveTracked.push({
+        pairId: ctx.pairId,
+        remotePeerId: ctx.remotePeerId,
+        sender,
+      });
+    }
+    for (const tracked of liveTracked) {
       try {
         await tracked.sender.replaceTrack(replacementTrack);
         appendEvent({

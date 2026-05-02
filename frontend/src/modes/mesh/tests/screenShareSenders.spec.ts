@@ -598,6 +598,96 @@ describe("picker cancellation", () => {
   });
 });
 
+describe("screen-share stop after M11 pair reconnect", () => {
+  it("reverts the reconnected pair's NEW outbound video sender (re-derives from getPairContexts at stop time)", async () => {
+    // Bug fix: stop() previously iterated only `trackedSenders`, the
+    // snapshot taken at start() time. An M11 manual reconnect during
+    // an active share allocates a NEW outbound video sender bound to
+    // the active screen track (pairManager.allocateContext mode=
+    // "reconnect", `getActiveScreenTrack()` branch) but never
+    // registers it with the controller. On stop, screenTrack.stop()
+    // ends the track; the new sender is invisible to the loop and
+    // keeps the now-`ended` track, freezing the remote tile. The fix
+    // re-derives the live sender list from getPairContexts() at stop
+    // time so reconnected senders are reverted to camera too.
+    const screenTrack = makeFakeTrack("video", "screen-1");
+    const screenStream = {
+      getVideoTracks: () => [screenTrack],
+      getTracks: () => [screenTrack],
+    };
+    const { dispatch, send } = makeHarness();
+
+    // 3-peer mesh from A's view: A↔B (1-2) and A↔C (1-3).
+    const pairAB = makeFakePair("1-2", "peer-2");
+    const pairAC = makeFakePair("1-3", "peer-3");
+    let contexts: MeshPairContext[] = [pairAB.ctx, pairAC.ctx];
+
+    const ctrl = createScreenShareController({
+      dispatch,
+      send,
+      getRoomId: () => "demo",
+      getPairContexts: () => contexts,
+      getCameraTrack: () => cameraTrack as unknown as MediaStreamTrack,
+      getCameraState: () => "on",
+      getMicState: () => "on",
+      getDisplayMedia: async () => screenStream as unknown as MediaStream,
+    });
+
+    await ctrl.start();
+    expect(pairAB.videoSender.replaceTrackCalls).toEqual([screenTrack]);
+    expect(pairAC.videoSender.replaceTrackCalls).toEqual([screenTrack]);
+
+    // Simulate M11 reconnect on A↔B: pairManager closes the old PC
+    // and allocates a fresh ctx whose new outbound video sender is
+    // attached to the active screen track. Swap the ctx in `contexts`
+    // so the controller's getPairContexts() no longer sees the old PC.
+    const reconnectedAB = makeFakePair("1-2", "peer-2");
+    reconnectedAB.videoSender.track = screenTrack;
+    contexts = [reconnectedAB.ctx, pairAC.ctx];
+
+    await ctrl.stop("app");
+
+    // The reconnected pair's NEW sender MUST be reverted to camera.
+    expect(reconnectedAB.videoSender.replaceTrackCalls).toEqual([cameraTrack]);
+    // Sibling AC pair reverts normally: screen → camera.
+    expect(pairAC.videoSender.replaceTrackCalls).toEqual([screenTrack, cameraTrack]);
+    // The old AB sender (no longer in getPairContexts) is not touched
+    // at stop time — its only call is from start.
+    expect(pairAB.videoSender.replaceTrackCalls).toEqual([screenTrack]);
+  });
+
+  it("does not double-revert the same sender when getPairContexts returns the same ctx start-to-stop", async () => {
+    // Regression guard: with the live-derivation fix, a sender that
+    // WAS in the start-time snapshot AND is still in getPairContexts()
+    // at stop time must receive replaceTrack(cameraTrack) exactly once
+    // (not twice). This protects against an accidental stop()-time
+    // iteration over both the snapshot AND the live list.
+    const screenTrack = makeFakeTrack("video", "screen-1");
+    const screenStream = {
+      getVideoTracks: () => [screenTrack],
+      getTracks: () => [screenTrack],
+    };
+    const { dispatch, send } = makeHarness();
+    const pair = makeFakePair("1-2", "peer-2");
+
+    const ctrl = createScreenShareController({
+      dispatch,
+      send,
+      getRoomId: () => "demo",
+      getPairContexts: () => [pair.ctx],
+      getCameraTrack: () => cameraTrack as unknown as MediaStreamTrack,
+      getCameraState: () => "on",
+      getMicState: () => "on",
+      getDisplayMedia: async () => screenStream as unknown as MediaStream,
+    });
+    await ctrl.start();
+    await ctrl.stop("app");
+
+    // Exactly screen on start, then exactly camera on stop — no extras.
+    expect(pair.videoSender.replaceTrackCalls).toEqual([screenTrack, cameraTrack]);
+  });
+});
+
 describe("screen-share source-code constraints (T077 / T078)", () => {
   it("frontend/src/modes/mesh/webrtc/screenShare.ts has no addTransceiver call", async () => {
     const fs = await import("node:fs/promises");
