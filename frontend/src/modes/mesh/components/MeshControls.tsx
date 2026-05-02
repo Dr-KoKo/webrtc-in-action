@@ -21,7 +21,10 @@
 //     another peer's screen-share state.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { subscribeLocalStream } from "../webrtc/mediaAcquisition";
+import {
+  publishLocalStream,
+  subscribeLocalStream,
+} from "../webrtc/mediaAcquisition";
 import { setLocalTrackEnabled } from "../webrtc/senders";
 import { useMeshDispatch, useMeshState, type MeshRootState } from "../state";
 import {
@@ -38,9 +41,11 @@ import {
 } from "../signaling/schema";
 import {
   createScreenShareController,
+  getActiveScreenTrack,
   type ScreenShareController,
 } from "../webrtc/screenShare";
 import type { MeshPairManager } from "../webrtc/pairManager";
+import { createMeshLeavePath } from "../webrtc/leavePath";
 
 interface PairMediaStateSnapshot {
   readonly microphone: MicState;
@@ -195,6 +200,67 @@ export function MeshControls() {
     }
   };
 
+  // M12 / T089 — Path A graceful Leave. Idempotent at the orchestrator
+  // gate (createMeshLeavePath returns a singleton run/hasRun pair) and
+  // at the FSM gate (the reducer drops MESH_LEAVE_REQUESTED while
+  // already leaving / left). The Leave button is enabled whenever the
+  // user holds an admitted slot or is mid-flight; pre-join clicks are a
+  // no-op via the FSM guard.
+  const leavePathRef = useRef<ReturnType<typeof createMeshLeavePath> | null>(
+    null,
+  );
+  if (leavePathRef.current === null) {
+    leavePathRef.current = createMeshLeavePath({
+      dispatch,
+      send: (m) => sendRef.current(m),
+      isSocketOpen: () => client.getTransportState() === "open",
+      closeSocket: () => {
+        try {
+          client.close();
+        } catch {
+          /* idempotent */
+        }
+      },
+      pairManager: pairManagerRef.current,
+      getRoomId: () => stateRef.current.local.roomId ?? null,
+      getLocalStream: () => currentLocalStream(),
+      getActiveScreenTrack: () => getActiveScreenTrack(),
+      publishLocalStream,
+      disposeScreenShare: () => controllerRef.current?.dispose(),
+    });
+  }
+  // Refresh the manager dep on every render so a Leave triggered after
+  // the manager appears (post-media-ready) sees a non-null reference.
+  // The leave path closure reads `pairManager` from a ref captured at
+  // create-time, so we re-create when the identity changes.
+  useEffect(() => {
+    leavePathRef.current = createMeshLeavePath({
+      dispatch,
+      send: (m) => sendRef.current(m),
+      isSocketOpen: () => client.getTransportState() === "open",
+      closeSocket: () => {
+        try {
+          client.close();
+        } catch {
+          /* idempotent */
+        }
+      },
+      pairManager: pairManagerRef.current,
+      getRoomId: () => stateRef.current.local.roomId ?? null,
+      getLocalStream: () => currentLocalStream(),
+      getActiveScreenTrack: () => getActiveScreenTrack(),
+      publishLocalStream,
+      disposeScreenShare: () => controllerRef.current?.dispose(),
+    });
+  }, [dispatch, client, pairManager]);
+
+  const canLeave =
+    fsm !== "idle" && fsm !== "leaving" && fsm !== "left";
+
+  const onLeaveClick = () => {
+    leavePathRef.current?.run();
+  };
+
   const screenLabel = useMemo(() => {
     return screenShare === "active" ? "Stop sharing" : "Share screen";
   }, [screenShare]);
@@ -245,6 +311,17 @@ export function MeshControls() {
         >
           screen share: {screenShare}
         </span>
+        <button
+          type="button"
+          onClick={onLeaveClick}
+          disabled={!canLeave}
+          className="mesh-controls__leave"
+          data-testid="mesh-controls-leave"
+          data-state={fsm}
+          aria-label="Leave mesh room"
+        >
+          Leave mesh
+        </button>
       </div>
     </section>
   );

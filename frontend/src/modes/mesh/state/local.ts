@@ -17,6 +17,13 @@
 //
 //   (any) ──SIGNALING_CLOSED while admitted──▶ signaling-error
 //
+// M12 Path A (graceful Leave) — data-model §C.3:
+//
+//   (admitted) ──LEAVE_REQUESTED──▶ leaving ──LEAVE_COMPLETED──▶ left
+//
+// `left` is a terminal-for-this-admission state. The route shell may
+// reset to `idle` to return the user to the lobby (MESH_LOCAL_RESET).
+//
 // `in-room`, `leaving`, `left`, `released`, `failed` are reserved for
 // later milestones (M6+ pair lifecycle, M11 cleanup); the action space
 // is left open here so the dispatcher can extend without re-typing the
@@ -75,6 +82,8 @@ export type MeshLocalAction =
   | { type: "MESH_RETRY_REQUESTED" }
   | { type: "MESH_PARTICIPANT_RELEASED"; detail?: string }
   | { type: "MESH_TRANSPORT_CHANGED"; transport: MeshTransportState }
+  | { type: "MESH_LEAVE_REQUESTED" }
+  | { type: "MESH_LEAVE_COMPLETED" }
   | { type: "MESH_LOCAL_RESET" };
 
 export function meshLocalReducer(
@@ -162,12 +171,37 @@ export function meshLocalReducer(
         },
       };
     }
+    case "MESH_LEAVE_REQUESTED": {
+      // Idempotent: a second click while leaving / already-left is a
+      // no-op. From `idle` (never joined) we have nothing to leave;
+      // also treat as no-op.
+      if (
+        state.fsm === "idle" ||
+        state.fsm === "leaving" ||
+        state.fsm === "left"
+      ) {
+        return state;
+      }
+      const { errorBanner: _drop, ...rest } = state;
+      return { ...rest, fsm: "leaving" };
+    }
+    case "MESH_LEAVE_COMPLETED": {
+      // Allowed only from leaving; ignore stray completions so a
+      // stale teardown can't drop us out of an active session.
+      if (state.fsm !== "leaving") return state;
+      return {
+        ...initialMeshLocalParticipant,
+        signalingTransport: state.signalingTransport,
+        fsm: "left",
+      };
+    }
     case "MESH_TRANSPORT_CHANGED": {
       const lostTransport =
         action.transport === "closed" || action.transport === "error";
       const midSession =
         state.fsm !== "idle" &&
         state.fsm !== "left" &&
+        state.fsm !== "leaving" &&
         state.fsm !== "signaling-error";
       if (lostTransport && midSession) {
         return {

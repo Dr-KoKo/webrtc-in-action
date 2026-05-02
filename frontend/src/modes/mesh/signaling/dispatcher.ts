@@ -205,6 +205,17 @@ function dispatchValidated(deps: DispatcherDeps, msg: MeshServerMessage): void {
           },
         }),
       });
+      // M12 / T090 — Path B: roster `left` for a remote peer also tears
+      // down our PairContext for that peer (idempotent with `peer_left`).
+      // The local participant's own `left` is handled by the leave path
+      // and is not a remote-cleanup trigger.
+      if (
+        msg.payload.presence === "left" &&
+        (!selfPeerId || msg.payload.subjectPeerId !== selfPeerId)
+      ) {
+        const manager = deps.getPairManager?.() ?? null;
+        manager?.closePairByRemotePeerId(msg.payload.subjectPeerId);
+      }
       return;
     }
     case "participant_released": {
@@ -495,6 +506,12 @@ function dispatchValidated(deps: DispatcherDeps, msg: MeshServerMessage): void {
           detail: { reason: msg.payload.reason },
         }),
       });
+      // M12 / T090 — Path B: tear down only the PairContext local↔leaver.
+      // Idempotent with the matching `mesh_roster_update presence=left`
+      // (FR — either order works). Local tracks and healthy pairs are
+      // untouched.
+      const manager = deps.getPairManager?.() ?? null;
+      manager?.closePairByRemotePeerId(msg.payload.peerId);
       return;
     }
     case "error": {

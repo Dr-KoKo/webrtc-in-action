@@ -372,41 +372,81 @@ func (h *Handler) handleLeaveRoom(ctx context.Context, cc *meshConn, d *Decoded)
 
 // releaseAndNotify is the canonical disconnect path (data-model §C.4).
 // Frees the slot, broadcasts mesh_roster_update presence:left to any
-// remaining participants. Idempotent via cc.released so the deferred
-// ServeHTTP cleanup and an explicit leave_room don't double-emit.
+// remaining participants, and (for in-call leavers — readiness >=
+// media-ready at the moment of release) ALSO emits a `peer_left`
+// envelope to remaining peers so each client can tear down its
+// PairContext for the leaver via Path B (M12 / T092). Idempotent via
+// cc.released so the deferred ServeHTTP cleanup and an explicit
+// leave_room don't double-emit.
+//
+// FR-025 / Path B isolation: the server MUST NOT broadcast a
+// room-wide failed presence here. The leaver presence is `left`; each
+// remaining client closes ONLY the pair local↔leaver, leaving healthy
+// pairs alone.
 func (h *Handler) releaseAndNotify(cc *meshConn, reason string, rosterReason RosterReason) {
 	if cc.released.Load() || cc.peerID == "" {
 		return
 	}
+	// Snapshot the readiness BEFORE Release frees the slot (Release
+	// drops the participant from the room's map so a post-release lookup
+	// would return nil). Used to gate `peer_left` emission below: only
+	// in-call leavers (media-ready) had pairs that need teardown.
+	departingReadiness := h.peerReadiness(cc.roomID, cc.peerID)
 	outcome := h.Manager.Release(cc.roomID, cc.peerID)
 	cc.released.Store(true)
 	if outcome.Departing == nil {
 		return
 	}
-	// Departing presence is `left` for both graceful leaves and
-	// disconnects on this path; `released` is reserved for the
-	// `media_failed` path in `handleMediaFailed`. M5+ may refine this
-	// further once pair lifecycle lands.
 	rm := outcome.Room
 	rm.Lock()
 	update := BuildRosterUpdate(rm, outcome.Departing, PresenceLeft, rosterReason)
 	rm.Unlock()
 	updatePayload, _ := json.Marshal(update)
-	env := Envelope{
+	rosterEnv := Envelope{
 		V:       ContractVersion,
 		Type:    TypeMeshRosterUpdate,
 		RoomID:  rm.ID(),
 		TS:      time.Now().UnixMilli(),
 		Payload: updatePayload,
 	}
+
+	// Build `peer_left` only for in-call leavers (readiness was
+	// media-ready at the moment of release). A `joined`-state leaver
+	// had no pairs yet, so the roster `left` update alone is enough.
+	var peerLeftEnv *Envelope
+	if departingReadiness == ReadinessMediaReady {
+		peerLeftReason := PeerLeftDisconnect
+		if rosterReason == RosterReasonGracefulLeave {
+			peerLeftReason = PeerLeftGracefulLeave
+		}
+		peerLeftPayload, _ := json.Marshal(PeerLeftPayload{
+			PeerID: outcome.Departing.PeerID,
+			Reason: peerLeftReason,
+		})
+		peerLeftEnv = &Envelope{
+			V:       ContractVersion,
+			Type:    TypePeerLeft,
+			RoomID:  rm.ID(),
+			TS:      time.Now().UnixMilli(),
+			Payload: peerLeftPayload,
+		}
+	}
+
 	for _, p := range outcome.Remaining {
 		if p.Conn == nil {
 			continue
 		}
-		if err := p.Conn.SendJSON(env); err != nil {
+		if err := p.Conn.SendJSON(rosterEnv); err != nil {
 			h.Log.Warn("mesh_roster_update send failed",
 				slog.String("peer_id", p.PeerID),
 				slog.String("error", err.Error()))
+		}
+		if peerLeftEnv != nil {
+			if err := p.Conn.SendJSON(*peerLeftEnv); err != nil {
+				h.Log.Warn("peer_left send failed",
+					slog.String("peer_id", p.PeerID),
+					slog.String("error", err.Error()))
+			}
 		}
 	}
 	h.Log.Info("mesh peer departed",
@@ -414,8 +454,27 @@ func (h *Handler) releaseAndNotify(cc *meshConn, reason string, rosterReason Ros
 		slog.String("peer_id", cc.peerID),
 		slog.String("room_id", cc.roomID),
 		slog.String("reason", reason),
+		slog.String("departing_readiness", string(departingReadiness)),
+		slog.Bool("peer_left_emitted", peerLeftEnv != nil),
 		slog.Bool("room_gc", outcome.RoomGarbageCollected),
 	)
+}
+
+// peerReadiness returns the current readiness for the named participant
+// or empty string when the room or participant is unknown. Caller must
+// NOT hold the room mutex; the helper acquires it.
+func (h *Handler) peerReadiness(roomID, peerID string) Readiness {
+	rm := h.Manager.Room(roomID)
+	if rm == nil {
+		return ""
+	}
+	rm.Lock()
+	defer rm.Unlock()
+	p := rm.FindByPeerID(peerID)
+	if p == nil {
+		return ""
+	}
+	return p.Readiness
 }
 
 // broadcastRosterUpdate fans out a single mesh_roster_update to ALL

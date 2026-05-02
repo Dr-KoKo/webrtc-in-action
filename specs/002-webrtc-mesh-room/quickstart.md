@@ -1,9 +1,25 @@
 # Mesh Mode Quickstart
 
 **Feature**: Multi-party Mesh WebRTC Learning Room (002)
-**Branch**: `002-webrtc-mesh-room` | **Date**: 2026-04-25
+**Branch**: `002-webrtc-mesh-room` | **Last finalized**: 2026-05-02 (M12 / T094)
 **Plan**: [plan.md](./plan.md) | **Spec**: [spec.md](./spec.md)
 **Contract**: [contracts/signaling-protocol.md](./contracts/signaling-protocol.md)
+
+> **As-built copy reference (M12)** — UI strings are the contract. If
+> any of these change in code, this doc must change too.
+>
+> | Surface | Exact copy / selector |
+> |---|---|
+> | Mode badge | `Mesh mode (capacity 4)` |
+> | Join button | `Join mesh room` (`Joining…` while in flight) |
+> | Leave button | `Leave mesh` (`data-testid="mesh-controls-leave"`) |
+> | Share-screen button | `Share screen` / `Stop sharing` (`data-testid="mesh-controls-screen-share-button"`) |
+> | Mic / camera buttons | `mic: on` / `mic: off` / `camera: on` / `camera: off` |
+> | Reconnect button | `Reconnect` (`Requesting…` while in flight) |
+> | Signaling-error banner | `Signaling connection lost. Other peers may see you as disconnected.` (`data-testid="mesh-signaling-error-banner"`) |
+> | Partial-mesh badge | rendered when at least one pair is `failed` AND at least one is healthy (`data-testid="mesh-partial-badge"`) |
+> | Cost-summary keys | `participants`, `local peers`, `local PCs`, `local DCs`, `outgoing audio senders`, `outgoing video senders`, `pairs (connected/connecting/failed/pending)`, `room peer-pair total` |
+> | Event-log entries (canonical) | `mesh roster snapshot received`, `peer ${id} → ${presence} (${reason})`, `peer pair pairing started`, `offer sent`, `offer received`, `answer sent`, `answer received`, `ICE candidate sent/received`, `ICE end-of-candidates sent/received`, `ICE buffer flushed`, `connection state changed → ${state}`, `DataChannel opened/closed`, `chat message sent (datachannel)`, `chat message received (datachannel)`, `chat message send skipped (dc not open)`, `pair_media_state sent (signaling metadata path; server fan-out, not media path)`, `pair_media_state received from peer ${id} (signaling metadata path)`, `microphone toggled → on/off`, `camera toggled → on/off`, `screen share started/stopped`, `peer pair failed`, `peer pair reconnect requested`, `peer pair fresh attempt started`, `old PairContext torn down`, `new PairContext created`, `pair_stale_message_dropped`, `peer ${id} left (${reason})`, `leave requested`, `leave completed`, `signaling error: mesh /ws/mesh transport lost`. |
 
 This quickstart is the manual verification checklist for mesh mode. It
 sits **alongside** the 001 quickstart (`specs/001-webrtc-1to1-call/quickstart.md`)
@@ -158,41 +174,57 @@ Click **Reconnect** on A's tile-of-B:
 
 For R-M3 simultaneous-reconnect-clicks: induce a failure on A↔B, then click Reconnect on A AND on B at virtually the same time. Expect: one fresh attempt completes; the loser sees an `error stale_pair_epoch` log entry; one reconnect cycle, not two.
 
-### 4.7 Ungraceful disconnect (SC-005a)
+### 4.7 Ungraceful disconnect — Path B (SC-005a / M12 / T090 + T092)
 
 In one peer (say D), close the browser tab without clicking Leave.
 
-Expect on A, B, C within ≤ 10 s:
-1. D's tile transitions to `left` (Spec FR-013 + EC-006).
-2. D's tile is removed.
-3. The cost summary recomputes (`participants: 3`, `local peers: 2`, etc.).
-4. Event log on each remaining peer has `peer left` with `reason: "disconnect"`.
-5. The remaining peers' other pair states (A↔B, A↔C, B↔C) are unaffected.
-6. SC-005a met.
+Expect on A, B, C within ≤ 10 s (server: 5 s ping + 5 s pong-timeout):
+1. The server emits `mesh_roster_update { presence: "left", reason: "disconnect" }` for D.
+2. The server emits `peer_left { reason: "disconnect" }` ONLY when D was in-call (readiness=`media-ready` at the moment of disconnect). Pre-`media-ready` leavers omit this.
+3. Each remaining client closes ONLY its PairContext for the local↔D pair: PC closed, DataChannel closed, ICE buffer cleared, RemoteTile removed.
+4. Roster removes D's entry; cost summary recomputes (`participants: 3`, `local peers: 2`, `local PCs: 2`, `local DCs: 2`, `outgoing audio senders: 2`, `outgoing video senders: 2`, `room peer-pair total: 3`).
+5. Event log on each remaining peer has `peer ${D-id} left (disconnect)`.
+6. The remaining peers' other pair states (A↔B, A↔C, B↔C) are unaffected — confirm by checking those tiles' state pills stay at `connection: connected` throughout.
+7. The remaining peers' local camera + microphone keep running.
+8. The server MUST NOT emit a `pair_failed` envelope for any pair as a side-effect of D's disconnect (verified by `mesh_pong_timeout_test.go`).
+9. SC-005a met.
 
-### 4.8 Local signaling loss (SC-005b, EC-012)
+### 4.8 Local signaling loss — Path D (SC-005b, EC-012 / M12 / T091)
 
 In one peer (say A), block `/ws/mesh` via DevTools' Network panel
-"Block request URL" (or kill the WebSocket via the `chrome://webrtc-internals`).
+"Block request URL", or kill the WebSocket via DevTools (Application →
+Frames → close), or run the host machine offline briefly.
 
 Expect on A within ≤ 5 s:
-1. The `LocalParticipant.fsm` flips to `signaling-error`; a banner appears: **"Signaling connection lost. Other peers may see you as disconnected."**
-2. Event log gets `signaling error`.
-3. Already-connected pairs (A↔B, A↔C, A↔D) MAY continue to carry media briefly — this is the honest WebRTC behavior. Confirm by speaking briefly; the audio may still cross until ICE keepalive eventually fails.
-4. The banner offers a **Leave mesh** action.
-5. SC-005b met.
+1. `LocalParticipant.fsm` flips to `signaling-error`.
+2. The **SignalingErrorBanner** appears with copy `Signaling connection lost. Other peers may see you as disconnected.` (`role="alert"`, `aria-live="assertive"`, `data-testid="mesh-signaling-error-banner"`).
+3. Event log gets a `local`-scoped entry of type `signaling_error` with summary `signaling error: mesh /ws/mesh transport lost`.
+4. **No auto-reconnect** runs — the banner stays until the user clicks Leave mesh.
+5. The Leave mesh button on the controls strip remains enabled (Path A is reachable from `signaling-error`).
+6. Already-connected pairs (A↔B, A↔C, A↔D) MAY continue carrying media briefly — this is the honest WebRTC behavior. Speak; the audio may still cross until ICE keepalive eventually fails.
+7. SC-005b met.
 
 From the **other peers' viewpoint**, A appears as `left` within ≤ 10 s
-once the server's Pong timeout fires. SC-005a applies symmetrically.
+once the server's Pong timeout fires (§4.7 path). SC-005a applies
+symmetrically. If A was media-ready at disconnect, B/C/D also receive a
+`peer_left { reason: "disconnect" }` for A and tear down only the
+A-pair (Path B).
 
-### 4.9 Graceful leave
+### 4.9 Graceful leave — Path A (M12 / T089)
 
-In one peer, click **Leave mesh**. Expect:
-1. That peer's local tracks stop (camera light off, mic muted in OS).
-2. The other three peers see this peer transition to `left` and tile removed.
-3. Cost summary on each remaining peer updates.
-4. The leaver returns to the lobby with no event-log error.
-5. EC-005 verified.
+In one peer (say D), click **Leave mesh**. Expect on D:
+1. `LocalParticipant.fsm` walks `media-ready → leaving → left`.
+2. Event log gets `leave requested`, then `leave completed` once cleanup finishes.
+3. D sends one `leave_room` envelope over `/ws/mesh` (skipped if the socket is already closed — Path D scenario).
+4. D's PairContext map is closed: every PC + DataChannel `close()` is called once.
+5. D's local audio + video tracks are stopped (camera light off, OS mic indicator off).
+6. D's screen-share track (if active) is stopped.
+7. The mesh WebSocket is closed.
+8. D's mesh state slices (pairs, roster, chat, localMedia) reset to initial.
+9. D returns to the lobby (the `/mesh/demo` route shows the JoinForm) with no `error_occurred` event-log entries.
+10. A second click on the (now-removed) Leave button is a no-op — the FSM guard drops the duplicate request.
+
+Expect on A, B, C: same observable shape as §4.7, except the `peer_left.reason` is `graceful_leave` (and the roster `reason` is also `graceful_leave`). The departure surfaces within the same ≤ 10 s window — typically faster because `leave_room` reaches the server before D's WebSocket closes.
 
 ---
 
@@ -241,6 +273,24 @@ If you can time it, attempt a 5th join while the 4th is still in
 `joined` (i.e., before they grant camera permission). Expect: the 5th
 is rejected because the room has 4 reserved slots (the 4th's slot
 counts even pre-`media-ready`). EC-002 + Spec FR-011 verified.
+
+---
+
+## 5b. M12 cleanup checklist (T094 final)
+
+Run end-to-end after a 4-window mesh has reached all-pairs-connected:
+
+- [ ] **Graceful Leave (Path A / T089)** — §4.9 boxes 1–10 all green; no event-log error entries; `leave_room` observed exactly once on the wire.
+- [ ] **Ungraceful disconnect (Path B / T090 + T092)** — §4.7 boxes 1–9 all green within 10 s; healthy pairs unaffected; no `pair_failed` for unrelated pairs.
+- [ ] **Local signaling loss (Path D / T091)** — §4.8 boxes 1–7 all green within 5 s; banner copy matches verbatim; no auto-reconnect.
+- [ ] **4-browser full mesh (§4.2)** — SC-001 + SC-003 + L13 + L14 + L18 demonstrable.
+- [ ] **DataChannel chat fan-out (§4.4)** — SC-006 + L17.
+- [ ] **Concurrent screen share (§4.5)** — SC-009 + L16; sender count stays at `2 × (N − 1)` across toggles.
+- [ ] **Per-PC failure isolation (§4.6)** — SC-007 + L15; only the failed pair's tile shows `failed`.
+- [ ] **Reconnect-this-pair (§4.6)** — fresh `pairEpoch` rebuilds only the failed pair; healthy pairs do not flicker.
+- [ ] **001 regression** — every box in §6 ticked.
+
+If any row above is red, do NOT proceed to T096 acceptance.
 
 ---
 

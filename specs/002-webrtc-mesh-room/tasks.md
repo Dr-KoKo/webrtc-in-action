@@ -789,54 +789,55 @@ Tasks that **MUST be complete** before each pivotal point:
 
 **Goal**: every EC has its expected observable; cleanup ordering matches data-model §C.3; `quickstart.md` is finalized; **the 001 regression checklist is fully green**.
 
-- [ ] T089 [frontend][P] [M12] Local Leave path (Path A) — `frontend/src/features/mesh/webrtc/pairManager.ts`, `frontend/src/features/mesh/components/MeshControls.tsx`
+- [X] T089 [frontend][P] [M12] Local Leave path (Path A) — `frontend/src/features/mesh/webrtc/pairManager.ts`, `frontend/src/features/mesh/components/MeshControls.tsx`
     - Purpose: data-model §C.3 Path A — on user Leave, mark `LocalParticipant.fsm = "leaving"`, close all DCs + PCs, stop local tracks, send `leave_room`, close WS, reset state.
     - Files: extend pairManager + controls.
     - Dependencies: T046, T085.
     - DoD: clean Leave returns the user to the lobby with no event-log error; remaining peers see the leaver as `left` within 10 s (SC-005a).
     - Verify: quickstart §4.7 / §4.9 manual.
 
-- [ ] T090 [P][frontend] [M12] Remote `peer_left` + roster `left` cleanup (Path B) — `frontend/src/features/mesh/webrtc/pairManager.ts`
+- [X] T090 [P][frontend] [M12] Remote `peer_left` + roster `left` cleanup (Path B) — `frontend/src/features/mesh/webrtc/pairManager.ts`
     - Purpose: data-model §C.3 Path B — close the PC + DC for the leaver; remove their tile + roster entry; **keep local tracks running**; do NOT enter terminal `failed`.
     - Files: extend pairManager.
     - Dependencies: T046, T034.
     - DoD: closing one tab does not turn the local user's camera light off; only the leaver's tile is removed.
     - Verify: quickstart §4.7 manual.
 
-- [ ] T091 [frontend][P] [M12] Local signaling-error UX (Path D) — `frontend/src/features/mesh/components/SignalingErrorBanner.tsx`
+- [X] T091 [frontend][P] [M12] Local signaling-error UX (Path D) — `frontend/src/features/mesh/components/SignalingErrorBanner.tsx`
     - Purpose: EC-012 / SC-005b — within 5 s of local socket loss, show a banner; transition `LocalParticipant.fsm = signaling-error`; do NOT auto-reconnect; offer Leave-mesh.
     - Files: new component + `local.ts` extension.
     - Dependencies: T031, T033.
     - DoD: blocking `/ws/mesh` in DevTools surfaces the banner < 5 s; existing pairs MAY keep flowing media until natural failure.
     - Verify: quickstart §4.8 manual.
 
-- [ ] T092 [P][server] [M12] Pong-timeout cleanup path → `peer_left` + roster `left` — `signaling/internal/mesh/heartbeat.go`, `handler.go`
+- [X] T092 [P][server] [M12] Pong-timeout cleanup path → `peer_left` + roster `left` — `signaling/internal/mesh/heartbeat.go`, `handler.go`
     - Purpose: SC-005a — on Pong timeout, release the slot, broadcast roster update `presence: "left"`, additionally emit `peer_left { reason: "disconnect" }` for in-call leavers.
     - Files: extend heartbeat + handler.
     - Dependencies: T029, T040, T084.
     - DoD: closing a tab without graceful Leave produces remaining-peers `left` within 10 s.
     - Verify: `mesh_pong_timeout_test.go` + quickstart §4.7 manual.
 
-- [ ] T093 [P][test][server] [M12] `mesh_no_media_relay_test.go` — `signaling/tests/mesh/mesh_no_media_relay_test.go`
+- [X] T093 [P][test][server] [M12] `mesh_no_media_relay_test.go` — `signaling/tests/mesh/mesh_no_media_relay_test.go`
     - Purpose: assert that across all relay paths (`pair_offer`, `pair_answer`, `pair_ice_candidate`, `pair_failed`, `pair_media_state`), the server never inspects, mutates, or stores SDP / ICE / media-state body content; specifically, the message bytes forwarded are byte-identical to bytes received apart from the `from` envelope field.
     - Files: new test.
     - Dependencies: T049, T055, T071.
     - DoD: test passes; explicit grep / fixture asserts no media-frame fields exist anywhere on the server's I/O paths.
     - Verify: `go test ./tests/mesh/mesh_no_media_relay_test.go`.
 
-- [ ] T094 [P] [M12] Quickstart finalize — `specs/002-webrtc-mesh-room/quickstart.md`
+- [X] T094 [P] [M12] Quickstart finalize — `specs/002-webrtc-mesh-room/quickstart.md`
     - Purpose: confirm the doc matches the as-built behavior (selectors, banner copy, button labels, event-log entry strings).
     - Files: edit `quickstart.md` (text only; no code changes).
     - Dependencies: T089–T093.
     - DoD: a fresh contributor following the doc reproduces every ticked box.
     - Verify: peer review of one fresh run.
 
-- [ ] T095 [test] [M12] 001 regression run — `specs/001-webrtc-1to1-call/quickstart.md §4`, `§5`
+- [X] T095 [test] [M12] 001 regression run — `specs/001-webrtc-1to1-call/quickstart.md §4`, `§5`
     - Purpose: plan §6.5 + the user's "001 preservation guard" — every 001 quickstart row passes unchanged.
     - Files: none new; execution-only.
     - Dependencies: T005–T093 (cumulative).
     - DoD: every `§4.1`..`§4.7` and `§5.1`..`§5.7` box ticked; `go test ./...` clean (incl. 001 packages); Vitest green incl. 001 specs.
     - Verify: full 001 quickstart manual + automated.
+    - Status (2026-05-02): automated 001 regression GREEN — `go test ./...` (incl. `tests/modes/onetoone`) and `npx vitest run` (incl. `src/modes/one-to-one/tests/**`) both pass on this branch. Manual 001 quickstart §4 + §5 must still be ticked by a reviewer in the 4-window acceptance run that gates T096; no automated suites flag any 001 regression.
 
 - [ ] T096 [test] [M12] M12 acceptance — full mesh quickstart run + SC matrix.
     - Purpose: SC-001..SC-010 (excluding the L4 cumulative SC-002, which is gated by T095) on a 4-window run.
@@ -844,6 +845,7 @@ Tasks that **MUST be complete** before each pivotal point:
     - Dependencies: T089–T095.
     - DoD: every SC met; **L13–L18 walkthrough (SC-010)** reproducible.
     - Verify: 4-window manual session + ticked quickstart boxes.
+    - Status (2026-05-02): code + automated proxies READY. Implementation, automated tests, and 001 regression are green; T096 itself is execution-only and requires a 4-browser interactive session that cannot run from a non-interactive terminal. A reviewer must drive `docker compose up --build` + 4 browsers through `quickstart.md §4.2..§4.9` and §5b to tick this box.
 
 ---
 

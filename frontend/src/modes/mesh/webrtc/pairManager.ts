@@ -194,6 +194,13 @@ export interface MeshPairManager {
   readonly listChatPairs: () => MeshChatSendablePairView[];
   readonly snapshotContext: (pairId: string) => Readonly<MeshPairContext> | null;
   readonly closeAll: () => void;
+  // M12 / T090 — Path B: close only the PairContext local↔remotePeerId
+  // (DC, PC, iceBuffer) and drop the pair view. Idempotent — calling
+  // twice (e.g. on `peer_left` then on `mesh_roster_update presence=left`)
+  // is a no-op. Other PairContexts are NOT touched. Local tracks keep
+  // running. Returns true when a pair was found and closed, false when
+  // no pair existed for the supplied remote peer id.
+  readonly closePairByRemotePeerId: (remotePeerId: string) => boolean;
 }
 
 export function createMeshPairManager(
@@ -1289,14 +1296,46 @@ export function createMeshPairManager(
   function closeAll(): void {
     for (const ctx of pairs.values()) {
       try {
+        ctx.dc?.close();
+      } catch {
+        // ignore — already closed / never opened
+      }
+      try {
         ctx.pc.close();
       } catch {
         // ignore — already closed
       }
       ctx.iceBuffer.clear();
+      ctx.state = "closed";
       deps.dispatch({ type: "MESH_PAIR_REMOVED", pairId: ctx.pairId });
     }
     pairs.clear();
+  }
+
+  function closePairByRemotePeerId(remotePeerId: string): boolean {
+    let target: MeshPairContext | undefined;
+    for (const ctx of pairs.values()) {
+      if (ctx.remotePeerId === remotePeerId) {
+        target = ctx;
+        break;
+      }
+    }
+    if (!target) return false;
+    try {
+      target.dc?.close();
+    } catch {
+      // ignore — already closed / never opened
+    }
+    try {
+      target.pc.close();
+    } catch {
+      // ignore — already closed
+    }
+    target.iceBuffer.clear();
+    target.state = "closed";
+    pairs.delete(target.pairId);
+    deps.dispatch({ type: "MESH_PAIR_REMOVED", pairId: target.pairId });
+    return true;
   }
 
   return {
@@ -1314,5 +1353,6 @@ export function createMeshPairManager(
     listChatPairs,
     snapshotContext,
     closeAll,
+    closePairByRemotePeerId,
   };
 }

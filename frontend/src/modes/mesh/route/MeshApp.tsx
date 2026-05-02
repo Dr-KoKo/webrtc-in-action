@@ -21,6 +21,7 @@ import { MeshJoinForm } from "../components/JoinForm";
 import { MeshRoster } from "../components/MeshRoster";
 import { MeshEventLogPanel } from "../components/MeshEventLogPanel";
 import { MediaErrorBanner } from "../components/MediaErrorBanner";
+import { SignalingErrorBanner } from "../components/SignalingErrorBanner";
 import { LocalPreview } from "../components/LocalPreview";
 import { MeshMediaController } from "../webrtc/mediaAcquisition";
 import { RemoteTile } from "../components/RemoteTile";
@@ -73,6 +74,7 @@ function MeshAppLayout({ roomId }: { roomId: string }) {
           · fsm={local.fsm} · transport={local.signalingTransport}
         </p>
       </header>
+      <SignalingErrorBanner />
       <MediaErrorBanner />
       <MeshMediaController />
       <div className="mesh-app__body">

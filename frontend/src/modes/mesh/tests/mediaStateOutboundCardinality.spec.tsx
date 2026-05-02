@@ -48,6 +48,7 @@ vi.mock("../webrtc/mediaAcquisition", () => {
       cb(fakeStream as unknown as MediaStream);
       return () => {};
     },
+    publishLocalStream: () => {},
   };
 });
 

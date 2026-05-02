@@ -118,6 +118,15 @@ export function MeshSignalingProvider({
   useEffect(() => {
     const offMessage = client.onMessage((raw) => dispatcher(raw));
     const offTransport = client.onTransportChange((transport) => {
+      // Capture mid-session snapshot BEFORE the transport-changed
+      // action mutates fsm — so we can decide whether the drop should
+      // surface as a Path D signaling-error entry.
+      const before = stateRef.current.local.fsm;
+      const wasMidSession =
+        before !== "idle" &&
+        before !== "left" &&
+        before !== "leaving" &&
+        before !== "signaling-error";
       dispatch({ type: "MESH_TRANSPORT_CHANGED", transport });
       dispatch({
         type: "MESH_EVENT_APPEND",
@@ -127,6 +136,21 @@ export function MeshSignalingProvider({
           summary: `mesh signaling ${transport}`,
         }),
       });
+      // M12 / T091 (Path D / SC-005b) — emit one local-scoped
+      // `signaling_error` entry when the transport drops mid-session.
+      // The reducer simultaneously walks fsm → signaling-error so the
+      // banner appears on the next render. Do NOT auto-reconnect.
+      if ((transport === "closed" || transport === "error") && wasMidSession) {
+        dispatch({
+          type: "MESH_EVENT_APPEND",
+          entry: makeMeshEventEntry({
+            scope: "local",
+            type: "signaling_error",
+            summary: "signaling error: mesh /ws/mesh transport lost",
+            detail: { transport, previousFsm: before },
+          }),
+        });
+      }
     });
     return () => {
       offMessage();

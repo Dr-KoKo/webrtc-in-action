@@ -267,7 +267,7 @@ type StreamListener = (stream: MediaStream | null) => void;
 const streamListeners = new Set<StreamListener>();
 let currentLocalStream: MediaStream | null = null;
 
-function publishLocalStream(s: MediaStream | null) {
+export function publishLocalStream(s: MediaStream | null) {
   currentLocalStream = s;
   for (const l of streamListeners) l(s);
 }
