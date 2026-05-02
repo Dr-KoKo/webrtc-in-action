@@ -184,20 +184,3 @@ func (r *Room) AdmissionCounter() uint64 { return r.admissionCounter }
 // conversion. Caller must hold the lock when mutating; reads also
 // need it under the room model's concurrency contract.
 func (r *Room) PairLedger() *PairLedger { return r.pairs }
-
-// nextRosterSeq advances rosterSeq and returns the new value. Caller
-// must hold the lock. Used by every roster broadcast (§A.6) so the
-// monotonic invariant holds across snapshots and updates.
-func (r *Room) nextRosterSeq() uint64 {
-	r.rosterSeq++
-	return r.rosterSeq
-}
-
-// NextRosterSeq is the exported variant of nextRosterSeq, callable
-// by the signaling layer (which lives in a sibling package).
-func (r *Room) NextRosterSeq() uint64 { return r.nextRosterSeq() }
-
-// CurrentRosterSeq returns the most recently emitted serverSeq value
-// (or 0 if no roster broadcast has been emitted yet). Caller must
-// hold the lock.
-func (r *Room) CurrentRosterSeq() uint64 { return r.rosterSeq }
