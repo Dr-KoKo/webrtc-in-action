@@ -28,7 +28,7 @@ import {
   meshRosterReducer,
   type MeshRosterAction,
 } from "../state/roster";
-import type { MeshClientMessage } from "../signaling/schema";
+import type { MeshClientMessage } from "../protocol/schema";
 import type { MeshRootAction } from "../state";
 
 const ROOM_ID = "demo";

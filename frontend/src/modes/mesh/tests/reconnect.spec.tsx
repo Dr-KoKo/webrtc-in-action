@@ -31,7 +31,7 @@ import {
   makePCFactory,
   type FakeRTCPeerConnection,
 } from "./pairTestHelpers";
-import type { MeshClientMessage } from "../signaling/schema";
+import type { MeshClientMessage } from "../protocol/schema";
 import { MeshStoreProvider } from "../state";
 import { ReconnectButton } from "../components/ReconnectButton";
 

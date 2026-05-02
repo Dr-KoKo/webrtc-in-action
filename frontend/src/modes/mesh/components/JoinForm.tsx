@@ -12,7 +12,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import {
   MESH_CONTRACT_VERSION,
   ROOM_ID_REGEX,
-} from "../signaling/schema";
+} from "../protocol/schema";
 import { useMeshDispatch, useMeshState } from "../state";
 import { makeMeshEventEntry } from "../state/eventLog";
 import type { MeshSignalingClient } from "../signaling/client";

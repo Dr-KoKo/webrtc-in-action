@@ -21,7 +21,7 @@
 
 import { useEffect, useRef } from "react";
 import type { MeshPairView } from "../state/pairs";
-import type { Presence } from "../signaling/schema";
+import type { Presence } from "../protocol/schema";
 import {
   defaultRemoteMediaState,
   type RemoteMediaState,

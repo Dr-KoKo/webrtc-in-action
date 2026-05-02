@@ -7,7 +7,7 @@
 import { selectRosterAsArray } from "../state/roster";
 import { useMeshState } from "../state";
 import type { MeshLocalParticipant } from "../state/local";
-import type { Presence } from "../signaling/schema";
+import type { Presence } from "../protocol/schema";
 
 const PRESENCE_LABEL: Record<Presence, string> = {
   joined: "joined",

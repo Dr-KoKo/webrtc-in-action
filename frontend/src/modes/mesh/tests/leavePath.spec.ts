@@ -20,7 +20,7 @@ import {
   type MeshLocalAction,
 } from "../state/local";
 import type { MeshPairManager } from "../webrtc/pairManager";
-import type { MeshClientMessage } from "../signaling/schema";
+import type { MeshClientMessage } from "../protocol/schema";
 import type { MeshRootAction } from "../state";
 
 class FakeTrack {

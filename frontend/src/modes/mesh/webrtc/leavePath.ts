@@ -30,7 +30,7 @@ import { makeMeshEventEntry } from "../state/eventLog";
 import {
   MESH_CONTRACT_VERSION,
   type MeshClientMessage,
-} from "../signaling/schema";
+} from "../protocol/schema";
 import type { MeshPairManager } from "./pairManager";
 
 export interface MeshLeavePathDeps {

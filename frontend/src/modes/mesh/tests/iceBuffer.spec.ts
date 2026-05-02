@@ -20,7 +20,7 @@ import {
   makePCFactory,
   type FakeRTCPeerConnection,
 } from "./pairTestHelpers";
-import type { MeshClientMessage } from "../signaling/schema";
+import type { MeshClientMessage } from "../protocol/schema";
 
 const ROOM_ID = "demo";
 const SELF_PEER = "00000000-0000-4000-8000-000000000001";

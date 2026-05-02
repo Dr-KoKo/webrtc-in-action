@@ -21,7 +21,7 @@
 
 import { useEffect, useRef } from "react";
 import { acquireLocalMedia } from "@/shared/webrtc/media-acquisition";
-import { MESH_CONTRACT_VERSION, mediaFailedPayloadSchema } from "../signaling/schema";
+import { MESH_CONTRACT_VERSION, mediaFailedPayloadSchema } from "../protocol/schema";
 import { useMeshDispatch, useMeshState } from "../state";
 import { makeMeshEventEntry } from "../state/eventLog";
 import { useMeshSignalingClient } from "../signaling/provider";

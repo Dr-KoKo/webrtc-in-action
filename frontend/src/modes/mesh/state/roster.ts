@@ -16,7 +16,7 @@ import type {
   MicState,
   Presence,
   ScreenShareState,
-} from "../signaling/schema";
+} from "../protocol/schema";
 
 // RemoteMediaState — last `pair_media_state` snapshot received for the
 // peer (M9 / FR-033). Until the first message arrives, every field is
