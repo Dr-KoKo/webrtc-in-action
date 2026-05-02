@@ -18,7 +18,6 @@
 
 import type { Dispatch } from "react";
 import type { RootAction } from "../state";
-import { makeEventLogEntry } from "../state/event-log";
 import {
   CONTRACT_VERSION,
   signalingMessageSchema,
@@ -30,11 +29,18 @@ import {
   type PeerPresenceChangedMessage,
   type SignalingMessage,
 } from "../protocol/schema";
+import { makeLog, type OneToOneLog } from "../webrtc/log";
 import type { SignalingClient } from "./client";
 
 interface DispatcherDeps {
   dispatch: Dispatch<RootAction>;
   client: Pick<SignalingClient, "send" | "close"> | null;
+}
+
+interface DispatcherCtx {
+  dispatch: Dispatch<RootAction>;
+  client: Pick<SignalingClient, "send" | "close"> | null;
+  log: OneToOneLog;
 }
 
 type ClientErrorCode = Extract<
@@ -49,12 +55,16 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 export function createSignalingDispatcher(deps: DispatcherDeps) {
+  const log = makeLog((entry) =>
+    deps.dispatch({ type: "EVENT_LOG_APPEND", entry }),
+  );
+  const ctx: DispatcherCtx = { ...deps, log };
   return function handleInbound(raw: string): void {
     let json: unknown;
     try {
       json = JSON.parse(raw);
     } catch {
-      logError(deps, "malformed", "invalid JSON payload");
+      logError(ctx, "malformed", "invalid JSON payload");
       return;
     }
 
@@ -63,55 +73,47 @@ export function createSignalingDispatcher(deps: DispatcherDeps) {
     // never emit a `["v"]` issue, which would silently demote an
     // unsupported-version message to `malformed`.
     if (isPlainObject(json) && "v" in json && json.v !== CONTRACT_VERSION) {
-      logError(deps, "unsupported_version", `unsupported contract version: ${String(json.v)}`);
+      logError(ctx, "unsupported_version", `unsupported contract version: ${String(json.v)}`);
       return;
     }
 
     const parsed = signalingMessageSchema.safeParse(json);
     if (!parsed.success) {
-      logError(deps, "malformed", parsed.error.message);
+      logError(ctx, "malformed", parsed.error.message);
       return;
     }
 
-    dispatchValidated(deps, parsed.data);
+    dispatchValidated(ctx, parsed.data);
   };
 }
 
 function dispatchValidated(
-  { dispatch, client }: DispatcherDeps,
+  { dispatch, client, log }: DispatcherCtx,
   msg: SignalingMessage,
 ): void {
   switch (msg.type) {
     case "join_accepted": {
       const accepted = msg as JoinAcceptedMessage;
       dispatch({ type: "JOIN_ACCEPTED", message: accepted });
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "room_joined",
-          direction: "system",
-          summary: `room joined (peerId=${accepted.payload.peerId.slice(
-            0,
-            8,
-          )}…, admissionOrder=${accepted.payload.admissionOrder})`,
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: "room_joined",
+        direction: "system",
+        summary: `room joined (peerId=${accepted.payload.peerId.slice(
+          0,
+          8,
+        )}…, admissionOrder=${accepted.payload.admissionOrder})`,
       });
       return;
     }
     case "join_rejected": {
       const rejected = msg as JoinRejectedMessage;
       dispatch({ type: "JOIN_REJECTED", message: rejected });
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "error_occurred",
-          direction: "system",
-          summary: `join rejected: ${rejected.payload.message}`,
-          reason: rejected.payload.reason,
-          code: rejected.payload.result,
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: "error_occurred",
+        direction: "system",
+        summary: `join rejected: ${rejected.payload.message}`,
+        reason: rejected.payload.reason,
+        code: rejected.payload.result,
       });
       // Contract §3.3: client receipt of join_rejected shows the
       // error, logs it, closes the WS, and returns to idle. The
@@ -135,15 +137,11 @@ function dispatchValidated(
       ) {
         dispatch({ type: "REMOTE_MEDIA_STATE_CLEARED" });
       }
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "peer_presence_changed",
-          direction: "system",
-          summary: `peer ${shortenId(presence.payload.subjectPeerId)} → ${presence.payload.presence} (${presence.payload.reason})`,
-          reason: presence.payload.reason,
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: "peer_presence_changed",
+        direction: "system",
+        summary: `peer ${shortenId(presence.payload.subjectPeerId)} → ${presence.payload.presence} (${presence.payload.reason})`,
+        reason: presence.payload.reason,
       });
       return;
     }
@@ -154,16 +152,12 @@ function dispatchValidated(
       // branch is logged here; the remaining-peer cleanup lands in a
       // later phase (data-model §B.1 Failure-path rules).
       dispatch({ type: "PARTICIPANT_RELEASED", message: released });
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "participant_released",
-          direction: "system",
-          summary: `slot released (${released.payload.reason})`,
-          reason: released.payload.reason,
-          code: released.payload.result,
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: "participant_released",
+        direction: "system",
+        summary: `slot released (${released.payload.reason})`,
+        reason: released.payload.reason,
+        code: released.payload.result,
       });
       return;
     }
@@ -191,14 +185,10 @@ function dispatchValidated(
       // One event-log entry per inbound message (T073 DoD). Direction
       // is "remote" because the message originated on the peer; the
       // summary is safe (enum values only — no PII).
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "media_state",
-          direction: "remote",
-          summary: `media_state received (mic=${triplet.microphone}, camera=${triplet.camera}, screen=${triplet.screenShare})`,
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: "media_state",
+        direction: "remote",
+        summary: `media_state received (mic=${triplet.microphone}, camera=${triplet.camera}, screen=${triplet.screenShare})`,
       });
       return;
     }
@@ -209,42 +199,30 @@ function dispatchValidated(
     case "media_failed":
     case "peer_left":
     case "leave_room":
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: msg.type,
-          direction: "system",
-          summary: `received ${msg.type} (future-phase handler)`,
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: msg.type,
+        direction: "system",
+        summary: `received ${msg.type} (future-phase handler)`,
       });
       return;
     case "error": {
       const err = msg as ErrorMessage;
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "error_occurred",
-          direction: "remote",
-          summary: `server error: ${err.payload.message}`,
-          code: err.payload.code,
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: "error_occurred",
+        direction: "remote",
+        summary: `server error: ${err.payload.message}`,
+        code: err.payload.code,
       });
       return;
     }
     // join_room, leave_room — these are outbound shapes; if we see them
     // inbound, fall through to ignore (logged by per-type branch above).
     case "join_room":
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "error_occurred",
-          direction: "system",
-          summary: "unexpected inbound join_room",
-          code: "malformed",
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: "error_occurred",
+        direction: "system",
+        summary: "unexpected inbound join_room",
+        code: "malformed",
       });
       return;
     default: {
@@ -255,21 +233,11 @@ function dispatchValidated(
 }
 
 function logError(
-  { dispatch, client }: DispatcherDeps,
+  { client, log }: DispatcherCtx,
   code: ClientErrorCode,
   message: string,
 ): void {
-  dispatch({
-    type: "EVENT_LOG_APPEND",
-    entry: makeEventLogEntry({
-      type: "error_occurred",
-      direction: "system",
-      summary: `error occurred: ${code}`,
-      code,
-      reason: message.slice(0, 120),
-      transport: "signaling",
-    }),
-  });
+  log.error({ code, message });
   if (client) {
     try {
       // Minimal v1 error envelope. `roomId` is omitted because an

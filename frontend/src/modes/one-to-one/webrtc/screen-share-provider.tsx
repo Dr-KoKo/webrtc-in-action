@@ -25,8 +25,8 @@ import {
 } from "react";
 import { useDispatch, useRootState } from "../state";
 import { useSignalingClient } from "../signaling/provider";
-import { makeEventLogEntry } from "../state/event-log";
 import { CONTRACT_VERSION } from "../types/contract";
+import { makeLog } from "./log";
 import { readLocalMediaTriplet } from "@/shared/webrtc/media-acquisition";
 import { useLocalMedia } from "./local-media-provider";
 import { usePeerConnection } from "./peer-connection-provider";
@@ -125,14 +125,12 @@ export function ScreenShareProvider({ children }: ScreenShareProviderProps) {
             roomId: s.roomId as string,
             payload: triplet,
           });
-          dispatchRef.current({
-            type: "EVENT_LOG_APPEND",
-            entry: makeEventLogEntry({
-              type: "media_state",
-              direction: "local",
-              summary: `media_state sent (mic=${triplet.microphone}, camera=${triplet.camera}, screen=${triplet.screenShare})`,
-              transport: "signaling",
-            }),
+          makeLog((entry) =>
+            dispatchRef.current({ type: "EVENT_LOG_APPEND", entry }),
+          ).signaling({
+            type: "media_state",
+            direction: "local",
+            summary: `media_state sent (mic=${triplet.microphone}, camera=${triplet.camera}, screen=${triplet.screenShare})`,
           });
         } catch {
           // Best-effort; the WS may have closed. The server will

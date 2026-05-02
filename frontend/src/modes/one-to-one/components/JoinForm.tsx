@@ -27,7 +27,7 @@ import { CONTRACT_VERSION, ROOM_ID_REGEX } from "../types/contract";
 import { useDispatch, useRootState } from "../state";
 import { useSignalingClient } from "../signaling/provider";
 import { useCleanup } from "../webrtc/cleanup";
-import { makeEventLogEntry } from "../state/event-log";
+import { useLog } from "../webrtc/log";
 
 // Best-effort signaling URL. Defaults to the same origin as the page
 // so the frontend's `/ws` proxy (vite dev's server.proxy + vite
@@ -46,6 +46,7 @@ function resolveSignalingUrl(): string {
 export function JoinForm() {
   const client = useSignalingClient();
   const dispatch = useDispatch();
+  const log = useLog();
   const { session } = useRootState();
   const { leaveSession } = useCleanup();
   const [roomId, setRoomId] = useState("");
@@ -71,15 +72,11 @@ export function JoinForm() {
     try {
       await client.connect(resolveSignalingUrl());
     } catch (err) {
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "error_occurred",
-          direction: "local",
-          summary: `ws connect failed: ${(err as Error).message ?? "unknown"}`,
-          code: "transport_error",
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: "error_occurred",
+        direction: "local",
+        summary: `ws connect failed: ${(err as Error).message ?? "unknown"}`,
+        code: "transport_error",
       });
       dispatch({ type: "LEAVE_REQUESTED" });
       return;
@@ -94,25 +91,17 @@ export function JoinForm() {
         requestId,
         payload: {},
       });
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "join_room_sent",
-          direction: "local",
-          summary: `join_room sent (roomId=${targetRoomId})`,
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: "join_room_sent",
+        direction: "local",
+        summary: `join_room sent (roomId=${targetRoomId})`,
       });
     } catch (err) {
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "error_occurred",
-          direction: "local",
-          summary: `join_room send failed: ${(err as Error).message ?? "unknown"}`,
-          code: "transport_error",
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: "error_occurred",
+        direction: "local",
+        summary: `join_room send failed: ${(err as Error).message ?? "unknown"}`,
+        code: "transport_error",
       });
       dispatch({ type: "LEAVE_REQUESTED" });
     }
@@ -125,15 +114,11 @@ export function JoinForm() {
     if (!ROOM_ID_REGEX.test(trimmed)) {
       const message = "Room ID must match ^[A-Za-z0-9._-]{1,64}$.";
       setLocalError(message);
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "error_occurred",
-          direction: "local",
-          summary: `invalid room id: ${trimmed || "(empty)"}`,
-          code: "invalid_room_id",
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: "error_occurred",
+        direction: "local",
+        summary: `invalid room id: ${trimmed || "(empty)"}`,
+        code: "invalid_room_id",
       });
       return;
     }
@@ -147,14 +132,10 @@ export function JoinForm() {
     if (!previousRoomId) return;
     setLocalError(null);
     dispatch({ type: "RETRY_REQUESTED" });
-    dispatch({
-      type: "EVENT_LOG_APPEND",
-      entry: makeEventLogEntry({
-        type: "retry_requested",
-        direction: "local",
-        summary: `retry media acquisition (roomId=${previousRoomId})`,
-        transport: "signaling",
-      }),
+    log.signaling({
+      type: "retry_requested",
+      direction: "local",
+      summary: `retry media acquisition (roomId=${previousRoomId})`,
     });
     await runJoinFlow(previousRoomId);
   }
@@ -164,14 +145,10 @@ export function JoinForm() {
     // `useCleanup().leaveSession()`; the button's job is just to fire
     // the intent. The old inline leave_room send is now part of
     // leaveSession's step 5 (data-model §C.5).
-    dispatch({
-      type: "EVENT_LOG_APPEND",
-      entry: makeEventLogEntry({
-        type: "leave_requested",
-        direction: "local",
-        summary: "user clicked Leave",
-        transport: "signaling",
-      }),
+    log.signaling({
+      type: "leave_requested",
+      direction: "local",
+      summary: "user clicked Leave",
     });
     await leaveSession();
   }

@@ -16,7 +16,7 @@ import {
   type ReactNode,
 } from "react";
 import { useDispatch } from "../state";
-import { makeEventLogEntry } from "../state/event-log";
+import { useLog } from "../webrtc/log";
 import { createSignalingClient, type SignalingClient } from "./client";
 import { createSignalingDispatcher } from "./dispatcher";
 
@@ -35,6 +35,7 @@ export function SignalingProvider({
   client?: SignalingClient;
 }) {
   const dispatch = useDispatch();
+  const log = useLog();
   // Cache the client + dispatcher in a ref so hot-reloading doesn't
   // rebuild them. `useMemo` alone would be fine too, but a ref also
   // keeps the reference stable across StrictMode's double-invocation.
@@ -50,21 +51,17 @@ export function SignalingProvider({
     const unsubMsg = value.client.onMessage((raw) => value.handleInbound(raw));
     const unsubTransport = value.client.onTransportChange((transport) => {
       dispatch({ type: "TRANSPORT_CHANGED", transport });
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "transport_changed",
-          direction: "system",
-          summary: `signaling transport → ${transport}`,
-          transport: "signaling",
-        }),
+      log.signaling({
+        type: "transport_changed",
+        direction: "system",
+        summary: `signaling transport → ${transport}`,
       });
     });
     return () => {
       unsubMsg();
       unsubTransport();
     };
-  }, [dispatch, value]);
+  }, [dispatch, log, value]);
 
   const ctx = useMemo(() => value, [value]);
   return (

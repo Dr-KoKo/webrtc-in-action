@@ -28,9 +28,9 @@ import {
   type ReactNode,
 } from "react";
 import { useDispatch, useRootState } from "../state";
-import { makeEventLogEntry } from "../state/event-log";
 import { useSignalingClient } from "../signaling/provider";
 import { CONTRACT_VERSION } from "../types/contract";
+import { useLog } from "./log";
 import {
   acquireLocalMedia,
   readLocalMediaTriplet,
@@ -76,6 +76,7 @@ export function LocalMediaProvider({
   const [streamVersion, setStreamVersion] = useState(0);
   const { session } = useRootState();
   const dispatch = useDispatch();
+  const log = useLog();
   const client = useSignalingClient();
 
   // Stable getter — identity doesn't change between renders.
@@ -103,13 +104,10 @@ export function LocalMediaProvider({
     let cancelled = false;
 
     if (sessionState === "pending-media" && streamRef.current === null) {
-      dispatch({
-        type: "EVENT_LOG_APPEND",
-        entry: makeEventLogEntry({
-          type: "media_acquire_started",
-          direction: "local",
-          summary: "getUserMedia({audio:true, video:true}) requested",
-        }),
+      log.system({
+        type: "media_acquire_started",
+        direction: "local",
+        summary: "getUserMedia({audio:true, video:true}) requested",
       });
       void (async () => {
         const outcome = await acquireLocalMedia(acquireOptions);
@@ -134,27 +132,19 @@ export function LocalMediaProvider({
           });
           sendMediaReady(roomId);
           dispatch({ type: "MEDIA_READY_SENT" });
-          dispatch({
-            type: "EVENT_LOG_APPEND",
-            entry: makeEventLogEntry({
-              type: "media_ready_sent",
-              direction: "local",
-              summary: "media_ready sent (audio+video ready)",
-              transport: "signaling",
-            }),
+          log.signaling({
+            type: "media_ready_sent",
+            direction: "local",
+            summary: "media_ready sent (audio+video ready)",
           });
         } else {
           sendMediaFailed(roomId, outcome.reason, outcome.detail);
-          dispatch({
-            type: "EVENT_LOG_APPEND",
-            entry: makeEventLogEntry({
-              type: "media_failed_sent",
-              direction: "local",
-              summary: `media_failed sent (${outcome.reason})`,
-              reason: outcome.reason,
-              ...(outcome.detail !== undefined ? { code: outcome.detail } : {}),
-              transport: "signaling",
-            }),
+          log.signaling({
+            type: "media_failed_sent",
+            direction: "local",
+            summary: `media_failed sent (${outcome.reason})`,
+            reason: outcome.reason,
+            ...(outcome.detail !== undefined ? { code: outcome.detail } : {}),
           });
           // We do NOT transition to media-error locally — the server
           // owns that transition via participant_released.
@@ -185,7 +175,7 @@ export function LocalMediaProvider({
     // We deliberately omit `acquireOptions` — it is a test seam and
     // changing it mid-session is not a supported operation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionState, roomId, dispatch, release, setStream]);
+  }, [sessionState, roomId, dispatch, log, release, setStream]);
 
   // Release on provider unmount (final safety net for hot-reload /
   // module disposal — React's StrictMode will also run this extra

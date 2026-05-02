@@ -17,10 +17,10 @@
 
 import { useCallback } from "react";
 import { useDispatch, useRootState } from "../state";
-import { makeEventLogEntry } from "../state/event-log";
 import type { MediaKind } from "../state/media";
 import { useSignalingClient } from "../signaling/provider";
 import { CONTRACT_VERSION } from "../types/contract";
+import { useLog } from "../webrtc/log";
 import { useLocalMedia } from "../webrtc/local-media-provider";
 import {
   readLocalMediaTriplet,
@@ -30,6 +30,7 @@ import {
 export function MediaControls() {
   const { getStream, hasStream, streamVersion } = useLocalMedia();
   const dispatch = useDispatch();
+  const log = useLog();
   const client = useSignalingClient();
   const { media, session } = useRootState();
   // streamVersion is referenced so MediaControls re-renders whenever
@@ -66,14 +67,10 @@ export function MediaControls() {
           roomId: session.roomId as string,
           payload: triplet,
         });
-        dispatch({
-          type: "EVENT_LOG_APPEND",
-          entry: makeEventLogEntry({
-            type: "media_state",
-            direction: "local",
-            summary: `media_state sent (mic=${triplet.microphone}, camera=${triplet.camera}, screen=${triplet.screenShare})`,
-            transport: "signaling",
-          }),
+        log.signaling({
+          type: "media_state",
+          direction: "local",
+          summary: `media_state sent (mic=${triplet.microphone}, camera=${triplet.camera}, screen=${triplet.screenShare})`,
         });
       } catch {
         // Best-effort: the WS may have just closed. The server will
@@ -84,6 +81,7 @@ export function MediaControls() {
       client,
       dispatch,
       getStream,
+      log,
       media.local.camera,
       media.local.microphone,
       media.local.screenShare,
