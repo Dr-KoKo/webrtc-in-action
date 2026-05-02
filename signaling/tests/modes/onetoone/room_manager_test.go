@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -15,7 +16,8 @@ import (
 // broadcast logic.
 type stubConn struct{}
 
-func (stubConn) SendJSON(_ any) error { return nil }
+func (stubConn) BaseContext() context.Context            { return context.Background() }
+func (stubConn) SendJSON(_ context.Context, _ any) error { return nil }
 
 func newTestManagerWithSequentialIDs() *room.RoomManager {
 	m := room.NewRoomManager()

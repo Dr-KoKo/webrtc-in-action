@@ -13,6 +13,7 @@ import (
 
 	"webrtc-lab/signaling/internal/modes/onetoone/protocol"
 	"webrtc-lab/signaling/internal/modes/onetoone/room"
+	"webrtc-lab/signaling/internal/modes/onetoone/signaling"
 	"webrtc-lab/signaling/internal/shared/config"
 	"webrtc-lab/signaling/internal/shared/heartbeat"
 	"webrtc-lab/signaling/internal/shared/wsserver"
@@ -22,7 +23,7 @@ import (
 // the room manager and ICE config; the WebSocket session lifecycle
 // (Accept, conn-id, heartbeat, read loop, write mutex, error
 // classification, teardown) lives in internal/shared/wsserver. Each
-// session's mode-specific state lives on oneToOneConn below.
+// session's mode-specific state lives on Session1to1 below.
 //
 // NewHandler returns *Handler so existing tests can mutate
 // h.Heartbeat AFTER construction (heartbeat_test.go:62) — the
@@ -84,7 +85,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // NewSession satisfies wsserver.Mode — one call per accepted WS.
 func (h *Handler) NewSession(sess wsserver.Session, log *slog.Logger) (wsserver.SessionHandler, error) {
-	return &oneToOneConn{sess: sess, handler: h, log: log}, nil
+	return &Session1to1{sess: sess, handler: h, log: log}, nil
 }
 
 // iceServersFromConfig converts the shared internal protocol.IceServer
@@ -102,11 +103,11 @@ func iceServersFromConfig(in []config.IceServer) []protocol.IceServer {
 	return out
 }
 
-// oneToOneConn is the per-WS 001 state. Implements
+// Session1to1 is the per-WS 001 state. Implements
 // wsserver.SessionHandler. Transport-level fields (the
 // *websocket.Conn, write mutex, conn-id) live on the wrapped
 // wsserver.Session; this struct keeps only the 001 protocol state.
-type oneToOneConn struct {
+type Session1to1 struct {
 	sess     wsserver.Session
 	handler  *Handler
 	log      *slog.Logger
@@ -115,9 +116,9 @@ type oneToOneConn struct {
 	released atomic.Bool // flipped true once the slot has been released
 }
 
-// sendJSON marshals v as a text frame and forwards to
+// SendJSON marshals v as a text frame and forwards to
 // wsserver.Session, which serializes the write under its mutex.
-func (c *oneToOneConn) sendJSON(ctx context.Context, v any) error {
+func (c *Session1to1) SendJSON(ctx context.Context, v any) error {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -131,7 +132,7 @@ func (c *oneToOneConn) sendJSON(ctx context.Context, v any) error {
 // the read loop continues. Dispatch errors are already surfaced
 // to the client via writeError inside the per-type handlers; we
 // log and return nil for the same continue-on-non-fatal reason.
-func (c *oneToOneConn) HandleFrame(ctx context.Context, frame []byte) error {
+func (c *Session1to1) HandleFrame(ctx context.Context, frame []byte) error {
 	decoded, derr := protocol.Decode(frame)
 	if derr != nil {
 		var de *protocol.DecodeError
@@ -163,9 +164,14 @@ func (c *oneToOneConn) HandleFrame(ctx context.Context, frame []byte) error {
 // `peer_id` slog.Attr that gets merged into the disconnect log
 // line for admitted connections (matches pre-refactor lines
 // 182-184).
-func (c *oneToOneConn) OnDisconnect(transportReason string) []slog.Attr {
+//
+// Uses ReleaseOnce so the cleanup runs at most once even if a
+// graceful leave_room and a disconnect race; the read-goroutine
+// ordering already prevents this in practice, but the CAS makes
+// it airtight.
+func (c *Session1to1) OnDisconnect(transportReason string) []slog.Attr {
 	_ = transportReason
-	if c.peerID != "" && !c.released.Load() {
+	if c.peerID != "" && c.ReleaseOnce() {
 		c.handler.releaseAndNotify(context.Background(), c, "disconnect")
 	}
 	if c.peerID != "" {
@@ -174,23 +180,68 @@ func (c *oneToOneConn) OnDisconnect(transportReason string) []slog.Attr {
 	return nil
 }
 
-// roomConn adapts a *oneToOneConn to the room.Conn interface used
-// by the room package to send messages to a participant. The
-// per-session base context (cancelled at teardown) is read from
-// the wrapped wsserver.Session at send time — replaces the
-// pre-refactor baseCtx field captured at admission.
-type roomConn struct {
-	c *oneToOneConn
+// ID returns the per-WS connection identifier assigned by wsserver.
+func (c *Session1to1) ID() string { return c.sess.ID() }
+
+// CloseNormal sends a normal-closure frame with the given reason.
+// Hides coder/websocket.StatusCode from the signaling layer.
+func (c *Session1to1) CloseNormal(reason string) error {
+	return c.sess.Close(websocket.StatusNormalClosure, reason)
 }
 
-func (r *roomConn) SendJSON(v any) error {
-	return r.c.sendJSON(r.c.sess.BaseContext(), v)
+// BaseContext returns the per-session base context (cancelled at
+// teardown). Async fan-outs (presence, peer_left) thread this ctx
+// when writing to other sessions whose lifetime is unrelated to
+// the caller's request ctx.
+func (c *Session1to1) BaseContext() context.Context { return c.sess.BaseContext() }
+
+// State returns a snapshot of the per-conn join/release state.
+// Returned by value so the caller cannot mutate the session
+// indirectly.
+func (c *Session1to1) State() signaling.ConnState {
+	return signaling.ConnState{
+		PeerID:   c.peerID,
+		RoomID:   c.roomID,
+		Released: c.released.Load(),
+	}
 }
+
+// MarkJoined records the peerID/roomID pair after the room manager
+// admits this connection. Called once per successful admission
+// before any verb fires.
+func (c *Session1to1) MarkJoined(peerID, roomID string) {
+	c.peerID = peerID
+	c.roomID = roomID
+}
+
+// ClearJoined wipes the joined identifiers after release. Must
+// only be called after a successful ReleaseOnce; the ordering is
+// codified in specs/signaling-architecture.md §3.4.
+func (c *Session1to1) ClearJoined() {
+	c.peerID = ""
+	c.roomID = ""
+}
+
+// ReleaseOnce atomically transitions released from false to true.
+// Returns true on the first call (the caller has claimed cleanup
+// duty), false thereafter. Replaces the pre-refactor pattern of
+// `if !released.Load() { releaseAndNotify; released.Store(true) }`
+// with a TOCTOU-free single CAS.
+func (c *Session1to1) ReleaseOnce() bool {
+	return c.released.CompareAndSwap(false, true)
+}
+
+// ResetReleaseLatch flips released back to false so a subsequent
+// disconnect on the SAME connection (e.g. after a media_failed
+// retry) still triggers cleanup. The only valid call site is the
+// media_failed retry path; calling it elsewhere re-arms a latch
+// that does not need re-arming.
+func (c *Session1to1) ResetReleaseLatch() { c.released.Store(false) }
 
 // dispatch routes a decoded envelope to the correct handler for the
 // current phase. Types not yet wired are rejected with an `error`
 // frame so a malformed client cannot drive state we have not built.
-func (h *Handler) dispatch(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
+func (h *Handler) dispatch(ctx context.Context, cc *Session1to1, d *protocol.Decoded) error {
 	switch d.Envelope.Type {
 	case protocol.TypeJoinRoom:
 		return h.handleJoinRoom(ctx, cc, d)
@@ -228,7 +279,7 @@ func (h *Handler) dispatch(ctx context.Context, cc *oneToOneConn, d *protocol.De
 	return nil
 }
 
-func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
+func (h *Handler) handleJoinRoom(ctx context.Context, cc *Session1to1, d *protocol.Decoded) error {
 	if cc.peerID != "" {
 		h.writeError(ctx, cc, &protocol.DecodeError{
 			Code:    protocol.CodeAlreadyJoined,
@@ -248,7 +299,7 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *proto
 		return nil
 	}
 
-	outcome := h.Rooms.Admit(roomID, &roomConn{c: cc})
+	outcome := h.Rooms.Admit(roomID, cc)
 
 	switch outcome.Result {
 	case room.JoinRejectedInvalidRoom:
@@ -264,8 +315,8 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *proto
 		return nil
 
 	case room.JoinAccepted:
-		cc.peerID = outcome.Participant.PeerID
-		cc.roomID = outcome.Participant.RoomID
+		cc.MarkJoined(outcome.Participant.PeerID, outcome.Participant.RoomID)
+
 	}
 
 	// Snapshot the remote peer (if any) under the room lock so the
@@ -296,7 +347,7 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *proto
 		TS:        time.Now().UnixMilli(),
 		Payload:   payload,
 	}
-	if err := cc.sendJSON(ctx, env); err != nil {
+	if err := cc.SendJSON(ctx, env); err != nil {
 		h.Log.Warn("join_accepted send failed",
 			slog.String("conn_id", cc.sess.ID()), slog.String("error", err.Error()))
 	}
@@ -316,7 +367,7 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *oneToOneConn, d *proto
 	return nil
 }
 
-func (h *Handler) handleLeaveRoom(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
+func (h *Handler) handleLeaveRoom(ctx context.Context, cc *Session1to1, d *protocol.Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &protocol.DecodeError{
 			Code:    protocol.CodeNotInRoom,
@@ -331,10 +382,9 @@ func (h *Handler) handleLeaveRoom(ctx context.Context, cc *oneToOneConn, d *prot
 	// cc identifiers is defense-in-depth — the read loop exits on
 	// the next Read anyway once the close frame is sent, and the
 	// deferred ServeHTTP cleanup already guards against
-	// double-release via cc.released.
-	cc.peerID = ""
-	cc.roomID = ""
-	_ = cc.sess.Close(websocket.StatusNormalClosure, "graceful_leave")
+	// double-release via the released latch.
+	cc.ClearJoined()
+	_ = cc.CloseNormal("graceful_leave")
 	return nil
 }
 
@@ -411,7 +461,7 @@ func classifyDeparture(p *room.Participant, reason string) departureClassificati
 // releaseAndNotify(_, cc, "disconnect"). Classification + emit logic
 // is therefore shared across graceful leave_room, WS-close, and
 // heartbeat-timeout paths — one source of truth.
-func (h *Handler) releaseAndNotify(_ context.Context, cc *oneToOneConn, reason string) {
+func (h *Handler) releaseAndNotify(_ context.Context, cc *Session1to1, reason string) {
 	roomID := cc.roomID
 	peerID := cc.peerID
 
@@ -419,7 +469,7 @@ func (h *Handler) releaseAndNotify(_ context.Context, cc *oneToOneConn, reason s
 	// so classification is consistent with the release.
 	rm := h.Rooms.Room(roomID)
 	if rm == nil {
-		cc.released.Store(true)
+		cc.ReleaseOnce()
 		return
 	}
 
@@ -429,7 +479,7 @@ func (h *Handler) releaseAndNotify(_ context.Context, cc *oneToOneConn, reason s
 	rm.Unlock()
 
 	outcome := h.Rooms.Release(roomID, peerID)
-	cc.released.Store(true)
+	cc.ReleaseOnce()
 
 	if outcome.Departing == nil {
 		// Either the slot was already gone (double-release race) or
@@ -456,7 +506,7 @@ func (h *Handler) releaseAndNotify(_ context.Context, cc *oneToOneConn, reason s
 		TS:      time.Now().UnixMilli(),
 		Payload: presencePayload,
 	}
-	if err := outcome.Remaining.Conn.SendJSON(presenceEnv); err != nil {
+	if err := outcome.Remaining.Conn.SendJSON(outcome.Remaining.Conn.BaseContext(), presenceEnv); err != nil {
 		h.Log.Warn("peer_presence_changed send failed",
 			slog.String("peer_id", outcome.Remaining.PeerID),
 			slog.String("error", err.Error()))
@@ -477,7 +527,7 @@ func (h *Handler) releaseAndNotify(_ context.Context, cc *oneToOneConn, reason s
 			TS:      time.Now().UnixMilli(),
 			Payload: payload,
 		}
-		if err := outcome.Remaining.Conn.SendJSON(env); err != nil {
+		if err := outcome.Remaining.Conn.SendJSON(outcome.Remaining.Conn.BaseContext(), env); err != nil {
 			h.Log.Warn("peer_left send failed",
 				slog.String("peer_id", outcome.Remaining.PeerID),
 				slog.String("error", err.Error()))
@@ -520,7 +570,7 @@ func (h *Handler) broadcastPresence(_ context.Context, r *room.Room, subject *ro
 		if p.Conn == nil {
 			continue
 		}
-		if err := p.Conn.SendJSON(env); err != nil {
+		if err := p.Conn.SendJSON(p.Conn.BaseContext(), env); err != nil {
 			h.Log.Warn("peer_presence_changed send failed",
 				slog.String("peer_id", p.PeerID),
 				slog.String("error", err.Error()))
@@ -531,7 +581,7 @@ func (h *Handler) broadcastPresence(_ context.Context, r *room.Room, subject *ro
 // sendJoinRejected centralizes the join_rejected send so both the
 // pre-admit room-ID validator and the RoomManager rejection paths use
 // the same envelope shape.
-func (h *Handler) sendJoinRejected(ctx context.Context, cc *oneToOneConn, roomID, requestID string, result protocol.JoinRejectedResult, reason protocol.JoinRejectedReason, message string) {
+func (h *Handler) sendJoinRejected(ctx context.Context, cc *Session1to1, roomID, requestID string, result protocol.JoinRejectedResult, reason protocol.JoinRejectedReason, message string) {
 	payload, _ := json.Marshal(protocol.JoinRejectedPayload{
 		Result:  result,
 		Reason:  reason,
@@ -545,10 +595,10 @@ func (h *Handler) sendJoinRejected(ctx context.Context, cc *oneToOneConn, roomID
 		TS:        time.Now().UnixMilli(),
 		Payload:   payload,
 	}
-	_ = cc.sendJSON(ctx, env)
+	_ = cc.SendJSON(ctx, env)
 }
 
-func (h *Handler) writeError(ctx context.Context, cc *oneToOneConn, de *protocol.DecodeError, correlates string) {
+func (h *Handler) writeError(ctx context.Context, cc *Session1to1, de *protocol.DecodeError, correlates string) {
 	payload, _ := json.Marshal(protocol.ErrorPayload{
 		Code:       de.Code,
 		Message:    de.Message,
@@ -560,7 +610,7 @@ func (h *Handler) writeError(ctx context.Context, cc *oneToOneConn, de *protocol
 		TS:      time.Now().UnixMilli(),
 		Payload: payload,
 	}
-	_ = cc.sendJSON(ctx, env)
+	_ = cc.SendJSON(ctx, env)
 }
 
 // ---------------------------------------------------------------------
@@ -598,7 +648,7 @@ func toWireRoomReadiness(c room.CallReadiness) protocol.RoomReadiness {
 // media_ready), and — if the room reaches paired call-readiness —
 // assigns roles by admissionOrder and emits ready_for_offer to both
 // peers exactly once per pairing attempt (contract §§3.5, 3.7).
-func (h *Handler) handleMediaReady(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
+func (h *Handler) handleMediaReady(ctx context.Context, cc *Session1to1, d *protocol.Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &protocol.DecodeError{
 			Code:    protocol.CodeNotInRoom,
@@ -671,7 +721,7 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *oneToOneConn, d *pro
 // another `join_room` (contract §§3.6, 3.13 "Server-side retry
 // support"). No `peer_left` is emitted — pending-media releases are
 // pre-pairing by definition.
-func (h *Handler) handleMediaFailed(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
+func (h *Handler) handleMediaFailed(ctx context.Context, cc *Session1to1, d *protocol.Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &protocol.DecodeError{
 			Code:    protocol.CodeNotInRoom,
@@ -728,7 +778,7 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *oneToOneConn, d *pr
 		TS:      time.Now().UnixMilli(),
 		Payload: relPayload,
 	}
-	if err := cc.sendJSON(ctx, relEnv); err != nil {
+	if err := cc.SendJSON(ctx, relEnv); err != nil {
 		h.Log.Warn("participant_released send failed",
 			slog.String("conn_id", cc.sess.ID()),
 			slog.String("error", err.Error()))
@@ -742,11 +792,10 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *oneToOneConn, d *pr
 	// Clear association so the SAME WS can send join_room again
 	// without hitting already_joined. ServeHTTP's deferred cleanup now
 	// short-circuits on cc.peerID == "" and will not double-release.
-	// Reset cc.released so a future rejoin's disconnect still triggers
-	// the cleanup path for the NEW slot.
-	cc.peerID = ""
-	cc.roomID = ""
-	cc.released.Store(false)
+	// Reset the release latch so a future rejoin's disconnect still
+	// triggers the cleanup path for the NEW slot.
+	cc.ClearJoined()
+	cc.ResetReleaseLatch()
 
 	h.Log.Info("media failed",
 		slog.String("event", "media_failed"),
@@ -790,7 +839,7 @@ func (h *Handler) sendReadyForOffer(_ context.Context, rm *room.Room, participan
 		if self.Conn == nil {
 			return
 		}
-		if err := self.Conn.SendJSON(env); err != nil {
+		if err := self.Conn.SendJSON(self.Conn.BaseContext(), env); err != nil {
 			h.Log.Warn("ready_for_offer send failed",
 				slog.String("peer_id", self.PeerID),
 				slog.String("error", err.Error()))
@@ -818,12 +867,12 @@ func (h *Handler) sendReadyForOffer(_ context.Context, rm *room.Room, participan
 // and state (mediaReadiness × callPhase), relays it to the remote
 // peer with envelope.from = sender peerId, and advances the sender's
 // CallPhase role-assigned → negotiating (§§3.8, C.2).
-func (h *Handler) handleOffer(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
+func (h *Handler) handleOffer(ctx context.Context, cc *Session1to1, d *protocol.Decoded) error {
 	return h.handleSDPRelay(ctx, cc, d, protocol.TypeOffer)
 }
 
 // handleAnswer mirrors handleOffer for §3.9.
-func (h *Handler) handleAnswer(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
+func (h *Handler) handleAnswer(ctx context.Context, cc *Session1to1, d *protocol.Decoded) error {
 	return h.handleSDPRelay(ctx, cc, d, protocol.TypeAnswer)
 }
 
@@ -835,7 +884,7 @@ func (h *Handler) handleAnswer(ctx context.Context, cc *oneToOneConn, d *protoco
 // Importantly, the server NEVER parses payload.sdp.sdp — the inbound
 // payload bytes are forwarded verbatim on the new envelope with only
 // envelope.from / envelope.to / envelope.ts overwritten. NFR-003.
-func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded, t protocol.Type) error {
+func (h *Handler) handleSDPRelay(ctx context.Context, cc *Session1to1, d *protocol.Decoded, t protocol.Type) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &protocol.DecodeError{
 			Code:    protocol.CodeNotInRoom,
@@ -923,7 +972,7 @@ func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *proto
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	if err := remoteConn.SendJSON(outEnv); err != nil {
+	if err := remoteConn.SendJSON(remoteConn.BaseContext(), outEnv); err != nil {
 		// Write failed — structured observability must NOT claim
 		// success. We surface the failure to the sender as
 		// `internal_error` (the best generic code for "your message
@@ -964,7 +1013,7 @@ func (h *Handler) handleSDPRelay(ctx context.Context, cc *oneToOneConn, d *proto
 // by protocol.IceCandidatePayload.Validate() (decoded before dispatch); a
 // protocol.DecodeError(Code: protocol.CodeMalformed) flows through `writeError` to the
 // sender without ever reaching this function.
-func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
+func (h *Handler) handleIceCandidate(ctx context.Context, cc *Session1to1, d *protocol.Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &protocol.DecodeError{
 			Code:    protocol.CodeNotInRoom,
@@ -1035,7 +1084,7 @@ func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *p
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	if err := remoteConn.SendJSON(outEnv); err != nil {
+	if err := remoteConn.SendJSON(remoteConn.BaseContext(), outEnv); err != nil {
 		// Write failed — ICE is best-effort for protocol purposes but
 		// the structured log must still reflect reality. Emit the
 		// warning, do NOT fall through to the "relayed" success line.
@@ -1079,7 +1128,7 @@ func (h *Handler) handleIceCandidate(ctx context.Context, cc *oneToOneConn, d *p
 // Full-triplet validation (microphone, camera, screenShare all
 // required) is enforced at decode time by protocol.MediaStatePayload.Validate():
 // a missing field decodes to "" which fails the enum switch.
-func (h *Handler) handleMediaState(ctx context.Context, cc *oneToOneConn, d *protocol.Decoded) error {
+func (h *Handler) handleMediaState(ctx context.Context, cc *Session1to1, d *protocol.Decoded) error {
 	if cc.peerID == "" {
 		h.writeError(ctx, cc, &protocol.DecodeError{
 			Code:    protocol.CodeNotInRoom,
@@ -1147,7 +1196,7 @@ func (h *Handler) handleMediaState(ctx context.Context, cc *oneToOneConn, d *pro
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	if err := remoteConn.SendJSON(outEnv); err != nil {
+	if err := remoteConn.SendJSON(remoteConn.BaseContext(), outEnv); err != nil {
 		h.Log.Warn("media_state relay failed",
 			slog.String("peer_id", remotePeerID),
 			slog.String("error", err.Error()))

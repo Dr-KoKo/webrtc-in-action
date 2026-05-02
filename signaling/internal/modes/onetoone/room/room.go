@@ -1,6 +1,7 @@
 package room
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -24,15 +25,25 @@ type Participant struct {
 	LastSeen       time.Time
 }
 
-// Conn is the minimum surface the room package needs on the underlying
-// WS connection. The handler layer supplies the real implementation.
+// Conn is the minimum surface the room package needs on the
+// underlying WS connection. The mode root supplies the real
+// implementation; signaling/ embeds this interface in its own Conn
+// so a signaling.Conn is also usable wherever a room.Conn is
+// expected.
+//
+// BaseContext returns the *target* session's base context.
+// Async fan-outs (presence, peer_left) iterate participants and
+// write to other sessions whose context is unrelated to the
+// caller's request ctx; the explicit accessor lets the caller
+// thread the right ctx without an implicit-capture adapter.
 //
 // Implementations MUST be safe for concurrent use across SendJSON
 // calls and WS reads.
 type Conn interface {
+	BaseContext() context.Context
 	// SendJSON marshals v as a text frame and writes it to the peer.
 	// Implementations are responsible for serializing writes.
-	SendJSON(v any) error
+	SendJSON(ctx context.Context, v any) error
 }
 
 // Room mirrors data-model §A.2.
@@ -297,11 +308,11 @@ func (r *Room) ResolveRemote(peerID string) *Participant {
 // CanSendOffer enforces the three-field truth table for §3.8 `offer`
 // at the sender state. Must be called under the room lock.
 //
-//   role           == offerer
-//   mediaReadiness == ready
-//   callPhase      == role-assigned  → accept (advance to negotiating)
-//   callPhase      == negotiating    → reject (duplicate offer, EC-013)
-//   anything else                    → reject (unexpected_offer)
+//	role           == offerer
+//	mediaReadiness == ready
+//	callPhase      == role-assigned  → accept (advance to negotiating)
+//	callPhase      == negotiating    → reject (duplicate offer, EC-013)
+//	anything else                    → reject (unexpected_offer)
 //
 // A duplicate offer is also routed to unexpected_offer — the EC-013
 // glare guard: once the offerer has advanced past role-assigned for
@@ -338,9 +349,9 @@ func (p *Participant) CanSendOffer(role ParticipantRole) *RelayError {
 // CanSendAnswer enforces the §3.9 truth table at the sender state.
 // Must be called under the room lock.
 //
-//   role           == answerer
-//   mediaReadiness == ready
-//   callPhase      ∈ {role-assigned, negotiating}
+//	role           == answerer
+//	mediaReadiness == ready
+//	callPhase      ∈ {role-assigned, negotiating}
 func (p *Participant) CanSendAnswer(role ParticipantRole) *RelayError {
 	if role != RoleAnswerer {
 		return &RelayError{
