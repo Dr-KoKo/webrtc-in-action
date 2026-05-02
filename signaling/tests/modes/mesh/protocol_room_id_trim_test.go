@@ -18,6 +18,8 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // TestJoinRoomAdmitsTrimmedRoomID — admits "demo " (trailing space)
@@ -45,18 +47,18 @@ func TestJoinRoomAdmitsTrimmedRoomID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read join_accepted (trimmed) failed: %v", err)
 	}
-	var envA mesh.Envelope
+	var envA protocol.Envelope
 	if err := json.Unmarshal(raw, &envA); err != nil {
 		t.Fatalf("envelope (trimmed) unmarshal: %v", err)
 	}
-	if envA.Type != mesh.TypeJoinAccepted {
-		t.Fatalf("type = %q, want %q (trimmed)", envA.Type, mesh.TypeJoinAccepted)
+	if envA.Type != protocol.TypeJoinAccepted {
+		t.Fatalf("type = %q, want %q (trimmed)", envA.Type, protocol.TypeJoinAccepted)
 	}
 	if envA.RoomID != trimmedRoomID {
 		t.Fatalf("envelope.roomId = %q, want %q (server should echo the trimmed form)",
 			envA.RoomID, trimmedRoomID)
 	}
-	var payloadA mesh.JoinAcceptedPayload
+	var payloadA protocol.JoinAcceptedPayload
 	if err := json.Unmarshal(envA.Payload, &payloadA); err != nil {
 		t.Fatalf("payload (trimmed) unmarshal: %v", err)
 	}
@@ -95,18 +97,18 @@ func TestJoinRoomRejectsRoomIDWithInteriorWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read join_rejected failed: %v", err)
 	}
-	var env mesh.Envelope
+	var env protocol.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		t.Fatalf("envelope unmarshal failed: %v", err)
 	}
-	if env.Type != mesh.TypeJoinRejected {
-		t.Fatalf("type = %q, want %q", env.Type, mesh.TypeJoinRejected)
+	if env.Type != protocol.TypeJoinRejected {
+		t.Fatalf("type = %q, want %q", env.Type, protocol.TypeJoinRejected)
 	}
-	var rej mesh.JoinRejectedPayload
+	var rej protocol.JoinRejectedPayload
 	if err := json.Unmarshal(env.Payload, &rej); err != nil {
 		t.Fatalf("payload unmarshal failed: %v", err)
 	}
-	if rej.Result != mesh.JoinRejectedInvalidRoom {
-		t.Fatalf("result = %q, want %q", rej.Result, mesh.JoinRejectedInvalidRoom)
+	if rej.Result != protocol.JoinRejectedInvalidRoom {
+		t.Fatalf("result = %q, want %q", rej.Result, protocol.JoinRejectedInvalidRoom)
 	}
 }

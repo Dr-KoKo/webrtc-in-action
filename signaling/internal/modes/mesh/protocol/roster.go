@@ -2,7 +2,7 @@
 // presence vocabulary (§FR-013) is hard-coded — adding or removing a
 // value here requires a contract revision.
 
-package mesh
+package protocol
 
 // Presence is the 7-element vocabulary from FR-013. The server emits
 // `joined`, `media-ready`, `released`, `left` directly; `connecting`,

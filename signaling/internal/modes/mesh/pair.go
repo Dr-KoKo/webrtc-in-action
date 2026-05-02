@@ -3,7 +3,11 @@
 
 package mesh
 
-import "time"
+import (
+	"time"
+
+	"webrtc-lab/signaling/internal/modes/mesh/protocol"
+)
 
 // PairState — server-side pair lifecycle. M3 only cares about
 // PairIdle (registered when the pair first becomes eligible) and the
@@ -28,7 +32,7 @@ type Pair struct {
 	CreatedAt time.Time
 }
 
-// pairLedger is the per-room implementation of mesh.PairLedger
+// pairLedger is the per-room implementation of mesh.protocol.PairLedger
 // (declared in protocol.go). It owns the `pairEpoch` map and is
 // always accessed under the owning MeshRoom's mutex — no separate
 // locking here.
@@ -44,7 +48,7 @@ func newPairLedger() *pairLedger {
 	}
 }
 
-// CurrentPairEpoch satisfies mesh.PairLedger. Returns false if the
+// CurrentPairEpoch satisfies mesh.protocol.PairLedger. Returns false if the
 // pair is unknown to the server (a client sent a pairId the server
 // never created).
 func (l *pairLedger) CurrentPairEpoch(pairID string) (uint64, bool) {
@@ -55,7 +59,7 @@ func (l *pairLedger) CurrentPairEpoch(pairID string) (uint64, bool) {
 // Register starts a new pair at epoch 1 if it does not yet exist.
 // Returns the (possibly pre-existing) Pair and the canonical epoch.
 func (l *pairLedger) Register(loPeerID, hiPeerID string, loIdx, hiIdx uint64) (*Pair, uint64) {
-	id := MakePairID(loIdx, hiIdx)
+	id := protocol.MakePairID(loIdx, hiIdx)
 	if existing, ok := l.pairs[id]; ok {
 		return existing, l.epochs[id]
 	}

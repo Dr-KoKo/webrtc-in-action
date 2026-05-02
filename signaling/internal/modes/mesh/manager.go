@@ -13,6 +13,8 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+
+	"webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // AdmissionResult — the canonical admission outcome enum used by the
@@ -48,7 +50,7 @@ type ReleaseOutcome struct {
 // signaling endpoints read from the same VITE_STUN_URLS / VITE_TURN_*
 // env keys (data-model §A.1 Config).
 type ManagerConfig struct {
-	IceServers []IceServer
+	IceServers []protocol.IceServer
 }
 
 // MeshRoomManager mirrors data-model §A.1.
@@ -63,7 +65,7 @@ type MeshRoomManager struct {
 // ManagerConfig to use defaults (a single Google STUN entry).
 func NewMeshRoomManager(cfg ManagerConfig) *MeshRoomManager {
 	if len(cfg.IceServers) == 0 {
-		cfg.IceServers = []IceServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
+		cfg.IceServers = []protocol.IceServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
 	}
 	return &MeshRoomManager{
 		rooms:     make(map[string]*MeshRoom),
@@ -81,8 +83,8 @@ func (m *MeshRoomManager) SetPeerIDGenerator(gen func() string) {
 }
 
 // IceServers returns the shared ICE-server list (read-only snapshot).
-func (m *MeshRoomManager) IceServers() []IceServer {
-	out := make([]IceServer, len(m.cfg.IceServers))
+func (m *MeshRoomManager) IceServers() []protocol.IceServer {
+	out := make([]protocol.IceServer, len(m.cfg.IceServers))
 	copy(out, m.cfg.IceServers)
 	return out
 }
@@ -111,7 +113,7 @@ func (m *MeshRoomManager) Room(roomID string) *MeshRoom {
 // join_accepted + mesh_roster_snapshot + the broadcast roster update
 // (handler.handleJoinRoom does this).
 func (m *MeshRoomManager) JoinOrCreate(roomID string, conn Conn) AdmissionOutcome {
-	if err := ValidateRoomID(roomID); err != nil {
+	if err := protocol.ValidateRoomID(roomID); err != nil {
 		return AdmissionOutcome{Result: JoinRejectedInvalidRoom2}
 	}
 

@@ -26,6 +26,8 @@ import (
 	"webrtc-lab/signaling/internal/shared/config"
 	"webrtc-lab/signaling/internal/shared/heartbeat"
 	"webrtc-lab/signaling/internal/shared/wsserver"
+
+	"webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // Handler is the `/ws/mesh` upgrader for the 002 mesh contract. It
@@ -93,13 +95,13 @@ func (h *Handler) NewSession(sess wsserver.Session, log *slog.Logger) (wsserver.
 	return &meshConn{sess: sess, handler: h, log: log}, nil
 }
 
-// iceServersFromConfig converts the shared internal IceServer
+// iceServersFromConfig converts the shared internal protocol.IceServer
 // struct (no JSON tags) to this mode's wire-payload type with v2
 // contract JSON tags.
-func iceServersFromConfig(in []config.IceServer) []IceServer {
-	out := make([]IceServer, len(in))
+func iceServersFromConfig(in []config.IceServer) []protocol.IceServer {
+	out := make([]protocol.IceServer, len(in))
 	for i, s := range in {
-		out[i] = IceServer{
+		out[i] = protocol.IceServer{
 			URLs:       s.URLs,
 			Username:   s.Username,
 			Credential: s.Credential,
@@ -150,9 +152,9 @@ func (c *meshConn) SendJSON(v any) error {
 // the client via writeError inside the per-type handlers; we log
 // and return nil for the same continue-on-non-fatal reason.
 func (c *meshConn) HandleFrame(ctx context.Context, frame []byte) error {
-	decoded, derr := DecodeEnvelope(frame)
+	decoded, derr := protocol.DecodeEnvelope(frame)
 	if derr != nil {
-		var perr *ProtocolError
+		var perr *protocol.ProtocolError
 		errors.As(derr, &perr)
 		c.handler.writeError(ctx, c, perr, "")
 		c.handler.Log.Debug("mesh decode error",
@@ -174,15 +176,15 @@ func (c *meshConn) HandleFrame(ctx context.Context, frame []byte) error {
 // OnDisconnect runs once during teardown. The transportReason
 // argument names the wire-level cause (peer_close / read_error /
 // etc.) but is intentionally NOT forwarded to room cleanup, which
-// uses the domain reason RosterReasonDisconnect — preserving the
+// uses the domain reason protocol.RosterReasonDisconnect — preserving the
 // pre-refactor handler.go:135 semantic where releaseAndNotify was
-// always called with RosterReasonDisconnect for non-graceful exits
+// always called with protocol.RosterReasonDisconnect for non-graceful exits
 // (data-model §C.4). Returns nil attrs (matches pre-refactor
 // disconnect log lines 140-144).
 func (c *meshConn) OnDisconnect(transportReason string) []slog.Attr {
 	_ = transportReason
 	if c.peerID != "" && !c.released.Load() {
-		c.handler.releaseAndNotify(c, "disconnect", RosterReasonDisconnect)
+		c.handler.releaseAndNotify(c, "disconnect", protocol.RosterReasonDisconnect)
 	}
 	return nil
 }
@@ -190,15 +192,15 @@ func (c *meshConn) OnDisconnect(transportReason string) []slog.Attr {
 // writeError sends a typed `error` envelope back to the originating
 // peer. Used both for envelope decode failures and for state-level
 // rejections (M3+).
-func (h *Handler) writeError(ctx context.Context, cc *meshConn, perr *ProtocolError, correlates string) {
-	payload, _ := json.Marshal(ErrorPayload{
+func (h *Handler) writeError(ctx context.Context, cc *meshConn, perr *protocol.ProtocolError, correlates string) {
+	payload, _ := json.Marshal(protocol.ErrorPayload{
 		Code:       perr.Code,
 		Message:    perr.Message,
 		Correlates: correlates,
 	})
-	env := Envelope{
-		V:       ContractVersion,
-		Type:    TypeError,
+	env := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypeError,
 		TS:      time.Now().UnixMilli(),
 		Payload: payload,
 	}
@@ -208,40 +210,40 @@ func (h *Handler) writeError(ctx context.Context, cc *meshConn, perr *ProtocolEr
 // dispatch routes a decoded envelope to the correct handler. M3+M5
 // arms: join_room, leave_room, media_ready, media_failed, error (echo
 // to log). M6+ extends the switch with pair handlers.
-func (h *Handler) dispatch(ctx context.Context, cc *meshConn, d *Decoded) error {
+func (h *Handler) dispatch(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
 	switch d.Envelope.Type {
-	case TypeJoinRoom:
+	case protocol.TypeJoinRoom:
 		return h.handleJoinRoom(ctx, cc, d)
-	case TypeLeaveRoom:
+	case protocol.TypeLeaveRoom:
 		return h.handleLeaveRoom(ctx, cc, d)
-	case TypeMediaReady:
+	case protocol.TypeMediaReady:
 		return h.handleMediaReady(ctx, cc, d)
-	case TypeMediaFailed:
+	case protocol.TypeMediaFailed:
 		return h.handleMediaFailed(ctx, cc, d)
-	case TypePairOffer:
+	case protocol.TypePairOffer:
 		return h.handlePairOffer(ctx, cc, d)
-	case TypePairAnswer:
+	case protocol.TypePairAnswer:
 		return h.handlePairAnswer(ctx, cc, d)
-	case TypePairIceCandidate:
+	case protocol.TypePairIceCandidate:
 		return h.handlePairIceCandidate(ctx, cc, d)
-	case TypePairMediaState:
+	case protocol.TypePairMediaState:
 		return h.handlePairMediaState(ctx, cc, d)
-	case TypePairFailed:
+	case protocol.TypePairFailed:
 		return h.handlePairFailed(ctx, cc, d)
-	case TypeReconnectPair:
+	case protocol.TypeReconnectPair:
 		return h.handleReconnectPair(ctx, cc, d)
-	case TypeError:
+	case protocol.TypeError:
 		// Clients may send `error` back as informational; log + drop.
 		h.Log.Debug("mesh client error reported",
 			slog.String("conn_id", cc.sess.ID()),
 		)
 		return nil
-	case TypeJoinAccepted, TypeJoinRejected, TypeMeshRosterSnapshot,
-		TypeMeshRosterUpdate, TypeParticipantReleased, TypePairNegotiationInstruction,
-		TypePairReconnectInstruction, TypePeerLeft:
+	case protocol.TypeJoinAccepted, protocol.TypeJoinRejected, protocol.TypeMeshRosterSnapshot,
+		protocol.TypeMeshRosterUpdate, protocol.TypeParticipantReleased, protocol.TypePairNegotiationInstruction,
+		protocol.TypePairReconnectInstruction, protocol.TypePeerLeft:
 		// Server-originated types are protocol violations from a client.
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeMalformed,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeMalformed,
 			Message: "server-originated message received from client",
 		}, d.Envelope.RequestID)
 		return nil
@@ -254,8 +256,8 @@ func (h *Handler) dispatch(ctx context.Context, cc *meshConn, d *Decoded) error 
 		// (decode passed) but the server has no implementation yet.
 		// Using `not_in_room` here would be misleading because the
 		// peer IS in the room; the failure is server-side.
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeInternalError,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeInternalError,
 			Message: string(d.Envelope.Type) + " is not yet wired in this milestone",
 		}, d.Envelope.RequestID)
 		return nil
@@ -263,23 +265,23 @@ func (h *Handler) dispatch(ctx context.Context, cc *meshConn, d *Decoded) error 
 }
 
 // handleJoinRoom implements §3.1 + §3.2 + §3.3 + §3.4.
-func (h *Handler) handleJoinRoom(ctx context.Context, cc *meshConn, d *Decoded) error {
+func (h *Handler) handleJoinRoom(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
 	if cc.peerID != "" {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeAlreadyJoined,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeAlreadyJoined,
 			Message: "this connection has already joined a mesh room",
 		}, d.Envelope.RequestID)
 		return nil
 	}
 	// Contract §1.1: trim surrounding whitespace before validation.
-	// Done at handler entry rather than inside ValidateRoomID so the
+	// Done at handler entry rather than inside protocol.ValidateRoomID so the
 	// validator stays a pure regex check; trimmed value is used for
 	// every downstream lookup so "demo " and "demo" map to the same
 	// MeshRoom.
 	roomID := strings.TrimSpace(d.Envelope.RoomID)
-	if err := ValidateRoomID(roomID); err != nil {
+	if err := protocol.ValidateRoomID(roomID); err != nil {
 		h.sendJoinRejected(ctx, cc, roomID, d.Envelope.RequestID,
-			JoinRejectedInvalidRoom, ReasonInvalidRoomID,
+			protocol.JoinRejectedInvalidRoom, protocol.ReasonInvalidRoomID,
 			"Room ID must match ^[A-Za-z0-9._-]{1,64}$.")
 		return nil
 	}
@@ -287,12 +289,12 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *meshConn, d *Decoded) 
 	switch outcome.Result {
 	case JoinRejectedInvalidRoom2:
 		h.sendJoinRejected(ctx, cc, roomID, d.Envelope.RequestID,
-			JoinRejectedInvalidRoom, ReasonInvalidRoomID,
+			protocol.JoinRejectedInvalidRoom, protocol.ReasonInvalidRoomID,
 			"Room ID must match ^[A-Za-z0-9._-]{1,64}$.")
 		return nil
 	case JoinRejectedRoomFullRes:
 		h.sendJoinRejected(ctx, cc, roomID, d.Envelope.RequestID,
-			JoinRejectedRoomFull, ReasonRoomFull,
+			protocol.JoinRejectedRoomFull, protocol.ReasonRoomFull,
 			"Mesh room '"+roomID+"' already has 4 reserved participants.")
 		return nil
 	case JoinAccepted:
@@ -306,14 +308,14 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *meshConn, d *Decoded) 
 	}
 
 	// join_accepted (§3.2)
-	acceptPayload, _ := json.Marshal(JoinAcceptedPayload{
+	acceptPayload, _ := json.Marshal(protocol.JoinAcceptedPayload{
 		PeerID:         outcome.Participant.PeerID,
 		AdmissionIndex: outcome.Participant.AdmissionIndex,
 		IceServers:     h.Manager.IceServers(),
 	})
-	if err := cc.sendJSON(ctx, Envelope{
-		V:         ContractVersion,
-		Type:      TypeJoinAccepted,
+	if err := cc.sendJSON(ctx, protocol.Envelope{
+		V:         protocol.ContractVersion,
+		Type:      protocol.TypeJoinAccepted,
 		RoomID:    roomID,
 		RequestID: d.Envelope.RequestID,
 		TS:        time.Now().UnixMilli(),
@@ -329,9 +331,9 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *meshConn, d *Decoded) 
 	snapshot := BuildRosterSnapshot(rm)
 	rm.Unlock()
 	snapshotPayload, _ := json.Marshal(snapshot)
-	if err := cc.sendJSON(ctx, Envelope{
-		V:       ContractVersion,
-		Type:    TypeMeshRosterSnapshot,
+	if err := cc.sendJSON(ctx, protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypeMeshRosterSnapshot,
 		RoomID:  roomID,
 		TS:      time.Now().UnixMilli(),
 		Payload: snapshotPayload,
@@ -342,7 +344,7 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *meshConn, d *Decoded) 
 
 	// mesh_roster_update (§3.5) — broadcast presence:joined to ALL
 	// participants in the room INCLUDING the subject.
-	h.broadcastRosterUpdate(rm, outcome.Participant, PresenceJoined, RosterReasonAdmitted)
+	h.broadcastRosterUpdate(rm, outcome.Participant, protocol.PresenceJoined, protocol.RosterReasonAdmitted)
 
 	h.Log.Info("mesh peer admitted",
 		slog.String("event", "mesh_peer_admitted"),
@@ -355,15 +357,15 @@ func (h *Handler) handleJoinRoom(ctx context.Context, cc *meshConn, d *Decoded) 
 }
 
 // handleLeaveRoom implements §3.18.
-func (h *Handler) handleLeaveRoom(ctx context.Context, cc *meshConn, d *Decoded) error {
+func (h *Handler) handleLeaveRoom(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
 	if cc.peerID == "" {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "leave_room requires an admitted participant",
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	h.releaseAndNotify(cc, "graceful_leave", RosterReasonGracefulLeave)
+	h.releaseAndNotify(cc, "graceful_leave", protocol.RosterReasonGracefulLeave)
 	cc.peerID = ""
 	cc.roomID = ""
 	_ = cc.sess.Close(websocket.StatusNormalClosure, "graceful_leave")
@@ -383,7 +385,7 @@ func (h *Handler) handleLeaveRoom(ctx context.Context, cc *meshConn, d *Decoded)
 // room-wide failed presence here. The leaver presence is `left`; each
 // remaining client closes ONLY the pair local↔leaver, leaving healthy
 // pairs alone.
-func (h *Handler) releaseAndNotify(cc *meshConn, reason string, rosterReason RosterReason) {
+func (h *Handler) releaseAndNotify(cc *meshConn, reason string, rosterReason protocol.RosterReason) {
 	if cc.released.Load() || cc.peerID == "" {
 		return
 	}
@@ -399,12 +401,12 @@ func (h *Handler) releaseAndNotify(cc *meshConn, reason string, rosterReason Ros
 	}
 	rm := outcome.Room
 	rm.Lock()
-	update := BuildRosterUpdate(rm, outcome.Departing, PresenceLeft, rosterReason)
+	update := BuildRosterUpdate(rm, outcome.Departing, protocol.PresenceLeft, rosterReason)
 	rm.Unlock()
 	updatePayload, _ := json.Marshal(update)
-	rosterEnv := Envelope{
-		V:       ContractVersion,
-		Type:    TypeMeshRosterUpdate,
+	rosterEnv := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypeMeshRosterUpdate,
 		RoomID:  rm.ID(),
 		TS:      time.Now().UnixMilli(),
 		Payload: updatePayload,
@@ -413,19 +415,19 @@ func (h *Handler) releaseAndNotify(cc *meshConn, reason string, rosterReason Ros
 	// Build `peer_left` only for in-call leavers (readiness was
 	// media-ready at the moment of release). A `joined`-state leaver
 	// had no pairs yet, so the roster `left` update alone is enough.
-	var peerLeftEnv *Envelope
+	var peerLeftEnv *protocol.Envelope
 	if departingReadiness == ReadinessMediaReady {
-		peerLeftReason := PeerLeftDisconnect
-		if rosterReason == RosterReasonGracefulLeave {
-			peerLeftReason = PeerLeftGracefulLeave
+		peerLeftReason := protocol.PeerLeftDisconnect
+		if rosterReason == protocol.RosterReasonGracefulLeave {
+			peerLeftReason = protocol.PeerLeftGracefulLeave
 		}
-		peerLeftPayload, _ := json.Marshal(PeerLeftPayload{
+		peerLeftPayload, _ := json.Marshal(protocol.PeerLeftPayload{
 			PeerID: outcome.Departing.PeerID,
 			Reason: peerLeftReason,
 		})
-		peerLeftEnv = &Envelope{
-			V:       ContractVersion,
-			Type:    TypePeerLeft,
+		peerLeftEnv = &protocol.Envelope{
+			V:       protocol.ContractVersion,
+			Type:    protocol.TypePeerLeft,
 			RoomID:  rm.ID(),
 			TS:      time.Now().UnixMilli(),
 			Payload: peerLeftPayload,
@@ -480,15 +482,15 @@ func (h *Handler) peerReadiness(roomID, peerID string) Readiness {
 // broadcastRosterUpdate fans out a single mesh_roster_update to ALL
 // participants in the room (including the subject). Caller does NOT
 // hold the room lock — this method takes and releases it internally.
-func (h *Handler) broadcastRosterUpdate(rm *MeshRoom, subject *Participant, presence Presence, reason RosterReason) {
+func (h *Handler) broadcastRosterUpdate(rm *MeshRoom, subject *Participant, presence protocol.Presence, reason protocol.RosterReason) {
 	rm.Lock()
 	update := BuildRosterUpdate(rm, subject, presence, reason)
 	targets := rm.ParticipantsSnapshot()
 	rm.Unlock()
 	payload, _ := json.Marshal(update)
-	env := Envelope{
-		V:       ContractVersion,
-		Type:    TypeMeshRosterUpdate,
+	env := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypeMeshRosterUpdate,
 		RoomID:  rm.ID(),
 		TS:      time.Now().UnixMilli(),
 		Payload: payload,
@@ -511,40 +513,40 @@ func (h *Handler) broadcastRosterUpdate(rm *MeshRoom, subject *Participant, pres
 //
 // Per data-model §A.3, media_ready arriving from a non-`joined`
 // readiness is rejected with `error { code: "unexpected_media_ready" }`.
-func (h *Handler) handleMediaReady(ctx context.Context, cc *meshConn, d *Decoded) error {
+func (h *Handler) handleMediaReady(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
 	if cc.peerID == "" {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "media_ready requires an admitted participant",
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	// decodeInto[MediaReadyPayload] already runs Validate() at decode
+	// decodeInto[protocol.MediaReadyPayload] already runs protocol.Validate() at decode
 	// (protocol_media.go enforces audio=true && video=true). Re-check
 	// here as belt-and-braces in case a future code path constructs a
-	// Decoded without going through DecodeEnvelope. Split the
+	// protocol.Decoded without going through protocol.DecodeEnvelope. Split the
 	// type-assertion failure (server-side decode mismatch) from the
 	// capability mismatch (client contract violation) so each carries
 	// the right error code.
-	payload, ok := d.Message.(*MediaReadyPayload)
+	payload, ok := d.Message.(*protocol.MediaReadyPayload)
 	if !ok || payload == nil {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeInternalError,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeInternalError,
 			Message: "media_ready decode mismatch",
 		}, d.Envelope.RequestID)
 		return nil
 	}
 	if !payload.MediaCapabilities.Audio || !payload.MediaCapabilities.Video {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeUnsupportedMediaCapability,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeUnsupportedMediaCapability,
 			Message: "media_ready requires audio=true AND video=true",
 		}, d.Envelope.RequestID)
 		return nil
 	}
 	rm := h.Manager.Room(cc.roomID)
 	if rm == nil {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "mesh room not found",
 		}, d.Envelope.RequestID)
 		return nil
@@ -553,16 +555,16 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *meshConn, d *Decoded
 	subject := rm.FindByPeerID(cc.peerID)
 	if subject == nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "participant not found in room",
 		}, d.Envelope.RequestID)
 		return nil
 	}
 	if subject.Readiness != ReadinessJoined {
 		rm.Unlock()
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeUnexpectedMediaReady,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeUnexpectedMediaReady,
 			Message: "media_ready requires readiness=joined",
 		}, d.Envelope.RequestID)
 		return nil
@@ -572,7 +574,7 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *meshConn, d *Decoded
 	rm.Unlock()
 
 	// Broadcast roster update presence:media-ready (FR-012b).
-	h.broadcastRosterUpdate(rm, subject, PresenceMediaReady, RosterReasonMediaReady)
+	h.broadcastRosterUpdate(rm, subject, protocol.PresenceMediaReady, protocol.RosterReasonMediaReady)
 	// Pair eligibility evaluator (T045 / §3.9). Emits one
 	// `pair_negotiation_instruction` to each endpoint of every NEW
 	// pair the subject formed with already-media-ready peers.
@@ -591,15 +593,15 @@ func (h *Handler) handleMediaReady(ctx context.Context, cc *meshConn, d *Decoded
 // `mesh_roster_update { presence: "released", reason: "media_failed" }`
 // to the remaining participants. The admissionIndex value is preserved
 // (data-model §A.4 — never reused).
-func (h *Handler) handleMediaFailed(ctx context.Context, cc *meshConn, d *Decoded) error {
+func (h *Handler) handleMediaFailed(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
 	if cc.peerID == "" {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "media_failed requires an admitted participant",
 		}, d.Envelope.RequestID)
 		return nil
 	}
-	payload, _ := d.Message.(*MediaFailedPayload)
+	payload, _ := d.Message.(*protocol.MediaFailedPayload)
 	detail := ""
 	if payload != nil {
 		detail = payload.Detail
@@ -617,14 +619,14 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *meshConn, d *Decode
 
 	// Step 2: send `participant_released` to the failing peer
 	// (the sender is still WS-connected; the user may Retry).
-	releasedPayload, _ := json.Marshal(ParticipantReleasedPayload{
-		Result: ParticipantReleasedMediaFailed,
-		Reason: ReleasedReasonMediaFailed,
+	releasedPayload, _ := json.Marshal(protocol.ParticipantReleasedPayload{
+		Result: protocol.ParticipantReleasedMediaFailed,
+		Reason: protocol.ReleasedReasonMediaFailed,
 		Detail: detail,
 	})
-	releasedEnv := Envelope{
-		V:       ContractVersion,
-		Type:    TypeParticipantReleased,
+	releasedEnv := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypeParticipantReleased,
 		RoomID:  rm.ID(),
 		TS:      time.Now().UnixMilli(),
 		Payload: releasedPayload,
@@ -639,12 +641,12 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *meshConn, d *Decode
 	// to remaining participants. Caller already released the slot, so
 	// `outcome.Remaining` is the post-release roster.
 	rm.Lock()
-	update := BuildRosterUpdate(rm, outcome.Departing, PresenceReleased, RosterReasonMediaFailed)
+	update := BuildRosterUpdate(rm, outcome.Departing, protocol.PresenceReleased, protocol.RosterReasonMediaFailed)
 	rm.Unlock()
 	updatePayload, _ := json.Marshal(update)
-	updateEnv := Envelope{
-		V:       ContractVersion,
-		Type:    TypeMeshRosterUpdate,
+	updateEnv := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypeMeshRosterUpdate,
 		RoomID:  rm.ID(),
 		TS:      time.Now().UnixMilli(),
 		Payload: updatePayload,
@@ -677,15 +679,15 @@ func (h *Handler) handleMediaFailed(ctx context.Context, cc *meshConn, d *Decode
 }
 
 // sendJoinRejected centralizes the join_rejected send.
-func (h *Handler) sendJoinRejected(ctx context.Context, cc *meshConn, roomID, requestID string, result JoinRejectedResult, reason JoinRejectedReason, message string) {
-	payload, _ := json.Marshal(JoinRejectedPayload{
+func (h *Handler) sendJoinRejected(ctx context.Context, cc *meshConn, roomID, requestID string, result protocol.JoinRejectedResult, reason protocol.JoinRejectedReason, message string) {
+	payload, _ := json.Marshal(protocol.JoinRejectedPayload{
 		Result:  result,
 		Reason:  reason,
 		Message: message,
 	})
-	env := Envelope{
-		V:         ContractVersion,
-		Type:      TypeJoinRejected,
+	env := protocol.Envelope{
+		V:         protocol.ContractVersion,
+		Type:      protocol.TypeJoinRejected,
 		RoomID:    roomID,
 		RequestID: requestID,
 		TS:        time.Now().UnixMilli(),
@@ -693,4 +695,3 @@ func (h *Handler) sendJoinRejected(ctx context.Context, cc *meshConn, roomID, re
 	}
 	_ = cc.sendJSON(ctx, env)
 }
-

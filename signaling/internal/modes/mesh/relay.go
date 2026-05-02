@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"time"
+
+	"webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // pairRelayKind discriminates offer-vs-answer at the relay level so
@@ -33,11 +35,11 @@ const (
 )
 
 // handlePairOffer implements the §3.10 server-side relay path.
-func (h *Handler) handlePairOffer(ctx context.Context, cc *meshConn, d *Decoded) error {
-	payload, ok := d.Message.(*PairOfferPayload)
+func (h *Handler) handlePairOffer(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+	payload, ok := d.Message.(*protocol.PairOfferPayload)
 	if !ok || payload == nil {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeInternalError,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeInternalError,
 			Message: "pair_offer decode mismatch",
 		}, d.Envelope.RequestID)
 		return nil
@@ -46,11 +48,11 @@ func (h *Handler) handlePairOffer(ctx context.Context, cc *meshConn, d *Decoded)
 }
 
 // handlePairAnswer implements the §3.11 server-side relay path.
-func (h *Handler) handlePairAnswer(ctx context.Context, cc *meshConn, d *Decoded) error {
-	payload, ok := d.Message.(*PairAnswerPayload)
+func (h *Handler) handlePairAnswer(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
+	payload, ok := d.Message.(*protocol.PairAnswerPayload)
 	if !ok || payload == nil {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeInternalError,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeInternalError,
 			Message: "pair_answer decode mismatch",
 		}, d.Envelope.RequestID)
 		return nil
@@ -64,7 +66,7 @@ func (h *Handler) handlePairAnswer(ctx context.Context, cc *meshConn, d *Decoded
 func (h *Handler) relayPair(
 	ctx context.Context,
 	cc *meshConn,
-	d *Decoded,
+	d *protocol.Decoded,
 	kind pairRelayKind,
 	pairID string,
 	pairEpoch uint64,
@@ -73,8 +75,8 @@ func (h *Handler) relayPair(
 ) error {
 	// Sender must be admitted in some mesh room.
 	if cc.peerID == "" || cc.roomID == "" {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "pair message requires an admitted participant",
 		}, d.Envelope.RequestID)
 		return nil
@@ -82,8 +84,8 @@ func (h *Handler) relayPair(
 
 	rm := h.Manager.Room(cc.roomID)
 	if rm == nil {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "mesh room not found",
 		}, d.Envelope.RequestID)
 		return nil
@@ -93,8 +95,8 @@ func (h *Handler) relayPair(
 	ledger, _ := rm.PairLedger().(*pairLedger)
 	if ledger == nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeInternalError,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeInternalError,
 			Message: "pair ledger unavailable",
 		}, d.Envelope.RequestID)
 		return nil
@@ -102,8 +104,8 @@ func (h *Handler) relayPair(
 	pair, exists := ledger.pairs[pairID]
 	if !exists {
 		rm.Unlock()
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeStalePairEpoch,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeStalePairEpoch,
 			Message: "pair " + pairID + " is unknown to the server",
 		}, d.Envelope.RequestID)
 		return nil
@@ -124,16 +126,16 @@ func (h *Handler) relayPair(
 	case relayKindOffer:
 		if !senderIsLo {
 			rm.Unlock()
-			h.writeError(ctx, cc, &ProtocolError{
-				Code:    CodeUnexpectedOffer,
+			h.writeError(ctx, cc, &protocol.ProtocolError{
+				Code:    protocol.CodeUnexpectedOffer,
 				Message: "pair_offer must come from the offerer (lower admissionIndex)",
 			}, d.Envelope.RequestID)
 			return nil
 		}
 		if sdpType != "offer" {
 			rm.Unlock()
-			h.writeError(ctx, cc, &ProtocolError{
-				Code:    CodeMalformed,
+			h.writeError(ctx, cc, &protocol.ProtocolError{
+				Code:    protocol.CodeMalformed,
 				Message: "pair_offer.sdp.type must be 'offer'",
 			}, d.Envelope.RequestID)
 			return nil
@@ -141,23 +143,23 @@ func (h *Handler) relayPair(
 	case relayKindAnswer:
 		if !senderIsHi {
 			rm.Unlock()
-			h.writeError(ctx, cc, &ProtocolError{
-				Code:    CodeUnexpectedAnswer,
+			h.writeError(ctx, cc, &protocol.ProtocolError{
+				Code:    protocol.CodeUnexpectedAnswer,
 				Message: "pair_answer must come from the answerer (higher admissionIndex)",
 			}, d.Envelope.RequestID)
 			return nil
 		}
 		if sdpType != "answer" {
 			rm.Unlock()
-			h.writeError(ctx, cc, &ProtocolError{
-				Code:    CodeMalformed,
+			h.writeError(ctx, cc, &protocol.ProtocolError{
+				Code:    protocol.CodeMalformed,
 				Message: "pair_answer.sdp.type must be 'answer'",
 			}, d.Envelope.RequestID)
 			return nil
 		}
 	}
 	// Epoch check (§A.5).
-	if perr := ValidateStalePairEpoch(pairID, pairEpoch, ledger); perr != nil {
+	if perr := protocol.ValidateStalePairEpoch(pairID, pairEpoch, ledger); perr != nil {
 		rm.Unlock()
 		h.writeError(ctx, cc, perr, d.Envelope.RequestID)
 		return nil
@@ -187,8 +189,8 @@ func (h *Handler) relayPair(
 
 	// Stamp from + to and forward the original payload bytes verbatim.
 	// The server never parses or mutates sdp.sdp.
-	envOut := Envelope{
-		V:       ContractVersion,
+	envOut := protocol.Envelope{
+		V:       protocol.ContractVersion,
 		Type:    pairRelayType(kind),
 		RoomID:  roomID,
 		From:    cc.peerID,
@@ -218,11 +220,11 @@ func (h *Handler) relayPair(
 	return nil
 }
 
-func pairRelayType(k pairRelayKind) MessageType {
+func pairRelayType(k pairRelayKind) protocol.MessageType {
 	if k == relayKindAnswer {
-		return TypePairAnswer
+		return protocol.TypePairAnswer
 	}
-	return TypePairOffer
+	return protocol.TypePairOffer
 }
 
 func relayKindLabel(k pairRelayKind) string {
@@ -232,9 +234,9 @@ func relayKindLabel(k pairRelayKind) string {
 	return "pair_offer"
 }
 
-func wrongRoleError(k pairRelayKind, msg string) *ProtocolError {
+func wrongRoleError(k pairRelayKind, msg string) *protocol.ProtocolError {
 	if k == relayKindAnswer {
-		return &ProtocolError{Code: CodeUnexpectedAnswer, Message: msg}
+		return &protocol.ProtocolError{Code: protocol.CodeUnexpectedAnswer, Message: msg}
 	}
-	return &ProtocolError{Code: CodeUnexpectedOffer, Message: msg}
+	return &protocol.ProtocolError{Code: protocol.CodeUnexpectedOffer, Message: msg}
 }

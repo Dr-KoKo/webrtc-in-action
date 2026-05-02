@@ -4,7 +4,7 @@
 //
 // Forbidden tokens (compile-time non-existence): `chat_message`,
 // `mesh_chat`, `chat`, `text_message`. The test introspects
-// mesh.AllTypes and fails if any registered name contains a chat token.
+// protocol.AllTypes and fails if any registered name contains a chat token.
 
 package mesh_test
 
@@ -12,16 +12,16 @@ import (
 	"strings"
 	"testing"
 
-	"webrtc-lab/signaling/internal/modes/mesh"
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 func TestNoSignalingChatType(t *testing.T) {
 	forbidden := []string{"chat_message", "mesh_chat", "text_message"}
-	for _, ty := range mesh.AllTypes {
+	for _, ty := range protocol.AllTypes {
 		s := strings.ToLower(string(ty))
 		for _, bad := range forbidden {
 			if s == bad {
-				t.Errorf("forbidden chat-bearing type %q registered in mesh.AllTypes", ty)
+				t.Errorf("forbidden chat-bearing type %q registered in protocol.AllTypes", ty)
 			}
 		}
 		// Guard against any future type whose name contains "chat".
@@ -35,12 +35,12 @@ func TestNoSignalingChatType(t *testing.T) {
 // contract level. Mesh has no room-level current-sharer concept so
 // screen_share_busy is neither a type nor an error code.
 func TestNoScreenShareBusy(t *testing.T) {
-	for _, ty := range mesh.AllTypes {
+	for _, ty := range protocol.AllTypes {
 		if strings.Contains(string(ty), "screen_share_busy") {
 			t.Errorf("forbidden type %q registered", ty)
 		}
 	}
-	for _, c := range mesh.AllErrorCodes {
+	for _, c := range protocol.AllErrorCodes {
 		if strings.Contains(string(c), "screen_share_busy") {
 			t.Errorf("forbidden error code %q registered", c)
 		}
@@ -50,12 +50,12 @@ func TestNoScreenShareBusy(t *testing.T) {
 // TestRoomFullIsNotAType / IsNotAnErrorCode — pre-admission rejection
 // goes through join_rejected only.
 func TestRoomFullIsNotATypeNorCode(t *testing.T) {
-	for _, ty := range mesh.AllTypes {
+	for _, ty := range protocol.AllTypes {
 		if string(ty) == "room_full" {
 			t.Errorf("'room_full' must not be a registered MessageType")
 		}
 	}
-	for _, c := range mesh.AllErrorCodes {
+	for _, c := range protocol.AllErrorCodes {
 		if string(c) == "room_full" || string(c) == "invalid_room_id" {
 			t.Errorf("%q must not be an ErrorCode", c)
 		}

@@ -24,27 +24,29 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // handlePairMediaState — §3.13 server-fan-out.
-func (h *Handler) handlePairMediaState(ctx context.Context, cc *meshConn, d *Decoded) error {
+func (h *Handler) handlePairMediaState(ctx context.Context, cc *meshConn, d *protocol.Decoded) error {
 	// Sender must be admitted in some mesh room.
 	if cc.peerID == "" || cc.roomID == "" {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "pair_media_state requires an admitted participant",
 		}, d.Envelope.RequestID)
 		return nil
 	}
 
-	// Decode-time validator already ran via `decodeInto[PairMediaStatePayload]`
+	// Decode-time validator already ran via `decodeInto[protocol.PairMediaStatePayload]`
 	// so the payload's three required fields are guaranteed present and
 	// in their canonical enums. Re-check the type-assertion as a guard
-	// against future code paths that construct a Decoded without going
-	// through DecodeEnvelope.
-	if _, ok := d.Message.(*PairMediaStatePayload); !ok {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeInternalError,
+	// against future code paths that construct a protocol.Decoded without going
+	// through protocol.DecodeEnvelope.
+	if _, ok := d.Message.(*protocol.PairMediaStatePayload); !ok {
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeInternalError,
 			Message: "pair_media_state decode mismatch",
 		}, d.Envelope.RequestID)
 		return nil
@@ -52,8 +54,8 @@ func (h *Handler) handlePairMediaState(ctx context.Context, cc *meshConn, d *Dec
 
 	rm := h.Manager.Room(cc.roomID)
 	if rm == nil {
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "mesh room not found",
 		}, d.Envelope.RequestID)
 		return nil
@@ -63,8 +65,8 @@ func (h *Handler) handlePairMediaState(ctx context.Context, cc *meshConn, d *Dec
 	subject := rm.FindByPeerID(cc.peerID)
 	if subject == nil {
 		rm.Unlock()
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "participant not found in room",
 		}, d.Envelope.RequestID)
 		return nil
@@ -74,8 +76,8 @@ func (h *Handler) handlePairMediaState(ctx context.Context, cc *meshConn, d *Dec
 	// to the room. media-ready is the only readiness that may publish.
 	if subject.Readiness != ReadinessMediaReady {
 		rm.Unlock()
-		h.writeError(ctx, cc, &ProtocolError{
-			Code:    CodeNotInRoom,
+		h.writeError(ctx, cc, &protocol.ProtocolError{
+			Code:    protocol.CodeNotInRoom,
 			Message: "pair_media_state requires readiness=media-ready",
 		}, d.Envelope.RequestID)
 		return nil
@@ -90,9 +92,9 @@ func (h *Handler) handlePairMediaState(ctx context.Context, cc *meshConn, d *Dec
 	// gets one envelope with `from = sender.peerId` and `to` unset
 	// (fan-out is participant-level, not unicast pair). `Payload` is
 	// `json.RawMessage`, so re-marshaling preserves bytes exactly.
-	envOut := Envelope{
-		V:       ContractVersion,
-		Type:    TypePairMediaState,
+	envOut := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypePairMediaState,
 		RoomID:  roomID,
 		From:    cc.peerID,
 		TS:      time.Now().UnixMilli(),

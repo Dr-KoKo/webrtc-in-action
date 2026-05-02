@@ -13,19 +13,21 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // readUntilType drains frames from conn until one of the requested
 // types arrives. Returns that frame. Other frames are discarded.
 // Caller-provided ctx bounds the wait.
-func readUntilType(t *testing.T, conn *websocket.Conn, ctx context.Context, want mesh.MessageType) mesh.Envelope {
+func readUntilType(t *testing.T, conn *websocket.Conn, ctx context.Context, want protocol.MessageType) protocol.Envelope {
 	t.Helper()
 	for {
 		_, raw, err := conn.Read(ctx)
 		if err != nil {
 			t.Fatalf("read failed waiting for %q: %v", want, err)
 		}
-		var env mesh.Envelope
+		var env protocol.Envelope
 		if err := json.Unmarshal(raw, &env); err != nil {
 			t.Fatalf("unmarshal failed: %v", err)
 		}
@@ -46,8 +48,8 @@ func TestSnapshotIncludesAllParticipantsIncludingSelf(t *testing.T) {
 	const roomID = "snap-room"
 	connA, peerA, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connA.CloseNow()
-	snapA := readUntilType(t, connA, ctx, mesh.TypeMeshRosterSnapshot)
-	var snapPayloadA mesh.MeshRosterSnapshotPayload
+	snapA := readUntilType(t, connA, ctx, protocol.TypeMeshRosterSnapshot)
+	var snapPayloadA protocol.MeshRosterSnapshotPayload
 	if err := json.Unmarshal(snapA.Payload, &snapPayloadA); err != nil {
 		t.Fatalf("snapshot unmarshal failed: %v", err)
 	}
@@ -57,12 +59,12 @@ func TestSnapshotIncludesAllParticipantsIncludingSelf(t *testing.T) {
 
 	// Drain A's own roster_update presence:joined so subsequent reads
 	// see B's broadcasts cleanly.
-	_ = readUntilType(t, connA, ctx, mesh.TypeMeshRosterUpdate)
+	_ = readUntilType(t, connA, ctx, protocol.TypeMeshRosterUpdate)
 
 	connB, peerB, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connB.CloseNow()
-	snapB := readUntilType(t, connB, ctx, mesh.TypeMeshRosterSnapshot)
-	var snapPayloadB mesh.MeshRosterSnapshotPayload
+	snapB := readUntilType(t, connB, ctx, protocol.TypeMeshRosterSnapshot)
+	var snapPayloadB protocol.MeshRosterSnapshotPayload
 	if err := json.Unmarshal(snapB.Payload, &snapPayloadB); err != nil {
 		t.Fatalf("B snapshot unmarshal failed: %v", err)
 	}
@@ -94,27 +96,27 @@ func TestRosterSeqStrictlyIncreasing(t *testing.T) {
 	// A joins; A receives one roster_update (its own admission, seq=1).
 	connA, _, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connA.CloseNow()
-	readUntilType(t, connA, ctx, mesh.TypeMeshRosterSnapshot)
+	readUntilType(t, connA, ctx, protocol.TypeMeshRosterSnapshot)
 	seq1 := mustReadSeq(t, connA, ctx)
 
 	// B, C, D join — each fires one update broadcast for itself, A
 	// receives 3 more updates → seq 2, 3, 4.
 	connB, _, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connB.CloseNow()
-	readUntilType(t, connB, ctx, mesh.TypeMeshRosterSnapshot)
+	readUntilType(t, connB, ctx, protocol.TypeMeshRosterSnapshot)
 	seq2 := mustReadSeq(t, connA, ctx)
 	_ = mustReadSeq(t, connB, ctx) // B receives its own joined update
 
 	connC, _, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connC.CloseNow()
-	readUntilType(t, connC, ctx, mesh.TypeMeshRosterSnapshot)
+	readUntilType(t, connC, ctx, protocol.TypeMeshRosterSnapshot)
 	seq3 := mustReadSeq(t, connA, ctx)
 	_ = mustReadSeq(t, connB, ctx)
 	_ = mustReadSeq(t, connC, ctx)
 
 	connD, _, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connD.CloseNow()
-	readUntilType(t, connD, ctx, mesh.TypeMeshRosterSnapshot)
+	readUntilType(t, connD, ctx, protocol.TypeMeshRosterSnapshot)
 	seq4 := mustReadSeq(t, connA, ctx)
 	_ = mustReadSeq(t, connB, ctx)
 	_ = mustReadSeq(t, connC, ctx)
@@ -148,8 +150,8 @@ func TestRosterSeqStrictlyIncreasing(t *testing.T) {
 // Drains intermediate frames (none expected in M3 but safe-guarded).
 func mustReadSeq(t *testing.T, conn *websocket.Conn, ctx context.Context) uint64 {
 	t.Helper()
-	upd := readUntilType(t, conn, ctx, mesh.TypeMeshRosterUpdate)
-	var p mesh.MeshRosterUpdatePayload
+	upd := readUntilType(t, conn, ctx, protocol.TypeMeshRosterUpdate)
+	var p protocol.MeshRosterUpdatePayload
 	if err := json.Unmarshal(upd.Payload, &p); err != nil {
 		t.Fatalf("update unmarshal failed: %v", err)
 	}
@@ -171,18 +173,18 @@ func TestSameDepartureSharesOneServerSeq(t *testing.T) {
 	const roomID = "departure-seq"
 	connA, _, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connA.CloseNow()
-	readUntilType(t, connA, ctx, mesh.TypeMeshRosterSnapshot)
+	readUntilType(t, connA, ctx, protocol.TypeMeshRosterSnapshot)
 	_ = mustReadSeq(t, connA, ctx) // own admission
 
 	connB, _, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connB.CloseNow()
-	readUntilType(t, connB, ctx, mesh.TypeMeshRosterSnapshot)
+	readUntilType(t, connB, ctx, protocol.TypeMeshRosterSnapshot)
 	_ = mustReadSeq(t, connA, ctx) // B's admission seen by A
 	_ = mustReadSeq(t, connB, ctx) // B's own admission
 
 	connC, _, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connC.CloseNow()
-	readUntilType(t, connC, ctx, mesh.TypeMeshRosterSnapshot)
+	readUntilType(t, connC, ctx, protocol.TypeMeshRosterSnapshot)
 	_ = mustReadSeq(t, connA, ctx) // C's admission seen by A
 	_ = mustReadSeq(t, connB, ctx) // seen by B
 	_ = mustReadSeq(t, connC, ctx) // own
@@ -248,8 +250,8 @@ func TestSnapshotServerSeqStrictlyGreaterThanPriorEmissions(t *testing.T) {
 	// Admit A. Read join_accepted, snapshot, then A's own joined-update.
 	connA, _, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connA.CloseNow()
-	snap := readUntilType(t, connA, ctx, mesh.TypeMeshRosterSnapshot)
-	var snapPayload mesh.MeshRosterSnapshotPayload
+	snap := readUntilType(t, connA, ctx, protocol.TypeMeshRosterSnapshot)
+	var snapPayload protocol.MeshRosterSnapshotPayload
 	if err := json.Unmarshal(snap.Payload, &snapPayload); err != nil {
 		t.Fatalf("snapshot unmarshal failed: %v", err)
 	}
@@ -259,8 +261,8 @@ func TestSnapshotServerSeqStrictlyGreaterThanPriorEmissions(t *testing.T) {
 
 	// First mesh_roster_update for A's own admission must be strictly
 	// greater than the snapshot's seq.
-	upd := readUntilType(t, connA, ctx, mesh.TypeMeshRosterUpdate)
-	var updPayload mesh.MeshRosterUpdatePayload
+	upd := readUntilType(t, connA, ctx, protocol.TypeMeshRosterUpdate)
+	var updPayload protocol.MeshRosterUpdatePayload
 	if err := json.Unmarshal(upd.Payload, &updPayload); err != nil {
 		t.Fatalf("update unmarshal failed: %v", err)
 	}

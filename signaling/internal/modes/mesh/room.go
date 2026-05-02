@@ -19,6 +19,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // MaxParticipants — hard cap from FR-011. Exposed for tests + audits
@@ -177,10 +179,10 @@ func (r *MeshRoom) ParticipantsSnapshot() []*Participant {
 // (TestAdmissionIndexNeverReused). Caller must hold the lock.
 func (r *MeshRoom) AdmissionCounter() uint64 { return r.admissionCounter }
 
-// PairLedger returns the room's pair-epoch ledger. Caller must hold
+// protocol.PairLedger returns the room's pair-epoch ledger. Caller must hold
 // the lock when mutating; reads also need it under the room model's
 // concurrency contract.
-func (r *MeshRoom) PairLedger() PairLedger { return r.pairs }
+func (r *MeshRoom) PairLedger() protocol.PairLedger { return r.pairs }
 
 // nextRosterSeq advances rosterSeq and returns the new value. Caller
 // must hold the lock. Used by every roster broadcast (§A.6) so the

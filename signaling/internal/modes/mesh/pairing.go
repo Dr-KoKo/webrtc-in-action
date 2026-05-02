@@ -24,6 +24,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"time"
+
+	"webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // pairInstruction is one (pairId, role, recipient, remote) tuple
@@ -31,11 +33,11 @@ import (
 // while holding the room lock and emit them after release so the
 // outbound fan-out never races a concurrent admission.
 type pairInstruction struct {
-	pairID         string
-	pairEpoch      uint64
-	role           PairRole
-	recipient      *Participant
-	remote         *Participant
+	pairID    string
+	pairEpoch uint64
+	role      protocol.PairRole
+	recipient *Participant
+	remote    *Participant
 }
 
 // EvaluateAndEmitInstructions runs the §3.9 evaluator for the supplied
@@ -82,7 +84,7 @@ func (h *Handler) EvaluateAndEmitInstructions(rm *MeshRoom, subject *Participant
 			loIdx, hiIdx = peer.AdmissionIndex, current.AdmissionIndex
 			loPeer, hiPeer = peer, current
 		}
-		pairID := MakePairID(loIdx, hiIdx)
+		pairID := protocol.MakePairID(loIdx, hiIdx)
 		if _, exists := ledger.pairs[pairID]; exists {
 			// Existing pair (any state) — defensive no-op; preserves
 			// pc, dc, senders, states, pairEpoch on both clients.
@@ -97,14 +99,14 @@ func (h *Handler) EvaluateAndEmitInstructions(rm *MeshRoom, subject *Participant
 			pairInstruction{
 				pairID:    pairID,
 				pairEpoch: epoch,
-				role:      RoleOfferer,
+				role:      protocol.RoleOfferer,
 				recipient: loPeer,
 				remote:    hiPeer,
 			},
 			pairInstruction{
 				pairID:    pairID,
 				pairEpoch: epoch,
-				role:      RoleAnswerer,
+				role:      protocol.RoleAnswerer,
 				recipient: hiPeer,
 				remote:    loPeer,
 			},
@@ -116,21 +118,21 @@ func (h *Handler) EvaluateAndEmitInstructions(rm *MeshRoom, subject *Participant
 	// Fan-out: marshal once per (pairId, role) instruction; each
 	// recipient gets their own envelope with `to` = recipient.PeerID.
 	for _, ins := range instructions {
-		payload, _ := json.Marshal(PairNegotiationInstructionPayload{
-			pairIdentity: pairIdentity{
+		payload, _ := json.Marshal(protocol.PairNegotiationInstructionPayload{
+			PairIdentity: protocol.PairIdentity{
 				PairID:    ins.pairID,
 				PairEpoch: ins.pairEpoch,
 			},
 			Role: ins.role,
-			RemotePeer: RemotePeerRef{
+			RemotePeer: protocol.RemotePeerRef{
 				PeerID:         ins.remote.PeerID,
 				AdmissionIndex: ins.remote.AdmissionIndex,
 			},
 			IceServers: iceServers,
 		})
-		env := Envelope{
-			V:       ContractVersion,
-			Type:    TypePairNegotiationInstruction,
+		env := protocol.Envelope{
+			V:       protocol.ContractVersion,
+			Type:    protocol.TypePairNegotiationInstruction,
 			RoomID:  roomID,
 			To:      ins.recipient.PeerID,
 			TS:      time.Now().UnixMilli(),

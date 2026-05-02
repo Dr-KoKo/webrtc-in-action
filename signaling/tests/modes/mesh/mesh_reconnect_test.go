@@ -31,6 +31,8 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // sendPairFailed writes a v=2 pair_failed envelope on conn for pairId
@@ -47,7 +49,7 @@ func sendPairFailed(t *testing.T, conn *websocket.Conn, ctx context.Context, roo
 		"detail":    "test induced",
 	}
 	env := map[string]any{
-		"v":       mesh.ContractVersion,
+		"v":       protocol.ContractVersion,
 		"type":    "pair_failed",
 		"roomId":  roomID,
 		"to":      "00000000-0000-4000-8000-000000000001",
@@ -71,7 +73,7 @@ func sendReconnectPair(t *testing.T, conn *websocket.Conn, ctx context.Context, 
 		"observedEpoch": observedEpoch,
 	}
 	env := map[string]any{
-		"v":       mesh.ContractVersion,
+		"v":       protocol.ContractVersion,
 		"type":    "reconnect_pair",
 		"roomId":  roomID,
 		"payload": payload,
@@ -87,10 +89,10 @@ func sendReconnectPair(t *testing.T, conn *websocket.Conn, ctx context.Context, 
 
 // readPairReconnectInstruction reads one frame and asserts type =
 // pair_reconnect_instruction, returning the decoded payload.
-func readPairReconnectInstruction(t *testing.T, conn *websocket.Conn, ctx context.Context) mesh.PairReconnectInstructionPayload {
+func readPairReconnectInstruction(t *testing.T, conn *websocket.Conn, ctx context.Context) protocol.PairReconnectInstructionPayload {
 	t.Helper()
-	env := readMeshFrameOfType(t, conn, ctx, mesh.TypePairReconnectInstruction)
-	var p mesh.PairReconnectInstructionPayload
+	env := readMeshFrameOfType(t, conn, ctx, protocol.TypePairReconnectInstruction)
+	var p protocol.PairReconnectInstructionPayload
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		t.Fatalf("pair_reconnect_instruction payload unmarshal: %v", err)
 	}
@@ -101,10 +103,10 @@ func readPairReconnectInstruction(t *testing.T, conn *websocket.Conn, ctx contex
 // the parsed payload + envelope. Unlike `expectErrorEnvelope` (which
 // only returns the Code), this preserves Message + Context so the
 // caller can assert on the canonical-equivalent disambiguator.
-func readErrorEnvelope(t *testing.T, conn *websocket.Conn, ctx context.Context) (mesh.Envelope, mesh.ErrorPayload) {
+func readErrorEnvelope(t *testing.T, conn *websocket.Conn, ctx context.Context) (protocol.Envelope, protocol.ErrorPayload) {
 	t.Helper()
-	env := readMeshFrameOfType(t, conn, ctx, mesh.TypeError)
-	var p mesh.ErrorPayload
+	env := readMeshFrameOfType(t, conn, ctx, protocol.TypeError)
+	var p protocol.ErrorPayload
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		t.Fatalf("error payload unmarshal: %v", err)
 	}
@@ -117,8 +119,8 @@ func readErrorEnvelope(t *testing.T, conn *websocket.Conn, ctx context.Context) 
 func induceFailedPair(t *testing.T, connA, connB *websocket.Conn, ctx context.Context, roomID, pairID string, epoch uint64) {
 	t.Helper()
 	sendPairFailed(t, connA, ctx, roomID, pairID, epoch)
-	relayed := readMeshFrameOfType(t, connB, ctx, mesh.TypePairFailed)
-	var p mesh.PairFailedPayload
+	relayed := readMeshFrameOfType(t, connB, ctx, protocol.TypePairFailed)
+	var p protocol.PairFailedPayload
 	if err := json.Unmarshal(relayed.Payload, &p); err != nil {
 		t.Fatalf("relayed pair_failed unmarshal: %v", err)
 	}
@@ -146,11 +148,11 @@ func TestPairFailedRelayedToOtherEndpointOnly(t *testing.T) {
 	defer connB.CloseNow()
 
 	sendPairFailed(t, connA, ctx, "failrelay", pairID, epoch)
-	relayed := readMeshFrameOfType(t, connB, ctx, mesh.TypePairFailed)
+	relayed := readMeshFrameOfType(t, connB, ctx, protocol.TypePairFailed)
 	if relayed.From == "" {
 		t.Fatalf("relayed pair_failed missing from")
 	}
-	var p mesh.PairFailedPayload
+	var p protocol.PairFailedPayload
 	if err := json.Unmarshal(relayed.Payload, &p); err != nil {
 		t.Fatalf("relayed pair_failed unmarshal: %v", err)
 	}
@@ -158,7 +160,7 @@ func TestPairFailedRelayedToOtherEndpointOnly(t *testing.T) {
 		t.Fatalf("relayed pair_failed mismatch: got (%q, %d); want (%q, %d)",
 			p.PairID, p.PairEpoch, pairID, epoch)
 	}
-	if p.Reason != mesh.PairFailedConnection {
+	if p.Reason != protocol.PairFailedConnection {
 		t.Fatalf("relayed reason = %q; want connection_state_failed", p.Reason)
 	}
 	// Sender (A) must NOT receive a forwarded copy.
@@ -184,12 +186,12 @@ func TestPairFailedDoesNotBroadcastRosterUpdate(t *testing.T) {
 	connB, _, idxB := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connB.CloseNow()
 	_ = drainMeshFrames(t, connB, ctx, 2)
-	_ = readMeshFrameOfType(t, connA, ctx, mesh.TypeMeshRosterUpdate) // B joined update for A
+	_ = readMeshFrameOfType(t, connA, ctx, protocol.TypeMeshRosterUpdate) // B joined update for A
 	connC, _, idxC := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connC.CloseNow()
 	_ = drainMeshFrames(t, connC, ctx, 2)
-	_ = readMeshFrameOfType(t, connA, ctx, mesh.TypeMeshRosterUpdate) // C joined update for A
-	_ = readMeshFrameOfType(t, connB, ctx, mesh.TypeMeshRosterUpdate) // C joined update for B
+	_ = readMeshFrameOfType(t, connA, ctx, protocol.TypeMeshRosterUpdate) // C joined update for A
+	_ = readMeshFrameOfType(t, connB, ctx, protocol.TypeMeshRosterUpdate) // C joined update for B
 
 	// Drive A, B, C all to media-ready; drain instructions on every
 	// conn so reads start fresh below.
@@ -207,9 +209,9 @@ func TestPairFailedDoesNotBroadcastRosterUpdate(t *testing.T) {
 
 	// Fail A↔B only. C should not receive a roster_update or any
 	// other frame.
-	pairAB := mesh.MakePairID(idxA, idxB)
+	pairAB := protocol.MakePairID(idxA, idxB)
 	sendPairFailed(t, connA, ctx, roomID, pairAB, 1)
-	_ = readMeshFrameOfType(t, connB, ctx, mesh.TypePairFailed)
+	_ = readMeshFrameOfType(t, connB, ctx, protocol.TypePairFailed)
 	_ = idxC
 	expectNoFurtherFrame(t, connC)
 }
@@ -244,10 +246,10 @@ func TestReconnectPairHappyPath(t *testing.T) {
 	if aInstr.PairEpoch != epoch+1 || bInstr.PairEpoch != epoch+1 {
 		t.Fatalf("new epoch = (a=%d, b=%d); want both %d", aInstr.PairEpoch, bInstr.PairEpoch, epoch+1)
 	}
-	if aInstr.Role != mesh.RoleOfferer {
+	if aInstr.Role != protocol.RoleOfferer {
 		t.Fatalf("A role = %q; want offerer (lower admissionIndex)", aInstr.Role)
 	}
-	if bInstr.Role != mesh.RoleAnswerer {
+	if bInstr.Role != protocol.RoleAnswerer {
 		t.Fatalf("B role = %q; want answerer (higher admissionIndex)", bInstr.Role)
 	}
 	if aInstr.PairID != pairID || bInstr.PairID != pairID {
@@ -292,7 +294,7 @@ func TestReconnectPairStaleObservedEpochRejected(t *testing.T) {
 	// Re-send with the OLD observedEpoch — should be rejected stale.
 	sendReconnectPair(t, connA, ctx, "reconstale", pairID, epoch)
 	_, ep := readErrorEnvelope(t, connA, ctx)
-	if ep.Code != mesh.CodeStalePairEpoch {
+	if ep.Code != protocol.CodeStalePairEpoch {
 		t.Fatalf("error.code = %q; want stale_pair_epoch", ep.Code)
 	}
 	// No second instruction follows on B (the un-clicked side). Only
@@ -319,12 +321,12 @@ func TestReconnectPairNotInPairRejected(t *testing.T) {
 	connB, _, idxB := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connB.CloseNow()
 	_ = drainMeshFrames(t, connB, ctx, 2)
-	_ = readMeshFrameOfType(t, connA, ctx, mesh.TypeMeshRosterUpdate)
+	_ = readMeshFrameOfType(t, connA, ctx, protocol.TypeMeshRosterUpdate)
 	connC, _, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connC.CloseNow()
 	_ = drainMeshFrames(t, connC, ctx, 2)
-	_ = readMeshFrameOfType(t, connA, ctx, mesh.TypeMeshRosterUpdate)
-	_ = readMeshFrameOfType(t, connB, ctx, mesh.TypeMeshRosterUpdate)
+	_ = readMeshFrameOfType(t, connA, ctx, protocol.TypeMeshRosterUpdate)
+	_ = readMeshFrameOfType(t, connB, ctx, protocol.TypeMeshRosterUpdate)
 
 	// Drive A + B to media-ready (forms pair A↔B) — leave C un-paired.
 	sendMediaReady(t, connA, ctx, roomID)
@@ -334,13 +336,13 @@ func TestReconnectPairNotInPairRejected(t *testing.T) {
 	readNPairInstructions(t, connA, ctx, 1)
 	readNPairInstructions(t, connB, ctx, 1)
 
-	pairAB := mesh.MakePairID(idxA, idxB)
+	pairAB := protocol.MakePairID(idxA, idxB)
 	induceFailedPair(t, connA, connB, ctx, roomID, pairAB, 1)
 
 	// C tries to reconnect A↔B — must be rejected.
 	sendReconnectPair(t, connC, ctx, roomID, pairAB, 1)
 	_, ep := readErrorEnvelope(t, connC, ctx)
-	if ep.Code != mesh.CodeMalformed {
+	if ep.Code != protocol.CodeMalformed {
 		t.Fatalf("error.code = %q; want malformed (canonical-equivalent of not_pair_member)", ep.Code)
 	}
 	if !strings.Contains(ep.Message, "does not belong") {
@@ -374,7 +376,7 @@ func TestReconnectPairUnknownPairRejected(t *testing.T) {
 
 	sendReconnectPair(t, connA, ctx, "reconunknown", "9999-99999", 1)
 	_, ep := readErrorEnvelope(t, connA, ctx)
-	if ep.Code != mesh.CodeStalePairEpoch {
+	if ep.Code != protocol.CodeStalePairEpoch {
 		t.Fatalf("error.code = %q; want stale_pair_epoch (canonical-equivalent of unknown_pair)", ep.Code)
 	}
 	if subcode, _ := ep.Context["subcode"].(string); subcode != "unknown_pair" {
@@ -398,7 +400,7 @@ func TestReconnectPairNotFailedRejected(t *testing.T) {
 
 	sendReconnectPair(t, connA, ctx, "reconnotfailed", pairID, epoch)
 	_, ep := readErrorEnvelope(t, connA, ctx)
-	if ep.Code != mesh.CodeMalformed {
+	if ep.Code != protocol.CodeMalformed {
 		t.Fatalf("error.code = %q; want malformed (canonical-equivalent of pair_not_failed)", ep.Code)
 	}
 	if subcode, _ := ep.Context["subcode"].(string); subcode != "pair_not_failed" {
@@ -448,7 +450,7 @@ func TestReconnectPairSimultaneousClickRaceProducesOneWinner(t *testing.T) {
 	type sideResult struct {
 		instructions int
 		errors       int
-		errorCode    mesh.ErrorCode
+		errorCode    protocol.ErrorCode
 	}
 	collect := func(conn *websocket.Conn) sideResult {
 		var r sideResult
@@ -461,16 +463,16 @@ func TestReconnectPairSimultaneousClickRaceProducesOneWinner(t *testing.T) {
 			if err != nil {
 				return r
 			}
-			var env mesh.Envelope
+			var env protocol.Envelope
 			if err := json.Unmarshal(raw, &env); err != nil {
 				t.Fatalf("envelope unmarshal: %v", err)
 			}
 			switch env.Type {
-			case mesh.TypePairReconnectInstruction:
+			case protocol.TypePairReconnectInstruction:
 				r.instructions++
-			case mesh.TypeError:
+			case protocol.TypeError:
 				r.errors++
-				var ep mesh.ErrorPayload
+				var ep protocol.ErrorPayload
 				_ = json.Unmarshal(env.Payload, &ep)
 				r.errorCode = ep.Code
 			default:
@@ -494,7 +496,7 @@ func TestReconnectPairSimultaneousClickRaceProducesOneWinner(t *testing.T) {
 	if a.errors == 0 {
 		loserCode = b.errorCode
 	}
-	if loserCode != mesh.CodeStalePairEpoch {
+	if loserCode != protocol.CodeStalePairEpoch {
 		t.Fatalf("loser error.code = %q; want stale_pair_epoch", loserCode)
 	}
 }
@@ -537,7 +539,7 @@ func TestReconnectPairRemoteEndpointDisconnectedRejected(t *testing.T) {
 	// emitting any pair_reconnect_instruction.
 	sendReconnectPair(t, connA, ctx, roomID, pairID, epoch)
 	_, ep := readErrorEnvelope(t, connA, ctx)
-	if ep.Code != mesh.CodeNotInRoom {
+	if ep.Code != protocol.CodeNotInRoom {
 		t.Fatalf("error.code = %q; want not_in_room", ep.Code)
 	}
 	if subcode, _ := ep.Context["subcode"].(string); subcode != "remote_left" {
@@ -569,12 +571,12 @@ func TestReconnectPairOnlyTouchesAffectedPair(t *testing.T) {
 	connB, _, idxB := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connB.CloseNow()
 	_ = drainMeshFrames(t, connB, ctx, 2)
-	_ = readMeshFrameOfType(t, connA, ctx, mesh.TypeMeshRosterUpdate)
+	_ = readMeshFrameOfType(t, connA, ctx, protocol.TypeMeshRosterUpdate)
 	connC, _, _ := joinAndExpectAccepted(t, ts, ctx, roomID)
 	defer connC.CloseNow()
 	_ = drainMeshFrames(t, connC, ctx, 2)
-	_ = readMeshFrameOfType(t, connA, ctx, mesh.TypeMeshRosterUpdate)
-	_ = readMeshFrameOfType(t, connB, ctx, mesh.TypeMeshRosterUpdate)
+	_ = readMeshFrameOfType(t, connA, ctx, protocol.TypeMeshRosterUpdate)
+	_ = readMeshFrameOfType(t, connB, ctx, protocol.TypeMeshRosterUpdate)
 
 	sendMediaReady(t, connA, ctx, roomID)
 	drainAllRosterUpdatesForMediaReady(t, []*websocket.Conn{connA, connB, connC}, ctx)
@@ -588,7 +590,7 @@ func TestReconnectPairOnlyTouchesAffectedPair(t *testing.T) {
 	readNPairInstructions(t, connB, ctx, 1)
 	readNPairInstructions(t, connC, ctx, 2)
 
-	pairAB := mesh.MakePairID(idxA, idxB)
+	pairAB := protocol.MakePairID(idxA, idxB)
 	induceFailedPair(t, connA, connB, ctx, roomID, pairAB, 1)
 	sendReconnectPair(t, connA, ctx, roomID, pairAB, 1)
 	aInstr := readPairReconnectInstruction(t, connA, ctx)

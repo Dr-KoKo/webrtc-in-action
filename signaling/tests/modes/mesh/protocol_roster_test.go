@@ -6,31 +6,31 @@ import (
 	"encoding/json"
 	"testing"
 
-	"webrtc-lab/signaling/internal/modes/mesh"
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 func TestMeshRosterSnapshotRoundTrip(t *testing.T) {
-	payload, _ := json.Marshal(mesh.MeshRosterSnapshotPayload{
+	payload, _ := json.Marshal(protocol.MeshRosterSnapshotPayload{
 		ServerSeq: 12,
-		Participants: []mesh.RosterParticipant{
-			{PeerID: "11111111-2222-4333-8444-555555555555", AdmissionIndex: 1, Presence: mesh.PresenceConnected},
-			{PeerID: "22222222-3333-4444-8555-666666666666", AdmissionIndex: 2, Presence: mesh.PresenceMediaReady},
+		Participants: []protocol.RosterParticipant{
+			{PeerID: "11111111-2222-4333-8444-555555555555", AdmissionIndex: 1, Presence: protocol.PresenceConnected},
+			{PeerID: "22222222-3333-4444-8555-666666666666", AdmissionIndex: 2, Presence: protocol.PresenceMediaReady},
 		},
 	})
-	if err := mesh.Validate(mesh.TypeMeshRosterSnapshot, payload); err != nil {
+	if err := protocol.Validate(protocol.TypeMeshRosterSnapshot, payload); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestMeshRosterUpdateRoundTrip(t *testing.T) {
-	payload, _ := json.Marshal(mesh.MeshRosterUpdatePayload{
+	payload, _ := json.Marshal(protocol.MeshRosterUpdatePayload{
 		ServerSeq:      17,
 		SubjectPeerID:  "11111111-2222-4333-8444-555555555555",
 		AdmissionIndex: 3,
-		Presence:       mesh.PresenceMediaReady,
-		Reason:         mesh.RosterReasonMediaReady,
+		Presence:       protocol.PresenceMediaReady,
+		Reason:         protocol.RosterReasonMediaReady,
 	})
-	if err := mesh.Validate(mesh.TypeMeshRosterUpdate, payload); err != nil {
+	if err := protocol.Validate(protocol.TypeMeshRosterUpdate, payload); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -38,19 +38,19 @@ func TestMeshRosterUpdateRoundTrip(t *testing.T) {
 // TestPresenceEnumIsExactlySevenStates locks in the FR-013 vocabulary.
 // Adding or removing a value here requires a contract revision.
 func TestPresenceEnumIsExactlySevenStates(t *testing.T) {
-	want := map[mesh.Presence]struct{}{
-		mesh.PresenceJoined:     {},
-		mesh.PresenceMediaReady: {},
-		mesh.PresenceConnecting: {},
-		mesh.PresenceConnected:  {},
-		mesh.PresenceFailed:     {},
-		mesh.PresenceReleased:   {},
-		mesh.PresenceLeft:       {},
+	want := map[protocol.Presence]struct{}{
+		protocol.PresenceJoined:     {},
+		protocol.PresenceMediaReady: {},
+		protocol.PresenceConnecting: {},
+		protocol.PresenceConnected:  {},
+		protocol.PresenceFailed:     {},
+		protocol.PresenceReleased:   {},
+		protocol.PresenceLeft:       {},
 	}
-	if len(mesh.AllPresences) != len(want) {
-		t.Fatalf("AllPresences len = %d, want %d", len(mesh.AllPresences), len(want))
+	if len(protocol.AllPresences) != len(want) {
+		t.Fatalf("AllPresences len = %d, want %d", len(protocol.AllPresences), len(want))
 	}
-	for _, p := range mesh.AllPresences {
+	for _, p := range protocol.AllPresences {
 		if _, ok := want[p]; !ok {
 			t.Errorf("AllPresences contains unexpected presence %q", p)
 		}
@@ -59,7 +59,7 @@ func TestPresenceEnumIsExactlySevenStates(t *testing.T) {
 
 func TestMeshRosterUpdateRejectsUnknownPresence(t *testing.T) {
 	payload := []byte(`{"serverSeq":1,"subjectPeerId":"11111111-2222-4333-8444-555555555555","admissionIndex":1,"presence":"in-call","reason":"admitted"}`)
-	if err := mesh.Validate(mesh.TypeMeshRosterUpdate, payload); err == nil {
+	if err := protocol.Validate(protocol.TypeMeshRosterUpdate, payload); err == nil {
 		t.Fatal("expected unknown presence to be rejected")
 	}
 }

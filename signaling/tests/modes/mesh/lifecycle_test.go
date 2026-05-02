@@ -17,6 +17,8 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // ---------------------------------------------------------------------
@@ -45,11 +47,11 @@ func makeFastHandler(t *testing.T, useCapture bool) (*mesh.Handler, *syncBuffer)
 	return h, buf
 }
 
-func meshJoinRoom(t *testing.T, ctx context.Context, conn *websocket.Conn, roomID, requestID string) mesh.Envelope {
+func meshJoinRoom(t *testing.T, ctx context.Context, conn *websocket.Conn, roomID, requestID string) protocol.Envelope {
 	t.Helper()
-	env := mesh.Envelope{
-		V:         mesh.ContractVersion,
-		Type:      mesh.TypeJoinRoom,
+	env := protocol.Envelope{
+		V:         protocol.ContractVersion,
+		Type:      protocol.TypeJoinRoom,
 		RoomID:    roomID,
 		RequestID: requestID,
 		Payload:   json.RawMessage(`{}`),
@@ -58,29 +60,29 @@ func meshJoinRoom(t *testing.T, ctx context.Context, conn *websocket.Conn, roomI
 	if err := conn.Write(ctx, websocket.MessageText, raw); err != nil {
 		t.Fatalf("write join_room: %v", err)
 	}
-	got := readMeshUntilType(t, ctx, conn, mesh.TypeJoinAccepted, mesh.TypeJoinRejected)
-	if got.Type != mesh.TypeJoinAccepted {
+	got := readMeshUntilType(t, ctx, conn, protocol.TypeJoinAccepted, protocol.TypeJoinRejected)
+	if got.Type != protocol.TypeJoinAccepted {
 		t.Fatalf("expected join_accepted, got %q", got.Type)
 	}
 	return got
 }
 
-func readMeshEnvelope(t *testing.T, ctx context.Context, conn *websocket.Conn) mesh.Envelope {
+func readMeshEnvelope(t *testing.T, ctx context.Context, conn *websocket.Conn) protocol.Envelope {
 	t.Helper()
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	var env mesh.Envelope
+	var env protocol.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		t.Fatalf("unmarshal envelope: %v (raw=%s)", err, string(raw))
 	}
 	return env
 }
 
-func readMeshUntilType(t *testing.T, ctx context.Context, conn *websocket.Conn, wants ...mesh.MessageType) mesh.Envelope {
+func readMeshUntilType(t *testing.T, ctx context.Context, conn *websocket.Conn, wants ...protocol.MessageType) protocol.Envelope {
 	t.Helper()
-	wantSet := make(map[mesh.MessageType]bool, len(wants))
+	wantSet := make(map[protocol.MessageType]bool, len(wants))
 	for _, w := range wants {
 		wantSet[w] = true
 	}
@@ -209,11 +211,11 @@ func TestLifecycle_Mesh_UngracefulCloseCleanupOnBaseCtx(t *testing.T) {
 	// After join_accepted, server immediately sends mesh_roster_snapshot
 	// (mesh/handler.go:341), then mesh_roster_update{B, joined,
 	// admitted} (mesh/handler.go:354 broadcasts to all). Drain both.
-	_ = readMeshUntilType(t, ctx, connB, mesh.TypeMeshRosterSnapshot)
-	gotSelf := readMeshUntilType(t, ctx, connB, mesh.TypeMeshRosterUpdate)
-	var pSelf mesh.MeshRosterUpdatePayload
+	_ = readMeshUntilType(t, ctx, connB, protocol.TypeMeshRosterSnapshot)
+	gotSelf := readMeshUntilType(t, ctx, connB, protocol.TypeMeshRosterUpdate)
+	var pSelf protocol.MeshRosterUpdatePayload
 	_ = json.Unmarshal(gotSelf.Payload, &pSelf)
-	if pSelf.Reason != mesh.RosterReasonAdmitted {
+	if pSelf.Reason != protocol.RosterReasonAdmitted {
 		t.Fatalf("expected B-self admission update, got reason=%q", pSelf.Reason)
 	}
 
@@ -223,10 +225,10 @@ func TestLifecycle_Mesh_UngracefulCloseCleanupOnBaseCtx(t *testing.T) {
 	}
 	_ = meshJoinRoom(t, ctx, connA, roomID, meshUUIDLike("2"))
 	// B receives mesh_roster_update for A's admission.
-	gotA := readMeshUntilType(t, ctx, connB, mesh.TypeMeshRosterUpdate)
-	var pA mesh.MeshRosterUpdatePayload
+	gotA := readMeshUntilType(t, ctx, connB, protocol.TypeMeshRosterUpdate)
+	var pA protocol.MeshRosterUpdatePayload
 	_ = json.Unmarshal(gotA.Payload, &pA)
-	if pA.Reason != mesh.RosterReasonAdmitted {
+	if pA.Reason != protocol.RosterReasonAdmitted {
 		t.Fatalf("expected A admission update, got reason=%q", pA.Reason)
 	}
 
@@ -234,16 +236,16 @@ func TestLifecycle_Mesh_UngracefulCloseCleanupOnBaseCtx(t *testing.T) {
 	// broadcasts mesh_roster_update{A, left, disconnect} to remaining.
 	_ = connA.CloseNow()
 
-	got := readMeshUntilType(t, ctx, connB, mesh.TypeMeshRosterUpdate)
-	var p mesh.MeshRosterUpdatePayload
+	got := readMeshUntilType(t, ctx, connB, protocol.TypeMeshRosterUpdate)
+	var p protocol.MeshRosterUpdatePayload
 	if err := json.Unmarshal(got.Payload, &p); err != nil {
 		t.Fatalf("unmarshal roster update: %v", err)
 	}
-	if p.Presence != mesh.PresenceLeft {
-		t.Errorf("expected presence=%q, got %q", mesh.PresenceLeft, p.Presence)
+	if p.Presence != protocol.PresenceLeft {
+		t.Errorf("expected presence=%q, got %q", protocol.PresenceLeft, p.Presence)
 	}
-	if p.Reason != mesh.RosterReasonDisconnect {
-		t.Errorf("expected reason=%q, got %q", mesh.RosterReasonDisconnect, p.Reason)
+	if p.Reason != protocol.RosterReasonDisconnect {
+		t.Errorf("expected reason=%q, got %q", protocol.RosterReasonDisconnect, p.Reason)
 	}
 
 	captured := buf.String()
@@ -279,12 +281,12 @@ func TestLifecycle_Mesh_MalformedFrameContinuation(t *testing.T) {
 		t.Fatalf("write malformed: %v", err)
 	}
 	errEnv := readMeshEnvelope(t, ctx, conn)
-	if errEnv.Type != mesh.TypeError {
+	if errEnv.Type != protocol.TypeError {
 		t.Fatalf("expected error frame for malformed input, got %q", errEnv.Type)
 	}
 
 	got := meshJoinRoom(t, ctx, conn, "demo", meshUUIDLike("3"))
-	if got.Type != mesh.TypeJoinAccepted {
+	if got.Type != protocol.TypeJoinAccepted {
 		t.Fatalf("post-malformed join_room did not produce join_accepted: got %q", got.Type)
 	}
 }
@@ -317,12 +319,12 @@ func TestLifecycle_Mesh_LeaveRoomDoubleClose(t *testing.T) {
 
 	_ = meshJoinRoom(t, ctx, conn, "demo", meshUUIDLike("4"))
 	// Drain snapshot + own admission roster_update.
-	_ = readMeshUntilType(t, ctx, conn, mesh.TypeMeshRosterSnapshot)
-	_ = readMeshUntilType(t, ctx, conn, mesh.TypeMeshRosterUpdate)
+	_ = readMeshUntilType(t, ctx, conn, protocol.TypeMeshRosterSnapshot)
+	_ = readMeshUntilType(t, ctx, conn, protocol.TypeMeshRosterUpdate)
 
-	leave := mesh.Envelope{
-		V:         mesh.ContractVersion,
-		Type:      mesh.TypeLeaveRoom,
+	leave := protocol.Envelope{
+		V:         protocol.ContractVersion,
+		Type:      protocol.TypeLeaveRoom,
 		RoomID:    "demo",
 		RequestID: meshUUIDLike("6"),
 		Payload:   json.RawMessage(`{}`),

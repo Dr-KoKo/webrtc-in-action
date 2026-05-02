@@ -23,6 +23,8 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // readNPairInstructions reads exactly n frames from conn, each of
@@ -30,22 +32,22 @@ import (
 // library treats context cancellation as a fatal close, so this
 // helper avoids timeout-based draining — callers must know the
 // expected count.
-func readNPairInstructions(t *testing.T, conn *websocket.Conn, ctx context.Context, n int) []mesh.PairNegotiationInstructionPayload {
+func readNPairInstructions(t *testing.T, conn *websocket.Conn, ctx context.Context, n int) []protocol.PairNegotiationInstructionPayload {
 	t.Helper()
-	out := make([]mesh.PairNegotiationInstructionPayload, 0, n)
+	out := make([]protocol.PairNegotiationInstructionPayload, 0, n)
 	for i := 0; i < n; i++ {
 		_, raw, err := conn.Read(ctx)
 		if err != nil {
 			t.Fatalf("read instruction %d/%d failed: %v", i+1, n, err)
 		}
-		var env mesh.Envelope
+		var env protocol.Envelope
 		if err := json.Unmarshal(raw, &env); err != nil {
 			t.Fatalf("envelope unmarshal: %v", err)
 		}
-		if env.Type != mesh.TypePairNegotiationInstruction {
+		if env.Type != protocol.TypePairNegotiationInstruction {
 			t.Fatalf("frame %d type = %q; want pair_negotiation_instruction", i+1, env.Type)
 		}
-		var p mesh.PairNegotiationInstructionPayload
+		var p protocol.PairNegotiationInstructionPayload
 		if err := json.Unmarshal(env.Payload, &p); err != nil {
 			t.Fatalf("instruction payload unmarshal: %v", err)
 		}
@@ -72,7 +74,7 @@ func drainOnePerJoiner(t *testing.T, conn *websocket.Conn, ctx context.Context, 
 	t.Helper()
 	for i := 0; i < n; i++ {
 		env := readMeshFrame(t, conn, ctx)
-		if env.Type != mesh.TypeMeshRosterUpdate {
+		if env.Type != protocol.TypeMeshRosterUpdate {
 			t.Fatalf("expected mesh_roster_update; got %q", env.Type)
 		}
 	}
@@ -84,12 +86,12 @@ func drainOnePerJoiner(t *testing.T, conn *websocket.Conn, ctx context.Context, 
 func drainAllRosterUpdatesForMediaReady(t *testing.T, conns []*websocket.Conn, ctx context.Context) {
 	t.Helper()
 	for i, c := range conns {
-		env := readMeshFrameOfType(t, c, ctx, mesh.TypeMeshRosterUpdate)
-		var up mesh.MeshRosterUpdatePayload
+		env := readMeshFrameOfType(t, c, ctx, protocol.TypeMeshRosterUpdate)
+		var up protocol.MeshRosterUpdatePayload
 		if err := json.Unmarshal(env.Payload, &up); err != nil {
 			t.Fatalf("conn[%d] roster update unmarshal: %v", i, err)
 		}
-		if up.Presence != mesh.PresenceMediaReady {
+		if up.Presence != protocol.PresenceMediaReady {
 			t.Fatalf("conn[%d] presence = %q, want media-ready", i, up.Presence)
 		}
 	}
@@ -115,7 +117,7 @@ func TestPairInstructionEmittedWhenSecondMediaReady(t *testing.T) {
 	defer connB.CloseNow()
 	_ = drainMeshFrames(t, connB, ctx, 2)
 	// A also received B's joined-update.
-	_ = readMeshFrameOfType(t, connA, ctx, mesh.TypeMeshRosterUpdate)
+	_ = readMeshFrameOfType(t, connA, ctx, protocol.TypeMeshRosterUpdate)
 
 	// A goes media-ready first → no instructions emitted (no other
 	// media-ready peer). Roster broadcasts are drained but the
@@ -130,7 +132,7 @@ func TestPairInstructionEmittedWhenSecondMediaReady(t *testing.T) {
 	aInstr := readNPairInstructions(t, connA, ctx, 1)
 	bInstr := readNPairInstructions(t, connB, ctx, 1)
 
-	wantPair := mesh.MakePairID(idxA, idxB)
+	wantPair := protocol.MakePairID(idxA, idxB)
 	for _, p := range append(aInstr, bInstr...) {
 		if p.PairID != wantPair {
 			t.Fatalf("pairId = %q, want %q", p.PairID, wantPair)
@@ -143,13 +145,13 @@ func TestPairInstructionEmittedWhenSecondMediaReady(t *testing.T) {
 		}
 	}
 
-	if aInstr[0].Role != mesh.RoleOfferer {
+	if aInstr[0].Role != protocol.RoleOfferer {
 		t.Fatalf("A role = %q, want offerer (lower admissionIndex)", aInstr[0].Role)
 	}
 	if aInstr[0].RemotePeer.PeerID != peerB || aInstr[0].RemotePeer.AdmissionIndex != idxB {
 		t.Fatalf("A remotePeer = %+v, want peerB(%s, %d)", aInstr[0].RemotePeer, peerB, idxB)
 	}
-	if bInstr[0].Role != mesh.RoleAnswerer {
+	if bInstr[0].Role != protocol.RoleAnswerer {
 		t.Fatalf("B role = %q, want answerer (higher admissionIndex)", bInstr[0].Role)
 	}
 	if bInstr[0].RemotePeer.PeerID != peerA || bInstr[0].RemotePeer.AdmissionIndex != idxA {
@@ -226,7 +228,7 @@ func TestFourthMediaReadyEmitsExactlyThreeNewPairs(t *testing.T) {
 	drainAllRosterUpdatesForMediaReady(t, conns, ctx)
 
 	postDCounts := []int{1, 1, 1, 3}
-	got := make(map[int][]mesh.PairNegotiationInstructionPayload, 4)
+	got := make(map[int][]protocol.PairNegotiationInstructionPayload, 4)
 	for i, c := range conns {
 		got[i] = readNPairInstructions(t, c, ctx, postDCounts[i])
 	}
@@ -236,7 +238,7 @@ func TestFourthMediaReadyEmitsExactlyThreeNewPairs(t *testing.T) {
 		if len(got[i]) != 1 {
 			t.Fatalf("conn[%d] got %d new instructions; want 1", i, len(got[i]))
 		}
-		if got[i][0].Role != mesh.RoleOfferer {
+		if got[i][0].Role != protocol.RoleOfferer {
 			t.Fatalf("conn[%d] role = %q; want offerer (lower admissionIndex)", i, got[i][0].Role)
 		}
 		if got[i][0].RemotePeer.PeerID != peerIDs[3] {
@@ -252,7 +254,7 @@ func TestFourthMediaReadyEmitsExactlyThreeNewPairs(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, p := range got[3] {
-		if p.Role != mesh.RoleAnswerer {
+		if p.Role != protocol.RoleAnswerer {
 			t.Fatalf("D role = %q; want answerer (higher admissionIndex)", p.Role)
 		}
 		if p.PairEpoch != 1 {
@@ -261,9 +263,9 @@ func TestFourthMediaReadyEmitsExactlyThreeNewPairs(t *testing.T) {
 		seen[p.PairID] = true
 	}
 	wantPairs := []string{
-		mesh.MakePairID(indices[0], indices[3]),
-		mesh.MakePairID(indices[1], indices[3]),
-		mesh.MakePairID(indices[2], indices[3]),
+		protocol.MakePairID(indices[0], indices[3]),
+		protocol.MakePairID(indices[1], indices[3]),
+		protocol.MakePairID(indices[2], indices[3]),
 	}
 	sort.Strings(wantPairs)
 	gotPairs := make([]string, 0, len(seen))

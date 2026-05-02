@@ -25,6 +25,8 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // dialMesh returns a connected client to /ws/mesh on the supplied test
@@ -41,23 +43,23 @@ func dialMesh(t *testing.T, ts *httptest.Server, ctx context.Context) *websocket
 // expectErrorEnvelope reads one frame, parses it as an Envelope +
 // ErrorPayload, and returns the payload's Code. Asserts the Type is
 // `error`.
-func expectErrorEnvelope(t *testing.T, conn *websocket.Conn, ctx context.Context) mesh.ErrorCode {
+func expectErrorEnvelope(t *testing.T, conn *websocket.Conn, ctx context.Context) protocol.ErrorCode {
 	t.Helper()
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
 		t.Fatalf("read failed: %v", err)
 	}
-	var env mesh.Envelope
+	var env protocol.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		t.Fatalf("envelope unmarshal failed: %v", err)
 	}
-	if env.Type != mesh.TypeError {
-		t.Fatalf("type = %q, want %q", env.Type, mesh.TypeError)
+	if env.Type != protocol.TypeError {
+		t.Fatalf("type = %q, want %q", env.Type, protocol.TypeError)
 	}
-	if env.V != mesh.ContractVersion {
-		t.Fatalf("v = %d, want %d", env.V, mesh.ContractVersion)
+	if env.V != protocol.ContractVersion {
+		t.Fatalf("v = %d, want %d", env.V, protocol.ContractVersion)
 	}
-	var payload mesh.ErrorPayload
+	var payload protocol.ErrorPayload
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
 		t.Fatalf("error payload unmarshal failed: %v", err)
 	}
@@ -94,8 +96,8 @@ func TestUnsupportedVersionJoinRoomV1(t *testing.T) {
 	if err := conn.Write(ctx, websocket.MessageText, frame); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
-	if got := expectErrorEnvelope(t, conn, ctx); got != mesh.CodeUnsupportedVersion {
-		t.Fatalf("code = %q, want %q", got, mesh.CodeUnsupportedVersion)
+	if got := expectErrorEnvelope(t, conn, ctx); got != protocol.CodeUnsupportedVersion {
+		t.Fatalf("code = %q, want %q", got, protocol.CodeUnsupportedVersion)
 	}
 	// No state-mutation surface: no other frame should follow.
 	expectNoFurtherFrame(t, conn)
@@ -116,8 +118,8 @@ func TestUnsupportedVersionJoinRoomV3(t *testing.T) {
 	if err := conn.Write(ctx, websocket.MessageText, frame); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
-	if got := expectErrorEnvelope(t, conn, ctx); got != mesh.CodeUnsupportedVersion {
-		t.Fatalf("code = %q, want %q", got, mesh.CodeUnsupportedVersion)
+	if got := expectErrorEnvelope(t, conn, ctx); got != protocol.CodeUnsupportedVersion {
+		t.Fatalf("code = %q, want %q", got, protocol.CodeUnsupportedVersion)
 	}
 	expectNoFurtherFrame(t, conn)
 }
@@ -137,8 +139,8 @@ func TestUnsupportedVersionMidstreamPairOfferV1(t *testing.T) {
 	if err := conn.Write(ctx, websocket.MessageText, frame); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
-	if got := expectErrorEnvelope(t, conn, ctx); got != mesh.CodeUnsupportedVersion {
-		t.Fatalf("code = %q, want %q", got, mesh.CodeUnsupportedVersion)
+	if got := expectErrorEnvelope(t, conn, ctx); got != protocol.CodeUnsupportedVersion {
+		t.Fatalf("code = %q, want %q", got, protocol.CodeUnsupportedVersion)
 	}
 	expectNoFurtherFrame(t, conn)
 }
@@ -164,11 +166,11 @@ func TestUnsupportedVersionIsNotJoinRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read failed: %v", err)
 	}
-	var env mesh.Envelope
+	var env protocol.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		t.Fatalf("unmarshal failed: %v", err)
 	}
-	if env.Type == mesh.TypeJoinRejected {
+	if env.Type == protocol.TypeJoinRejected {
 		t.Fatalf("server sent join_rejected for version mismatch; expected error envelope")
 	}
 }

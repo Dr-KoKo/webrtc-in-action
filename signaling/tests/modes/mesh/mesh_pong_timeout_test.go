@@ -25,18 +25,20 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // meshSendMediaReady advances the participant from `joined` to
 // `media-ready` so the next disconnect classifies as in-call.
 func meshSendMediaReady(t *testing.T, ctx context.Context, conn *websocket.Conn, roomID string) {
 	t.Helper()
-	body, _ := json.Marshal(mesh.MediaReadyPayload{
-		MediaCapabilities: mesh.MediaCapabilities{Audio: true, Video: true},
+	body, _ := json.Marshal(protocol.MediaReadyPayload{
+		MediaCapabilities: protocol.MediaCapabilities{Audio: true, Video: true},
 	})
-	env := mesh.Envelope{
-		V:       mesh.ContractVersion,
-		Type:    mesh.TypeMediaReady,
+	env := protocol.Envelope{
+		V:       protocol.ContractVersion,
+		Type:    protocol.TypeMediaReady,
 		RoomID:  roomID,
 		Payload: body,
 	}
@@ -54,21 +56,21 @@ func readUntilPeerLeft(
 	ctx context.Context,
 	conn *websocket.Conn,
 	expectedPeer string,
-) mesh.PeerLeftPayload {
+) protocol.PeerLeftPayload {
 	t.Helper()
 	for {
 		_, raw, err := conn.Read(ctx)
 		if err != nil {
 			t.Fatalf("read until peer_left: %v", err)
 		}
-		var env mesh.Envelope
+		var env protocol.Envelope
 		if err := json.Unmarshal(raw, &env); err != nil {
 			continue
 		}
-		if env.Type != mesh.TypePeerLeft {
+		if env.Type != protocol.TypePeerLeft {
 			continue
 		}
-		var p mesh.PeerLeftPayload
+		var p protocol.PeerLeftPayload
 		if err := json.Unmarshal(env.Payload, &p); err != nil {
 			t.Fatalf("unmarshal peer_left: %v", err)
 		}
@@ -83,8 +85,8 @@ func readUntilPeerLeft(
 // frames a fresh joiner receives.
 func drainSelfAdmission(t *testing.T, ctx context.Context, conn *websocket.Conn) {
 	t.Helper()
-	_ = readMeshUntilType(t, ctx, conn, mesh.TypeMeshRosterSnapshot)
-	_ = readMeshUntilType(t, ctx, conn, mesh.TypeMeshRosterUpdate)
+	_ = readMeshUntilType(t, ctx, conn, protocol.TypeMeshRosterSnapshot)
+	_ = readMeshUntilType(t, ctx, conn, protocol.TypeMeshRosterUpdate)
 }
 
 // TestPongTimeout_ReleasesSlot — closing the socket without leave_room
@@ -115,7 +117,7 @@ func TestPongTimeout_ReleasesSlot(t *testing.T) {
 	}
 	defer connB.CloseNow()
 	got := meshJoinRoom(t, ctx, connB, "demo", meshUUIDLike("b1"))
-	var p mesh.JoinAcceptedPayload
+	var p protocol.JoinAcceptedPayload
 	if err := json.Unmarshal(got.Payload, &p); err != nil {
 		t.Fatalf("unmarshal join_accepted: %v", err)
 	}
@@ -149,12 +151,12 @@ func TestPongTimeout_RemainingPeersReceiveRosterLeft(t *testing.T) {
 		t.Fatalf("dial A: %v", err)
 	}
 	got := meshJoinRoom(t, ctx, connA, roomID, meshUUIDLike("a2"))
-	var pAccepted mesh.JoinAcceptedPayload
+	var pAccepted protocol.JoinAcceptedPayload
 	_ = json.Unmarshal(got.Payload, &pAccepted)
 
 	// B drains A's admission roster_update.
-	gotA := readMeshUntilType(t, ctx, connB, mesh.TypeMeshRosterUpdate)
-	var pa mesh.MeshRosterUpdatePayload
+	gotA := readMeshUntilType(t, ctx, connB, protocol.TypeMeshRosterUpdate)
+	var pa protocol.MeshRosterUpdatePayload
 	_ = json.Unmarshal(gotA.Payload, &pa)
 	if pa.SubjectPeerID != pAccepted.PeerID {
 		t.Fatalf("expected admission update for A, got subject=%q", pa.SubjectPeerID)
@@ -175,17 +177,17 @@ func TestPongTimeout_RemainingPeersReceiveRosterLeft(t *testing.T) {
 		if err != nil {
 			break
 		}
-		if env.Type != mesh.TypeMeshRosterUpdate {
+		if env.Type != protocol.TypeMeshRosterUpdate {
 			continue
 		}
-		var p mesh.MeshRosterUpdatePayload
+		var p protocol.MeshRosterUpdatePayload
 		if err := json.Unmarshal(env.Payload, &p); err != nil {
 			continue
 		}
-		if p.Presence == mesh.PresenceLeft && p.SubjectPeerID == pAccepted.PeerID {
+		if p.Presence == protocol.PresenceLeft && p.SubjectPeerID == pAccepted.PeerID {
 			leftSeen = true
-			if p.Reason != mesh.RosterReasonDisconnect {
-				t.Errorf("expected reason=%q, got %q", mesh.RosterReasonDisconnect, p.Reason)
+			if p.Reason != protocol.RosterReasonDisconnect {
+				t.Errorf("expected reason=%q, got %q", protocol.RosterReasonDisconnect, p.Reason)
 			}
 			break
 		}
@@ -218,14 +220,14 @@ func TestPongTimeout_InCallLeaverEmitsPeerLeftDisconnect(t *testing.T) {
 	drainSelfAdmission(t, ctx, connB)
 	meshSendMediaReady(t, ctx, connB, roomID)
 	// B media-ready roster update broadcast to itself.
-	_ = readMeshUntilType(t, ctx, connB, mesh.TypeMeshRosterUpdate)
+	_ = readMeshUntilType(t, ctx, connB, protocol.TypeMeshRosterUpdate)
 
 	connA, _, err := websocket.Dial(ctx, meshURLFor(ts), nil)
 	if err != nil {
 		t.Fatalf("dial A: %v", err)
 	}
 	gotA := meshJoinRoom(t, ctx, connA, roomID, meshUUIDLike("a3"))
-	var pAccepted mesh.JoinAcceptedPayload
+	var pAccepted protocol.JoinAcceptedPayload
 	_ = json.Unmarshal(gotA.Payload, &pAccepted)
 	meshSendMediaReady(t, ctx, connA, roomID)
 
@@ -233,7 +235,7 @@ func TestPongTimeout_InCallLeaverEmitsPeerLeftDisconnect(t *testing.T) {
 	// server emits when both endpoints are media-ready. By then A's
 	// readiness in the room map is media-ready; force-close after this
 	// point classifies as an in-call leave.
-	_ = readMeshUntilType(t, ctx, connB, mesh.TypePairNegotiationInstruction)
+	_ = readMeshUntilType(t, ctx, connB, protocol.TypePairNegotiationInstruction)
 
 	// A force-closes → in-call disconnect.
 	_ = connA.CloseNow()
@@ -241,8 +243,8 @@ func TestPongTimeout_InCallLeaverEmitsPeerLeftDisconnect(t *testing.T) {
 	readCtx, cancelRead := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelRead()
 	got := readUntilPeerLeft(t, readCtx, connB, pAccepted.PeerID)
-	if got.Reason != mesh.PeerLeftDisconnect {
-		t.Errorf("expected peer_left.reason=%q, got %q", mesh.PeerLeftDisconnect, got.Reason)
+	if got.Reason != protocol.PeerLeftDisconnect {
+		t.Errorf("expected peer_left.reason=%q, got %q", protocol.PeerLeftDisconnect, got.Reason)
 	}
 }
 
@@ -330,7 +332,7 @@ func TestPongTimeout_AdmissionIndexMonotonicAfterRefill(t *testing.T) {
 	}
 	defer connC.CloseNow()
 	gotC := meshJoinRoom(t, ctx, connC, roomID, meshUUIDLike("c5"))
-	var pC mesh.JoinAcceptedPayload
+	var pC protocol.JoinAcceptedPayload
 	_ = json.Unmarshal(gotC.Payload, &pC)
 	drainSelfAdmission(t, ctx, connC)
 
@@ -339,7 +341,7 @@ func TestPongTimeout_AdmissionIndexMonotonicAfterRefill(t *testing.T) {
 		t.Fatalf("dial A: %v", err)
 	}
 	gotA := meshJoinRoom(t, ctx, connA, roomID, meshUUIDLike("a5"))
-	var pA mesh.JoinAcceptedPayload
+	var pA protocol.JoinAcceptedPayload
 	_ = json.Unmarshal(gotA.Payload, &pA)
 
 	_ = connA.CloseNow()
@@ -351,7 +353,7 @@ func TestPongTimeout_AdmissionIndexMonotonicAfterRefill(t *testing.T) {
 	}
 	defer connB.CloseNow()
 	gotB := meshJoinRoom(t, ctx, connB, roomID, meshUUIDLike("b5"))
-	var pB mesh.JoinAcceptedPayload
+	var pB protocol.JoinAcceptedPayload
 	_ = json.Unmarshal(gotB.Payload, &pB)
 
 	if pA.AdmissionIndex <= pC.AdmissionIndex {
@@ -388,7 +390,7 @@ func TestPongTimeout_NoPairFailedForUnrelatedPairs(t *testing.T) {
 	_ = meshJoinRoom(t, ctx, connB, roomID, meshUUIDLike("b6"))
 	drainSelfAdmission(t, ctx, connB)
 	meshSendMediaReady(t, ctx, connB, roomID)
-	_ = readMeshUntilType(t, ctx, connB, mesh.TypeMeshRosterUpdate)
+	_ = readMeshUntilType(t, ctx, connB, protocol.TypeMeshRosterUpdate)
 
 	connA, _, err := websocket.Dial(ctx, meshURLFor(ts), nil)
 	if err != nil {
@@ -399,7 +401,7 @@ func TestPongTimeout_NoPairFailedForUnrelatedPairs(t *testing.T) {
 
 	// Sync on the pair instruction that confirms both A and B are
 	// media-ready and a pair has formed.
-	_ = readMeshUntilType(t, ctx, connB, mesh.TypePairNegotiationInstruction)
+	_ = readMeshUntilType(t, ctx, connB, protocol.TypePairNegotiationInstruction)
 
 	// A force-closes.
 	_ = connA.CloseNow()
@@ -415,13 +417,13 @@ func TestPongTimeout_NoPairFailedForUnrelatedPairs(t *testing.T) {
 		if err != nil {
 			break
 		}
-		if env.Type == mesh.TypePairFailed {
+		if env.Type == protocol.TypePairFailed {
 			t.Fatalf(
 				"server emitted pair_failed during disconnect cleanup: %s",
 				string(env.Payload),
 			)
 		}
-		if env.Type == mesh.TypePeerLeft {
+		if env.Type == protocol.TypePeerLeft {
 			leftSeen = true
 		}
 	}
@@ -432,14 +434,14 @@ func TestPongTimeout_NoPairFailedForUnrelatedPairs(t *testing.T) {
 
 // readMeshEnvelopeWithCtx is the time-bounded sibling of readMeshEnvelope.
 // Returns the read error so callers can switch on Done() without a t.Fatal.
-func readMeshEnvelopeWithCtx(ctx context.Context, conn *websocket.Conn) (mesh.Envelope, error) {
+func readMeshEnvelopeWithCtx(ctx context.Context, conn *websocket.Conn) (protocol.Envelope, error) {
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
-		return mesh.Envelope{}, err
+		return protocol.Envelope{}, err
 	}
-	var env mesh.Envelope
+	var env protocol.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return mesh.Envelope{}, err
+		return protocol.Envelope{}, err
 	}
 	return env, nil
 }

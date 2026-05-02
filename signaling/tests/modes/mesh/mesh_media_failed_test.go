@@ -23,16 +23,18 @@ import (
 	"github.com/coder/websocket"
 
 	"webrtc-lab/signaling/internal/modes/mesh"
+
+	protocol "webrtc-lab/signaling/internal/modes/mesh/protocol"
 )
 
 // readMeshFrame reads one frame and returns its envelope + raw payload.
-func readMeshFrame(t *testing.T, conn *websocket.Conn, ctx context.Context) mesh.Envelope {
+func readMeshFrame(t *testing.T, conn *websocket.Conn, ctx context.Context) protocol.Envelope {
 	t.Helper()
 	_, raw, err := conn.Read(ctx)
 	if err != nil {
 		t.Fatalf("read failed: %v", err)
 	}
-	var env mesh.Envelope
+	var env protocol.Envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		t.Fatalf("envelope unmarshal failed: %v", err)
 	}
@@ -42,7 +44,7 @@ func readMeshFrame(t *testing.T, conn *websocket.Conn, ctx context.Context) mesh
 // readMeshFrameOfType keeps reading until the requested type arrives or
 // the context times out. Useful when the server may interleave
 // snapshot/update frames around the asserted one.
-func readMeshFrameOfType(t *testing.T, conn *websocket.Conn, ctx context.Context, want mesh.MessageType) mesh.Envelope {
+func readMeshFrameOfType(t *testing.T, conn *websocket.Conn, ctx context.Context, want protocol.MessageType) protocol.Envelope {
 	t.Helper()
 	for {
 		env := readMeshFrame(t, conn, ctx)
@@ -83,7 +85,7 @@ func TestMediaFailedReleasesSlotAndDoesNotReuseAdmissionIndex(t *testing.T) {
 		toDrain := 3 - earlier // updates for joiners admitted after this one
 		for d := 0; d < toDrain; d++ {
 			env := readMeshFrame(t, conns[earlier], ctx)
-			if env.Type != mesh.TypeMeshRosterUpdate {
+			if env.Type != protocol.TypeMeshRosterUpdate {
 				t.Fatalf("earlier=%d expected mesh_roster_update; got %q", earlier, env.Type)
 			}
 		}
@@ -99,31 +101,31 @@ func TestMediaFailedReleasesSlotAndDoesNotReuseAdmissionIndex(t *testing.T) {
 	}
 
 	// The failing peer should receive participant_released first.
-	released := readMeshFrameOfType(t, failing, ctx, mesh.TypeParticipantReleased)
-	var rp mesh.ParticipantReleasedPayload
+	released := readMeshFrameOfType(t, failing, ctx, protocol.TypeParticipantReleased)
+	var rp protocol.ParticipantReleasedPayload
 	if err := json.Unmarshal(released.Payload, &rp); err != nil {
 		t.Fatalf("participant_released payload unmarshal: %v", err)
 	}
-	if rp.Result != mesh.ParticipantReleasedMediaFailed {
-		t.Fatalf("released.result = %q, want %q", rp.Result, mesh.ParticipantReleasedMediaFailed)
+	if rp.Result != protocol.ParticipantReleasedMediaFailed {
+		t.Fatalf("released.result = %q, want %q", rp.Result, protocol.ParticipantReleasedMediaFailed)
 	}
-	if rp.Reason != mesh.ReleasedReasonMediaFailed {
-		t.Fatalf("released.reason = %q, want %q", rp.Reason, mesh.ReleasedReasonMediaFailed)
+	if rp.Reason != protocol.ReleasedReasonMediaFailed {
+		t.Fatalf("released.reason = %q, want %q", rp.Reason, protocol.ReleasedReasonMediaFailed)
 	}
 
 	// Remaining three peers should each receive a mesh_roster_update
 	// with presence:released, reason:media_failed for the failing peer.
 	for r := 0; r < 3; r++ {
-		env := readMeshFrameOfType(t, conns[r], ctx, mesh.TypeMeshRosterUpdate)
-		var up mesh.MeshRosterUpdatePayload
+		env := readMeshFrameOfType(t, conns[r], ctx, protocol.TypeMeshRosterUpdate)
+		var up protocol.MeshRosterUpdatePayload
 		if err := json.Unmarshal(env.Payload, &up); err != nil {
 			t.Fatalf("update payload unmarshal: %v", err)
 		}
-		if up.Presence != mesh.PresenceReleased {
-			t.Fatalf("conn[%d] update.presence = %q, want %q", r, up.Presence, mesh.PresenceReleased)
+		if up.Presence != protocol.PresenceReleased {
+			t.Fatalf("conn[%d] update.presence = %q, want %q", r, up.Presence, protocol.PresenceReleased)
 		}
-		if up.Reason != mesh.RosterReasonMediaFailed {
-			t.Fatalf("conn[%d] update.reason = %q, want %q", r, up.Reason, mesh.RosterReasonMediaFailed)
+		if up.Reason != protocol.RosterReasonMediaFailed {
+			t.Fatalf("conn[%d] update.reason = %q, want %q", r, up.Reason, protocol.RosterReasonMediaFailed)
 		}
 		if up.AdmissionIndex != indices[3] {
 			t.Fatalf("conn[%d] update.admissionIndex = %d, want %d", r, up.AdmissionIndex, indices[3])
@@ -166,7 +168,7 @@ func TestMediaReadyBroadcastsRosterUpdate(t *testing.T) {
 	defer b.CloseNow()
 	_ = drainMeshFrames(t, b, ctx, 2)
 	// A also received a roster_update for B's join.
-	_ = readMeshFrameOfType(t, a, ctx, mesh.TypeMeshRosterUpdate)
+	_ = readMeshFrameOfType(t, a, ctx, protocol.TypeMeshRosterUpdate)
 
 	// A sends media_ready.
 	req := []byte(`{"v":2,"type":"media_ready","roomId":"` + roomID + `","payload":{"mediaCapabilities":{"audio":true,"video":true}}}`)
@@ -176,16 +178,16 @@ func TestMediaReadyBroadcastsRosterUpdate(t *testing.T) {
 
 	// Both A and B should receive the roster_update for A → media-ready.
 	for _, c := range []*websocket.Conn{a, b} {
-		env := readMeshFrameOfType(t, c, ctx, mesh.TypeMeshRosterUpdate)
-		var up mesh.MeshRosterUpdatePayload
+		env := readMeshFrameOfType(t, c, ctx, protocol.TypeMeshRosterUpdate)
+		var up protocol.MeshRosterUpdatePayload
 		if err := json.Unmarshal(env.Payload, &up); err != nil {
 			t.Fatalf("update payload unmarshal: %v", err)
 		}
-		if up.Presence != mesh.PresenceMediaReady {
-			t.Fatalf("update.presence = %q, want %q", up.Presence, mesh.PresenceMediaReady)
+		if up.Presence != protocol.PresenceMediaReady {
+			t.Fatalf("update.presence = %q, want %q", up.Presence, protocol.PresenceMediaReady)
 		}
-		if up.Reason != mesh.RosterReasonMediaReady {
-			t.Fatalf("update.reason = %q, want %q", up.Reason, mesh.RosterReasonMediaReady)
+		if up.Reason != protocol.RosterReasonMediaReady {
+			t.Fatalf("update.reason = %q, want %q", up.Reason, protocol.RosterReasonMediaReady)
 		}
 		if up.AdmissionIndex != idxA {
 			t.Fatalf("update.admissionIndex = %d, want %d", up.AdmissionIndex, idxA)
@@ -214,14 +216,14 @@ func TestMediaReadyFromNonJoinedRejected(t *testing.T) {
 		t.Fatalf("first media_ready write failed: %v", err)
 	}
 	// Drain the broadcast to A.
-	_ = readMeshFrameOfType(t, a, ctx, mesh.TypeMeshRosterUpdate)
+	_ = readMeshFrameOfType(t, a, ctx, protocol.TypeMeshRosterUpdate)
 
 	// Second attempt should yield error unexpected_media_ready.
 	if err := a.Write(ctx, websocket.MessageText, req); err != nil {
 		t.Fatalf("second media_ready write failed: %v", err)
 	}
 	got := expectErrorEnvelope(t, a, ctx)
-	if got != mesh.CodeUnexpectedMediaReady {
-		t.Fatalf("error.code = %q, want %q", got, mesh.CodeUnexpectedMediaReady)
+	if got != protocol.CodeUnexpectedMediaReady {
+		t.Fatalf("error.code = %q, want %q", got, protocol.CodeUnexpectedMediaReady)
 	}
 }

@@ -4,15 +4,18 @@
 
 package mesh
 
+import "webrtc-lab/signaling/internal/modes/mesh/protocol"
+
 // BuildRosterSnapshot returns the §3.4 payload for the supplied room.
 // Includes EVERY participant (subject + all others). Participants are
 // sorted by admissionIndex ascending.
 //
-// Presence values are derived from each participant's Readiness:
-//   joined        → "joined"
-//   media-ready   → "media-ready"
-//   released      → "released"
-//   left          → "left"
+// protocol.Presence values are derived from each participant's Readiness:
+//
+//	joined        → "joined"
+//	media-ready   → "media-ready"
+//	released      → "released"
+//	left          → "left"
 //
 // `connecting` / `connected` / `failed` are per-(viewer, subject)
 // values that the client derives locally from PairContext (data-model
@@ -29,14 +32,14 @@ package mesh
 // keeps the wire shape unambiguous regardless of client behavior.
 //
 // Caller must hold the room lock.
-func BuildRosterSnapshot(r *MeshRoom) MeshRosterSnapshotPayload {
+func BuildRosterSnapshot(r *MeshRoom) protocol.MeshRosterSnapshotPayload {
 	parts := r.ParticipantsSnapshot()
-	out := MeshRosterSnapshotPayload{
+	out := protocol.MeshRosterSnapshotPayload{
 		ServerSeq:    r.nextRosterSeq(),
-		Participants: make([]RosterParticipant, 0, len(parts)),
+		Participants: make([]protocol.RosterParticipant, 0, len(parts)),
 	}
 	for _, p := range parts {
-		out.Participants = append(out.Participants, RosterParticipant{
+		out.Participants = append(out.Participants, protocol.RosterParticipant{
 			PeerID:         p.PeerID,
 			AdmissionIndex: p.AdmissionIndex,
 			Presence:       presenceForReadiness(p.Readiness),
@@ -50,9 +53,9 @@ func BuildRosterSnapshot(r *MeshRoom) MeshRosterSnapshotPayload {
 // fan-out to all participants via FanOutRoster.
 //
 // Caller must hold the room lock.
-func BuildRosterUpdate(r *MeshRoom, subject *Participant, presence Presence, reason RosterReason) MeshRosterUpdatePayload {
+func BuildRosterUpdate(r *MeshRoom, subject *Participant, presence protocol.Presence, reason protocol.RosterReason) protocol.MeshRosterUpdatePayload {
 	seq := r.nextRosterSeq()
-	return MeshRosterUpdatePayload{
+	return protocol.MeshRosterUpdatePayload{
 		ServerSeq:      seq,
 		SubjectPeerID:  subject.PeerID,
 		AdmissionIndex: subject.AdmissionIndex,
@@ -62,17 +65,17 @@ func BuildRosterUpdate(r *MeshRoom, subject *Participant, presence Presence, rea
 }
 
 // presenceForReadiness maps the server-side Readiness FSM (§A.3) to
-// the wire-level Presence enum used in roster messages.
-func presenceForReadiness(r Readiness) Presence {
+// the wire-level protocol.Presence enum used in roster messages.
+func presenceForReadiness(r Readiness) protocol.Presence {
 	switch r {
 	case ReadinessJoined:
-		return PresenceJoined
+		return protocol.PresenceJoined
 	case ReadinessMediaReady:
-		return PresenceMediaReady
+		return protocol.PresenceMediaReady
 	case ReadinessReleased:
-		return PresenceReleased
+		return protocol.PresenceReleased
 	case ReadinessLeft:
-		return PresenceLeft
+		return protocol.PresenceLeft
 	}
-	return PresenceJoined
+	return protocol.PresenceJoined
 }
