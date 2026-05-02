@@ -20,7 +20,7 @@ import {
   type ReactNode,
 } from "react";
 import { useDispatch, useRootState, useStoreApiRaw } from "../state";
-import { useSignalingClient } from "../signaling/provider";
+import { useFrameSubscription, useSignalingClient } from "../signaling/provider";
 import { signalingMessageSchema } from "../protocol/schema";
 import { useLocalMedia } from "./local-media-provider";
 import {
@@ -179,37 +179,38 @@ export function PeerConnectionProvider({
   const ctxRef = useRef(ctx);
   ctxRef.current = ctx;
 
-  useEffect(() => {
-    const unsubscribe = client.onMessage((raw) => {
-      let json: unknown;
-      try {
-        json = JSON.parse(raw);
-      } catch {
+  // Phase E1: route every raw frame through the central
+  // SignalingProvider subscription. Parse here is intentionally
+  // independent of the central dispatcher's parse — error logging on
+  // malformed envelopes belongs to the central dispatcher (one source
+  // of truth); this side only acts on the four PC-relevant types.
+  useFrameSubscription((raw) => {
+    let json: unknown;
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const parsed = signalingMessageSchema.safeParse(json);
+    if (!parsed.success) return;
+    const msg = parsed.data;
+    switch (msg.type) {
+      case "ready_for_offer":
+        void handleReadyForOffer(ctxRef.current, msg);
         return;
-      }
-      const parsed = signalingMessageSchema.safeParse(json);
-      if (!parsed.success) return;
-      const msg = parsed.data;
-      switch (msg.type) {
-        case "ready_for_offer":
-          void handleReadyForOffer(ctxRef.current, msg);
-          return;
-        case "offer":
-          void handleOffer(ctxRef.current, msg);
-          return;
-        case "answer":
-          void handleAnswer(ctxRef.current, msg);
-          return;
-        case "ice_candidate":
-          void handleIceCandidate(ctxRef.current, msg);
-          return;
-        default:
-          return;
-      }
-    });
-    return unsubscribe;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client]);
+      case "offer":
+        void handleOffer(ctxRef.current, msg);
+        return;
+      case "answer":
+        void handleAnswer(ctxRef.current, msg);
+        return;
+      case "ice_candidate":
+        void handleIceCandidate(ctxRef.current, msg);
+        return;
+      default:
+        return;
+    }
+  }, []);
 
   // Unmount cleanup — final safety net. Mid-lifetime teardown paths
   // call `teardownPeerConnection` directly via the context.

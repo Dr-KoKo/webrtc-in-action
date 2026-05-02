@@ -52,7 +52,10 @@ import {
   type ReactNode,
 } from "react";
 import { useDispatch, useRootState } from "../state";
-import { useSignalingClient } from "../signaling/provider";
+import {
+  useFrameSubscription,
+  useSignalingClient,
+} from "../signaling/provider";
 import { useLocalMedia } from "./local-media-provider";
 import { usePeerConnection } from "./peer-connection-provider";
 import { useScreenShare } from "./screen-share-provider";
@@ -212,8 +215,7 @@ export function CleanupProvider({ children }: CleanupProviderProps) {
   // intact and let this handler drive the actual cleanup — the
   // dispatcher's `peer_left` row becomes a narration complement, not
   // a duplicate.
-  useEffect(() => {
-    const unsubscribe = clientRef.current.onMessage((raw) => {
+  useFrameSubscription((raw) => {
       let json: unknown;
       try {
         json = JSON.parse(raw);
@@ -256,8 +258,6 @@ export function CleanupProvider({ children }: CleanupProviderProps) {
         summary: "cleanup completed (path=remote_peer_left)",
         code: "remote_peer_left",
       });
-    });
-    return unsubscribe;
   }, []);
 
   // ----- Transport-disconnect branching (§B.1.1) -----
