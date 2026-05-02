@@ -31,14 +31,14 @@
 //        reload) and resets on full page reload.
 
 import { createRoot } from "react-dom/client";
-import { AppShell } from "../../../src/components/AppShell";
-import { StoreProvider } from "../../../src/state";
-import { SignalingProvider } from "../../../src/signaling/provider";
-import { LocalMediaProvider } from "../../../src/webrtc/local-media-provider";
-import { PeerConnectionProvider } from "../../../src/webrtc/peer-connection-provider";
-import { ScreenShareProvider } from "../../../src/webrtc/screen-share-provider";
-import { CleanupProvider } from "../../../src/webrtc/cleanup";
-import type { AcquireLocalMediaOptions } from "../../../src/webrtc/media-acquisition";
+import { AppShell } from "@/modes/one-to-one/components/AppShell";
+import { StoreProvider } from "@/modes/one-to-one/state";
+import { SignalingProvider } from "@/modes/one-to-one/signaling/provider";
+import { LocalMediaProvider } from "@/modes/one-to-one/webrtc/local-media-provider";
+import { PeerConnectionProvider } from "@/modes/one-to-one/webrtc/peer-connection-provider";
+import { ScreenShareProvider } from "@/modes/one-to-one/webrtc/screen-share-provider";
+import { CleanupProvider } from "@/modes/one-to-one/webrtc/cleanup";
+import type { AcquireLocalMediaOptions } from "@/shared/webrtc/media-acquisition";
 
 type MediaMode = "real" | "failOnce";
 

@@ -1,0 +1,159 @@
+// Mesh event-log slice (data-model §B.6). Bounded ring buffer of
+// `EventEntry` records used by `MeshEventLogPanel`. Entries are
+// classified by `scope`:
+//
+//   - room  — applies to the whole room (transport up/down, snapshot).
+//   - peer  — applies to a single remote participant; MUST carry peerId.
+//   - pair  — applies to a single pair; MUST carry both peerId + pairId.
+//   - local — applies to the local user (media-error, signaling-error).
+//
+// FR-061 invariant: every `peer` / `pair` entry carries `peerId` (and
+// `pairId` for pair scope). The reducer enforces this by accepting an
+// already-validated entry — callers (e.g. dispatcher.ts) assemble the
+// entry through `makeMeshEventEntry()` which keeps the contract
+// closed.
+
+export const MESH_EVENT_LOG_CAPACITY = 1000;
+
+export type MeshEventScope = "room" | "peer" | "pair" | "local";
+
+export type MeshEventType =
+  // transport
+  | "signaling_connecting"
+  | "signaling_connected"
+  | "signaling_disconnected"
+  | "signaling_error"
+  // admission
+  | "join_room_sent"
+  | "join_accepted"
+  | "join_rejected"
+  | "participant_released"
+  // roster
+  | "mesh_roster_snapshot_received"
+  | "mesh_roster_update_applied"
+  | "mesh_roster_update_dropped_stale"
+  | "mesh_roster_update_dropped_invalid"
+  // media (M5)
+  | "media_acquire_started"
+  | "media_ready_sent"
+  | "media_failed_sent"
+  | "media_error_local"
+  | "retry_requested"
+  // generic
+  | "error_occurred"
+  // chat (M8 / FR-051..FR-055, L17). Every chat-event entry's `detail`
+  // MUST carry `transport: "datachannel"` (FR-053). M8 is final-MVP
+  // DataChannel-only — no signaling-relayed chat type exists.
+  | "mesh_chat_message_sent"
+  | "mesh_chat_message_received"
+  | "mesh_chat_message_send_skipped"
+  | "mesh_chat_message_received_invalid"
+  | "mesh_chat_input_validation_failed"
+  // media controls (M9 / FR-032 + FR-033). The local-toggle entry is
+  // user-initiated; the *_sent / *_received entries identify the
+  // signaling metadata path (server-fan-out, NOT the media path) so
+  // a reader can tell metadata routing apart from media routing.
+  | "mesh_media_local_toggled"
+  | "mesh_media_state_sent"
+  | "mesh_media_state_received"
+  // future-phase pass-through (logged, not state-mutating)
+  | "future_phase_message";
+
+export interface MeshEventEntry {
+  readonly id: string;
+  readonly ts: number;
+  readonly scope: MeshEventScope;
+  readonly type: MeshEventType;
+  readonly summary: string;
+  readonly peerId?: string;
+  readonly pairId?: string;
+  readonly detail?: Record<string, unknown>;
+}
+
+export interface MeshEventLogSlice {
+  readonly entries: readonly MeshEventEntry[];
+}
+
+export const initialMeshEventLogSlice: MeshEventLogSlice = {
+  entries: [],
+};
+
+export type MeshEventLogAction =
+  | { type: "MESH_EVENT_APPEND"; entry: MeshEventEntry }
+  | { type: "MESH_EVENT_LOG_RESET" };
+
+export function makeMeshEventEntry(
+  init: Omit<MeshEventEntry, "id" | "ts"> & { ts?: number; id?: string },
+): MeshEventEntry {
+  if (
+    (init.scope === "peer" || init.scope === "pair") &&
+    !init.peerId
+  ) {
+    throw new Error(
+      `mesh event entry of scope=${init.scope} requires peerId (FR-061)`,
+    );
+  }
+  if (init.scope === "pair" && !init.pairId) {
+    throw new Error("mesh event entry of scope=pair requires pairId (FR-061)");
+  }
+  // crypto.randomUUID is supported in jsdom 22+ (current Vitest 1.x+)
+  // and all production Vite + modern browser targets. Random IDs
+  // remove the need for a per-test counter reset (~10 mesh specs land
+  // M6-M11; not having to remember to reset them prevents flake).
+  return {
+    id: init.id ?? `mevt-${crypto.randomUUID()}`,
+    ts: init.ts ?? Date.now(),
+    scope: init.scope,
+    type: init.type,
+    summary: init.summary,
+    ...(init.peerId !== undefined ? { peerId: init.peerId } : {}),
+    ...(init.pairId !== undefined ? { pairId: init.pairId } : {}),
+    ...(init.detail !== undefined ? { detail: init.detail } : {}),
+  };
+}
+
+export function meshEventLogReducer(
+  state: MeshEventLogSlice,
+  action: MeshEventLogAction,
+): MeshEventLogSlice {
+  switch (action.type) {
+    case "MESH_EVENT_APPEND": {
+      const next = [...state.entries, action.entry];
+      if (next.length > MESH_EVENT_LOG_CAPACITY) {
+        next.splice(0, next.length - MESH_EVENT_LOG_CAPACITY);
+      }
+      return { entries: next };
+    }
+    case "MESH_EVENT_LOG_RESET":
+      return initialMeshEventLogSlice;
+    default:
+      return state;
+  }
+}
+
+// Selectors. Kept here so `MeshEventLogPanel` and tests share identical
+// filter logic.
+
+export function selectAll(state: MeshEventLogSlice): readonly MeshEventEntry[] {
+  return state.entries;
+}
+
+export function selectByPeer(
+  state: MeshEventLogSlice,
+  peerId: string,
+): MeshEventEntry[] {
+  return state.entries.filter((e) => e.peerId === peerId);
+}
+
+export function selectByPair(
+  state: MeshEventLogSlice,
+  pairId: string,
+): MeshEventEntry[] {
+  return state.entries.filter((e) => e.pairId === pairId);
+}
+
+export function selectRoomScope(
+  state: MeshEventLogSlice,
+): MeshEventEntry[] {
+  return state.entries.filter((e) => e.scope === "room");
+}

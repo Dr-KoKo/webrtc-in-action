@@ -1,12 +1,12 @@
 // Package main is the entry point for the webrtc-lab signaling
-// server. Phase 2 scope: /healthz, /ws, heartbeat, structured
-// lifecycle logs. Room + admission logic (Phase 3) live behind the
-// handler and do not run yet.
+// server. Mode-specific handlers + /healthz live in
+// `internal/app/routes.go`; this file only owns lifecycle (logger,
+// listener, signal-driven shutdown). Adding a new mode does not
+// require editing main.
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"webrtc-lab/signaling/internal/logging"
-	sig "webrtc-lab/signaling/internal/signaling"
+	"webrtc-lab/signaling/internal/app"
+	"webrtc-lab/signaling/internal/shared/logging"
 )
 
 const (
@@ -38,8 +38,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", healthzHandler)
-	mux.Handle("/ws", sig.NewHandler(logger))
+	app.RegisterRoutes(mux, app.Deps{Logger: logger})
 
 	server := &http.Server{
 		Addr:              ":" + port,
@@ -80,9 +79,4 @@ func main() {
 			slog.String("event", "server_stop"),
 		)
 	}
-}
-
-func healthzHandler(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

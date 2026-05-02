@@ -361,7 +361,7 @@ sequenceDiagram
   ~5 s.
 - `EventLogPanel` rows are rendered as `[direction] <type> <summary>`.
   Match on the canonical `type` token (left column of
-  `EventLogEntryType` in `frontend/src/state/event-log.ts`). There is
+  `EventLogEntryType` in `frontend/src/modes/one-to-one/state/event-log.ts`). There is
   no dedicated `local track added` entry — local tracks are covered
   by `media_acquire_started` / `media_ready_sent`.
 - **Both sides** must log (order roughly top-to-bottom, but some rows
@@ -612,7 +612,7 @@ With L+M connected (post-T-01):
   violate §3.11's log-safety rule).
 - `signalingState` flips to `have-local-offer` or similar during a
   toggle → a regression has wired `createOffer` into the toggle
-  path; this is the exact failure that `tests/unit/media-controls.spec.ts`
+  path; this is the exact failure that `frontend/src/modes/one-to-one/tests/unit/media-controls.spec.ts`
   is supposed to catch.
 
 ### T-14 · Screen sharing (Phase 11, FR-017, SC-007, EC-011, [quickstart §4.4](../../specs/001-webrtc-1to1-call/quickstart.md))
@@ -655,7 +655,7 @@ With L+M connected (post-T-01):
 
 - `signalingState` flips to `have-local-offer` during start or stop
   → a regression wired `createOffer` into the screen-share path;
-  `tests/unit/screen-share.spec.ts` is the regression guard.
+  `frontend/src/modes/one-to-one/tests/unit/screen-share.spec.ts` is the regression guard.
 - M shows a second remote video tile → someone added a track
   (`addTrack`) instead of replacing it; `replaceTrack` is the only
   permitted swap.

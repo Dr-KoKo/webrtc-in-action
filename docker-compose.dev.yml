@@ -30,7 +30,7 @@ services:
       - "${FRONTEND_PORT:-5173}:5173"
     environment:
       # Default empty — T103 makes the same-origin fallback in
-      # frontend/src/components/{JoinForm,FailurePanel}.tsx authoritative.
+      # frontend/src/modes/one-to-one/components/{JoinForm,FailurePanel}.tsx authoritative.
       # Set VITE_SIGNALING_URL explicitly in .env / .env.dev only when
       # signaling lives on a different origin from the frontend.
       VITE_SIGNALING_URL: ${VITE_SIGNALING_URL:-}

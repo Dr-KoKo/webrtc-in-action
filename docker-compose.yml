@@ -28,7 +28,7 @@ services:
     environment:
       # Signaling URL the browser uses for the WS upgrade. T103 makes
       # the same-origin fallback in
-      # frontend/src/components/{JoinForm,FailurePanel}.tsx
+      # frontend/src/modes/one-to-one/components/{JoinForm,FailurePanel}.tsx
       # authoritative (both vite dev's server.proxy and vite preview's
       # preview.proxy in frontend/vite.config.ts forward `/ws` to
       # signaling:8080), so this variable is OPTIONAL. Set it only
@@ -47,6 +47,9 @@ services:
         condition: service_healthy
 
   signaling:
+    # The mesh endpoint /ws/mesh (002) is registered on this same listener
+    # alongside the 001 /ws endpoint via cmd/signaling/main.go — no extra
+    # service or port is required for mesh mode.
     build:
       context: ./signaling
       dockerfile: Dockerfile
