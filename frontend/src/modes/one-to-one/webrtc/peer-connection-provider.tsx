@@ -60,7 +60,7 @@ import {
   type IceCandidateMessage,
   type OfferMessage,
   type ReadyForOfferMessage,
-} from "../signaling/schema";
+} from "../protocol/schema";
 import { useLocalMedia } from "./local-media-provider";
 import {
   createPeerConnection,

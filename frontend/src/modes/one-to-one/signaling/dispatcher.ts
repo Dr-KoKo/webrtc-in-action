@@ -29,7 +29,7 @@ import {
   type ParticipantReleasedMessage,
   type PeerPresenceChangedMessage,
   type SignalingMessage,
-} from "./schema";
+} from "../protocol/schema";
 import type { SignalingClient } from "./client";
 
 interface DispatcherDeps {

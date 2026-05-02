@@ -57,7 +57,7 @@ import { useSignalingClient } from "../signaling/provider";
 import { useLocalMedia } from "./local-media-provider";
 import { usePeerConnection } from "./peer-connection-provider";
 import { useScreenShare } from "./screen-share-provider";
-import { signalingMessageSchema } from "../signaling/schema";
+import { signalingMessageSchema } from "../protocol/schema";
 import { CONTRACT_VERSION } from "../types/contract";
 import type { SessionState } from "../state/session";
 

@@ -2,14 +2,14 @@
 // Zod schemas so there is exactly one definition per message shape.
 //
 // Keep this file a thin re-export; per T010, all types are derived via
-// `z.infer<typeof schema>` inside `../signaling/schema.ts` and we do
-// NOT hand-write payload shapes here.
+// `z.infer<typeof schema>` inside `../protocol/` and we do NOT
+// hand-write payload shapes here.
 
 export {
   CONTRACT_VERSION,
   ROOM_ID_REGEX,
   messageTypes,
-} from "../signaling/schema";
+} from "../protocol/schema";
 
 export type {
   MessageType,
@@ -30,4 +30,4 @@ export type {
   ParticipantReleasedMessage,
   LeaveRoomMessage,
   ErrorMessage,
-} from "../signaling/schema";
+} from "../protocol/schema";
