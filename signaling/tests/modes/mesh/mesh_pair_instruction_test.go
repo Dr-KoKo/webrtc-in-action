@@ -102,7 +102,7 @@ func drainAllRosterUpdatesForMediaReady(t *testing.T, conns []*websocket.Conn, c
 // endpoints receive exactly one `pair_negotiation_instruction` with
 // the correct (offerer, answerer) split and pairEpoch=1.
 func TestPairInstructionEmittedWhenSecondMediaReady(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -165,7 +165,7 @@ func TestPairInstructionEmittedWhenSecondMediaReady(t *testing.T) {
 // instructions A↔D, B↔D, C↔D (6 unicast envelopes total) and never
 // re-emits the existing pairs.
 func TestFourthMediaReadyEmitsExactlyThreeNewPairs(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

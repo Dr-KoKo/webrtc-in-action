@@ -38,7 +38,7 @@ func readUntilType(t *testing.T, conn *websocket.Conn, ctx context.Context, want
 }
 
 func TestSnapshotIncludesAllParticipantsIncludingSelf(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -84,7 +84,7 @@ func TestSnapshotIncludesAllParticipantsIncludingSelf(t *testing.T) {
 // asserts the serverSeq values are strictly monotonic on the receiving
 // peer (which receives EVERY update including its own admission).
 func TestRosterSeqStrictlyIncreasing(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -163,7 +163,7 @@ func mustReadSeq(t *testing.T, conn *websocket.Conn, ctx context.Context) uint64
 // caught by the meshprobe runner: an earlier impl re-built the
 // roster_update payload per recipient, bumping serverSeq each time.
 func TestSameDepartureSharesOneServerSeq(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -205,7 +205,7 @@ func TestSameDepartureSharesOneServerSeq(t *testing.T) {
 // registry once the last participant leaves. Diagnostic only; the
 // invariant matters for memory hygiene over long sessions.
 func TestEmptyRoomGarbageCollected(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -238,7 +238,7 @@ func TestEmptyRoomGarbageCollected(t *testing.T) {
 // treated as a "fresh emission" or a "re-emission of the most
 // recent value."
 func TestSnapshotServerSeqStrictlyGreaterThanPriorEmissions(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

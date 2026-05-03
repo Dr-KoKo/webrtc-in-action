@@ -11,8 +11,10 @@
 //   - /ws/mesh       (mesh mode, contract v2)
 //
 // Adding a new mode (SFU, recording, …) means: add an entry to
-// `MODES` in the frontend registry AND add one `mux.Handle("/ws/<id>",
-// <id>.NewHandler(deps.Logger))` line below.
+// `MODES` in the frontend registry AND add one
+// `mux.Handle("/ws/<id>", <id>.NewHandler(deps.Logger, cfg.Modes.<Id>))`
+// line below. Each mode handler receives only its own ModeConfig
+// slice — never the whole AppConfig.
 package app
 
 import (
@@ -22,13 +24,16 @@ import (
 
 	"webrtc-lab/signaling/internal/modes/mesh"
 	onetoone "webrtc-lab/signaling/internal/modes/onetoone"
+	"webrtc-lab/signaling/internal/shared/config"
 )
 
 // Deps carries the shared dependencies handlers need at construction.
-// Today: just the logger. Future shared resources (metrics, config
-// snapshot) attach here.
+// Cfg holds the per-mode subsets; Logger is passed alongside (rather
+// than embedded in cfg) because the logger is built AFTER config
+// loads from cfg.Logging in main.
 type Deps struct {
 	Logger *slog.Logger
+	Cfg    config.AppConfig
 }
 
 // RegisterRoutes installs every mode's handler plus the /healthz
@@ -38,8 +43,8 @@ type Deps struct {
 // dependencies correctly.
 func RegisterRoutes(mux *http.ServeMux, deps Deps) {
 	mux.HandleFunc("/healthz", healthzHandler)
-	mux.Handle("/ws", onetoone.NewHandler(deps.Logger))
-	mux.Handle("/ws/mesh", mesh.NewHandler(deps.Logger))
+	mux.Handle("/ws", onetoone.NewHandler(deps.Logger, deps.Cfg.Modes.OneToOne))
+	mux.Handle("/ws/mesh", mesh.NewHandler(deps.Logger, deps.Cfg.Modes.Mesh))
 }
 
 // healthzHandler is lifted byte-for-byte from the pre-refactor

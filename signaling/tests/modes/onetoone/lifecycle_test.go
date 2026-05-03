@@ -218,7 +218,7 @@ func TestLifecycle_PongTimeoutDisconnectReason(t *testing.T) {
 
 func TestLifecycle_UngracefulCloseCleanupOnBackground(t *testing.T) {
 	log, buf := captureLogger()
-	h := sig.NewHandler(log)
+	h := sig.NewHandler(log, defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -295,7 +295,7 @@ func TestLifecycle_UngracefulCloseCleanupOnBackground(t *testing.T) {
 // dispatch normally on the same WS.
 
 func TestLifecycle_MalformedFrameContinuation(t *testing.T) {
-	h := sig.NewHandler(silentLogger())
+	h := sig.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -339,7 +339,7 @@ func TestLifecycle_MalformedFrameContinuation(t *testing.T) {
 
 func TestLifecycle_LeaveRoomDoubleClose(t *testing.T) {
 	log, buf := captureLogger()
-	h := sig.NewHandler(log)
+	h := sig.NewHandler(log, defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

@@ -48,7 +48,7 @@ func admitPairAndReachInstruction(t *testing.T, ts *httptest.Server, ctx context
 // TestValidPairOfferRelayedOnce — the offerer's pair_offer is forwarded
 // exactly once to the answerer with `from` set to the sender peerId.
 func TestValidPairOfferRelayedOnce(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -89,7 +89,7 @@ func TestValidPairOfferRelayedOnce(t *testing.T) {
 // TestValidPairAnswerRelayedOnce — the answerer's pair_answer is
 // forwarded once back to the offerer.
 func TestValidPairAnswerRelayedOnce(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -132,7 +132,7 @@ func TestValidPairAnswerRelayedOnce(t *testing.T) {
 // pairEpoch < server's current returns `error stale_pair_epoch` to
 // the sender and does NOT forward to the recipient.
 func TestStalePairOfferRejectedAndNotForwarded(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -193,7 +193,7 @@ func TestStalePairOfferRejectedAndNotForwarded(t *testing.T) {
 // admissionIndex) sends pair_offer, the server rejects with
 // `unexpected_offer` and does not forward.
 func TestWrongRolePairOfferRejected(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

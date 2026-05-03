@@ -29,64 +29,47 @@ import (
 // internal/shared/wsserver. Mesh-specific state (admission, roster,
 // pair negotiation) lives on signaling.Service — that's the
 // lesson.
-//
-// NewHandler returns *Handler so existing tests that reach
-// h.Manager (mesh_roster_test.go:206) and mutate h.Heartbeat
-// (lifecycle_test.go) continue to work. The wsserver Config holds
-// &h.Heartbeat so post-construction mutations reach the running
-// server.
 type Handler struct {
-	Log           *slog.Logger
-	Heartbeat     heartbeat.Config
-	Manager       *room.RoomManager
-	AcceptOptions *websocket.AcceptOptions
+	Log       *slog.Logger
+	Heartbeat heartbeat.Config
+	Manager   *room.RoomManager
 
 	// IceServers is the v2 RTCIceServer list relayed in
 	// `join_accepted`, `pair_negotiation_instruction`, and
-	// `pair_reconnect_instruction`. Loaded once at construction from
-	// env; never logged (TURN credentials are secrets per NFR-003).
+	// `pair_reconnect_instruction`. Set from cfg at construction;
+	// never logged (TURN credentials are secrets per NFR-003).
 	IceServers []protocol.IceServer
 
 	service *signaling.Service
 	server  *wsserver.Server
 }
 
-// NewHandler returns a Handler with sensible defaults loaded from
-// env. The heartbeat defaults match 001 (5 s + 5 s) so SC-005a's
-// ≤10 s detection bound is satisfied by construction.
-func NewHandler(log *slog.Logger) *Handler {
+// NewHandler builds the 002 mesh handler from a fully-resolved
+// ModeConfig. Env reading lives in internal/shared/config; this
+// constructor takes only typed values. The heartbeat defaults
+// shipped by config.Load() match 001 (5 s + 5 s) so SC-005a's ≤10 s
+// detection bound is satisfied unless a caller explicitly widens it.
+func NewHandler(log *slog.Logger, cfg config.ModeConfig) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
-	ice := iceServersFromConfig(config.LoadIceServersFromEnv())
-	if len(ice) == 0 {
-		// Mesh contract §3.2 + §3.9 require iceServers non-empty.
-		// Default to the public Google STUN entry so a fresh clone
-		// works on localhost without a TURN configuration.
-		ice = []protocol.IceServer{{URLs: []string{"stun:stun.l.google.com:19302"}}}
-	}
 	h := &Handler{
 		Log:        log,
-		Heartbeat:  heartbeat.LoadFromEnv(),
+		Heartbeat:  cfg.Heartbeat,
 		Manager:    room.NewRoomManager(),
-		IceServers: ice,
-		AcceptOptions: &websocket.AcceptOptions{
-			// Dev convenience: mirror 001's allow-any-origin policy
-			// so the Vite dev server can connect through its `/ws`
-			// proxy.
-			InsecureSkipVerify: true,
-		},
+		IceServers: iceServersFromConfig(cfg.IceServers),
 	}
 	h.service = signaling.NewService(log, h.Manager, h.IceServers)
 	h.server = wsserver.New(h, wsserver.Config{
-		Logger:          log,
-		Heartbeat:       &h.Heartbeat,
-		HeartbeatLabels: meshHeartbeatLabels,
-		Accept:          h.AcceptOptions,
-		ConnIDPrefix:    "m-",
-		Connect:         wsserver.LogLine{Event: "mesh_ws_connected", Message: "mesh websocket connected"},
-		Disconnect:      wsserver.LogLine{Event: "mesh_ws_disconnected", Message: "mesh websocket disconnected"},
-		AcceptFailed:    wsserver.LogLine{Event: "mesh_ws_accept_failed", Message: "mesh websocket accept failed"},
+		Logger:             log,
+		Heartbeat:          h.Heartbeat,
+		HeartbeatLabels:    meshHeartbeatLabels,
+		InsecureSkipVerify: cfg.WebSocket.InsecureSkipVerify,
+		OriginPatterns:     cfg.WebSocket.OriginPatterns,
+		ConnIDPrefix:       "m-",
+		Connect:            wsserver.LogLine{Event: "mesh_ws_connected", Message: "mesh websocket connected"},
+		Disconnect:         wsserver.LogLine{Event: "mesh_ws_disconnected", Message: "mesh websocket disconnected"},
+		AcceptFailed:       wsserver.LogLine{Event: "mesh_ws_accept_failed", Message: "mesh websocket accept failed"},
 	})
 	return h
 }
