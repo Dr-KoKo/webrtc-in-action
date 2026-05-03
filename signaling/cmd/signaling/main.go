@@ -1,27 +1,30 @@
 // Package main is the entry point for the webrtc-lab signaling
 // server. Mode-specific handlers + /healthz live in
-// `internal/app/routes.go`; this file only owns lifecycle (logger,
-// listener, signal-driven shutdown). Adding a new mode does not
-// require editing main.
+// `internal/app/routes.go`; this file only owns lifecycle:
+// (1) load + validate config (fail-fast before logger setup),
+// (2) build logger from cfg.Logging,
+// (3) register routes,
+// (4) listen + signal-driven shutdown.
+// Adding a new mode does not require editing main.
 package main
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
 	"webrtc-lab/signaling/internal/app"
+	"webrtc-lab/signaling/internal/shared/config"
 	"webrtc-lab/signaling/internal/shared/logging"
 )
 
 const (
-	defaultPort          = "8080"
 	readHeaderTimeout    = 10 * time.Second
 	shutdownDrainTimeout = 5 * time.Second
 	httpReadTimeout      = 30 * time.Second
@@ -29,19 +32,20 @@ const (
 )
 
 func main() {
-	logger := logging.Setup(os.Stdout)
-	slog.SetDefault(logger)
-
-	port := os.Getenv("SIGNALING_PORT")
-	if _, err := strconv.Atoi(port); err != nil || port == "" {
-		port = defaultPort
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "signaling: config load failed:", err)
+		os.Exit(2)
 	}
 
+	logger := logging.Setup(os.Stdout, cfg.Logging)
+	slog.SetDefault(logger)
+
 	mux := http.NewServeMux()
-	app.RegisterRoutes(mux, app.Deps{Logger: logger})
+	app.RegisterRoutes(mux, app.Deps{Logger: logger, Cfg: cfg})
 
 	server := &http.Server{
-		Addr:              ":" + port,
+		Addr:              ":" + cfg.Server.Port,
 		Handler:           mux,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       httpReadTimeout,
@@ -55,6 +59,7 @@ func main() {
 		logger.Info("signaling server starting",
 			slog.String("event", "server_start"),
 			slog.String("addr", server.Addr),
+			slog.String("env", string(cfg.Env)),
 		)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("server failure",

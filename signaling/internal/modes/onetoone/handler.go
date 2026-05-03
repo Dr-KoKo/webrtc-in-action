@@ -22,55 +22,44 @@ import (
 // (Accept, conn-id, heartbeat, read loop, write mutex, error
 // classification, teardown) lives in internal/shared/wsserver. Each
 // session's mode-specific state lives on Session1to1 below.
-//
-// NewHandler returns *Handler so existing tests can mutate
-// h.Heartbeat AFTER construction (heartbeat_test.go:62) — the
-// wsserver Config carries &h.Heartbeat so those mutations reach
-// the running server.
 type Handler struct {
-	Log           *slog.Logger
-	Heartbeat     heartbeat.Config
-	Rooms         *room.RoomManager
-	AcceptOptions *websocket.AcceptOptions
+	Log       *slog.Logger
+	Heartbeat heartbeat.Config
+	Rooms     *room.RoomManager
 
 	// IceServers is the RTCIceServer list relayed in `ready_for_offer`
-	// (contract §3.7). Loaded once at construction from env; never
-	// logged (TURN credentials are secrets). If the list is empty, a
-	// public STUN fallback is used so a fresh clone works on localhost.
+	// (contract §3.7). Set from cfg at construction; never logged
+	// (TURN credentials are secrets per NFR-003).
 	IceServers []protocol.IceServer
 
 	service *signaling.Service
 	server  *wsserver.Server
 }
 
-// NewHandler returns a Handler with a fresh RoomManager and
-// sensible defaults from env.
-func NewHandler(log *slog.Logger) *Handler {
+// NewHandler builds the 001 handler from a fully-resolved ModeConfig.
+// Env reading lives in internal/shared/config; this constructor takes
+// only typed values.
+func NewHandler(log *slog.Logger, cfg config.ModeConfig) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
 	h := &Handler{
 		Log:        log,
-		Heartbeat:  heartbeat.LoadFromEnv(),
+		Heartbeat:  cfg.Heartbeat,
 		Rooms:      room.NewRoomManager(),
-		IceServers: iceServersFromConfig(config.LoadIceServersFromEnv()),
-		AcceptOptions: &websocket.AcceptOptions{
-			// Dev convenience: allow WS from any origin so the Vite
-			// dev server on a different port can connect. Phase 13
-			// tightens this for production.
-			InsecureSkipVerify: true,
-		},
+		IceServers: iceServersFromConfig(cfg.IceServers),
 	}
 	h.service = signaling.NewService(log, h.Rooms, h.IceServers)
 	h.server = wsserver.New(h, wsserver.Config{
-		Logger:          log,
-		Heartbeat:       &h.Heartbeat,
-		HeartbeatLabels: oneToOneHeartbeatLabels,
-		Accept:          h.AcceptOptions,
-		ConnIDPrefix:    "c-",
-		Connect:         wsserver.LogLine{Event: "ws_connected", Message: "websocket connected"},
-		Disconnect:      wsserver.LogLine{Event: "ws_disconnected", Message: "websocket disconnected"},
-		AcceptFailed:    wsserver.LogLine{Event: "ws_accept_failed", Message: "websocket accept failed"},
+		Logger:             log,
+		Heartbeat:          h.Heartbeat,
+		HeartbeatLabels:    oneToOneHeartbeatLabels,
+		InsecureSkipVerify: cfg.WebSocket.InsecureSkipVerify,
+		OriginPatterns:     cfg.WebSocket.OriginPatterns,
+		ConnIDPrefix:       "c-",
+		Connect:            wsserver.LogLine{Event: "ws_connected", Message: "websocket connected"},
+		Disconnect:         wsserver.LogLine{Event: "ws_disconnected", Message: "websocket disconnected"},
+		AcceptFailed:       wsserver.LogLine{Event: "ws_accept_failed", Message: "websocket accept failed"},
 	})
 	return h
 }

@@ -92,7 +92,7 @@ func drainSelfAdmission(t *testing.T, ctx context.Context, conn *websocket.Conn)
 // TestPongTimeout_ReleasesSlot — closing the socket without leave_room
 // frees the participant's slot (verified via post-disconnect refill).
 func TestPongTimeout_ReleasesSlot(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -129,7 +129,7 @@ func TestPongTimeout_ReleasesSlot(t *testing.T) {
 // TestPongTimeout_RemainingPeersReceiveRosterLeft — remaining peers
 // observe presence=left within bounds when a peer ungracefully closes.
 func TestPongTimeout_RemainingPeersReceiveRosterLeft(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -202,7 +202,7 @@ func TestPongTimeout_RemainingPeersReceiveRosterLeft(t *testing.T) {
 // remaining peers so each client can tear down its PairContext via
 // Path B without waiting for connectionState=failed locally.
 func TestPongTimeout_InCallLeaverEmitsPeerLeftDisconnect(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -251,7 +251,7 @@ func TestPongTimeout_InCallLeaverEmitsPeerLeftDisconnect(t *testing.T) {
 // TestPongTimeout_RoomDeletedOnLastTimeout — when the last participant
 // times out, the room is garbage-collected from the manager.
 func TestPongTimeout_RoomDeletedOnLastTimeout(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -280,7 +280,7 @@ func TestPongTimeout_RoomDeletedOnLastTimeout(t *testing.T) {
 // TestPongTimeout_RoomPreservedWhileOthersRemain — room survives one
 // disconnect when other participants still hold slots.
 func TestPongTimeout_RoomPreservedWhileOthersRemain(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -316,7 +316,7 @@ func TestPongTimeout_RoomPreservedWhileOthersRemain(t *testing.T) {
 // room is a fresh counter — so we anchor the room with C and probe
 // with A→close→B.
 func TestPongTimeout_AdmissionIndexMonotonicAfterRefill(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -373,7 +373,7 @@ func TestPongTimeout_AdmissionIndexMonotonicAfterRefill(t *testing.T) {
 // leaver's peerId only — never a pairId. The server never inspects
 // pairs during disconnect cleanup.
 func TestPongTimeout_NoPairFailedForUnrelatedPairs(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -451,7 +451,7 @@ func readMeshEnvelopeWithCtx(ctx context.Context, conn *websocket.Conn) (protoco
 // makeFastHandler shrinks the bound — but assert the production
 // defaults haven't drifted into something laxer than the spec.
 func TestPongTimeout_HeartbeatBoundsRespectSpec(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	if h.Heartbeat.PingInterval > 5*time.Second {
 		t.Errorf("ping interval %v exceeds SC-005a 5 s budget", h.Heartbeat.PingInterval)
 	}

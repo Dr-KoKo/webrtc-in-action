@@ -157,27 +157,6 @@ func TestRunPongTimeoutEmitsMeshLabels(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvDefaults(t *testing.T) {
-	t.Setenv("PING_INTERVAL_MS", "")
-	t.Setenv("PONG_TIMEOUT_MS", "")
-	cfg := heartbeat.LoadFromEnv()
-	if cfg.PingInterval != 5*time.Second || cfg.PongTimeout != 5*time.Second {
-		t.Fatalf("defaults = (%v, %v); want (5s, 5s)", cfg.PingInterval, cfg.PongTimeout)
-	}
-}
-
-func TestLoadFromEnvOverrides(t *testing.T) {
-	t.Setenv("PING_INTERVAL_MS", "1234")
-	t.Setenv("PONG_TIMEOUT_MS", "5678")
-	cfg := heartbeat.LoadFromEnv()
-	if cfg.PingInterval != 1234*time.Millisecond {
-		t.Fatalf("PingInterval = %v; want 1234ms", cfg.PingInterval)
-	}
-	if cfg.PongTimeout != 5678*time.Millisecond {
-		t.Fatalf("PongTimeout = %v; want 5678ms", cfg.PongTimeout)
-	}
-}
-
 // silentLogger placeholder so the file compiles even if some tests
 // don't need the captured one.
 var _ = io.Discard

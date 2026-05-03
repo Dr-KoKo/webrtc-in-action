@@ -46,13 +46,20 @@ services:
     environment:
       # Dev persona defaults — matches .env.dev.example even if a
       # contributor runs this file without `--env-file .env.dev`.
-      # The prod persona (json / info) lives in docker-compose.yml.
+      # The prod persona (json / info, APP_ENV=prod with explicit
+      # WS_ALLOWED_ORIGINS) lives in docker-compose.yml.
+      APP_ENV: ${APP_ENV:-dev}
+      # WS_ALLOWED_ORIGINS unset on purpose: dev profile + empty list
+      # → permissive WS origin policy (InsecureSkipVerify=true), so
+      # the Vite dev server on a different port can connect freely.
+      # Set this env var to lock down dev origins as well.
+      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-}
       LOG_FORMAT: ${LOG_FORMAT:-text}
       LOG_LEVEL: ${LOG_LEVEL:-debug}
       SIGNALING_PORT: "8080"
       PING_INTERVAL_MS: ${PING_INTERVAL_MS:-5000}
       PONG_TIMEOUT_MS: ${PONG_TIMEOUT_MS:-5000}
-      VITE_STUN_URLS: ${VITE_STUN_URLS:-stun:stun.l.google.com:19302}
-      VITE_TURN_URL: ${VITE_TURN_URL:-}
-      VITE_TURN_USERNAME: ${VITE_TURN_USERNAME:-}
-      VITE_TURN_CREDENTIAL: ${VITE_TURN_CREDENTIAL:-}
+      ICE_STUN_URLS: ${ICE_STUN_URLS:-stun:stun.l.google.com:19302}
+      ICE_TURN_URL: ${ICE_TURN_URL:-}
+      ICE_TURN_USERNAME: ${ICE_TURN_USERNAME:-}
+      ICE_TURN_CREDENTIAL: ${ICE_TURN_CREDENTIAL:-}

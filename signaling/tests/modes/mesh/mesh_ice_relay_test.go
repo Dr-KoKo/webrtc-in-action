@@ -72,7 +72,7 @@ func mustMarshal(t *testing.T, v any) json.RawMessage {
 // is forwarded once to B with `from` set to A's peer ID, byte-for-byte
 // (extra/unknown fields preserved).
 func TestValidPairIceCandidateRelayedOnce(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -135,7 +135,7 @@ func TestValidPairIceCandidateRelayedOnce(t *testing.T) {
 // is preserved and forwarded; the relayed payload's `candidate` key is
 // JSON null.
 func TestPairIceCandidateNullRelayed(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -164,7 +164,7 @@ func TestPairIceCandidateNullRelayed(t *testing.T) {
 // is invalid (use null instead). The server returns
 // `error { code: "malformed" }` and does NOT forward.
 func TestPairIceCandidateEmptyStringRejectedAsMalformed(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -196,7 +196,7 @@ func TestPairIceCandidateEmptyStringRejectedAsMalformed(t *testing.T) {
 // pairEpoch != server's current returns `error stale_pair_epoch` and
 // is NOT forwarded.
 func TestPairIceCandidateStaleEpochRejected(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -226,7 +226,7 @@ func TestPairIceCandidateStaleEpochRejected(t *testing.T) {
 // TestPairIceCandidateNotRelayedToUnrelatedPeer — when a third peer
 // is admitted, an A↔B pair_ice_candidate must NOT be forwarded to C.
 func TestPairIceCandidateNotRelayedToUnrelatedPeer(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

@@ -18,16 +18,16 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/coder/websocket"
 )
 
-// Config holds the ping cadence + pong-timeout. Loaded from env via
-// `LoadFromEnv()`. Type matches the pre-refactor `HeartbeatConfig`
-// shape verbatim (Duration, not int milliseconds).
+// Config holds the ping cadence + pong-timeout. Built by
+// internal/shared/config from PING_INTERVAL_MS / PONG_TIMEOUT_MS env
+// vars; this package no longer reads env directly. Type matches the
+// pre-refactor `HeartbeatConfig` shape verbatim (Duration, not int
+// milliseconds).
 type Config struct {
 	PingInterval time.Duration
 	PongTimeout  time.Duration
@@ -60,28 +60,6 @@ func (e *HeartbeatError) Error() string {
 }
 
 func (e *HeartbeatError) Unwrap() error { return e.Err }
-
-// LoadFromEnv reads PING_INTERVAL_MS / PONG_TIMEOUT_MS from env and
-// falls back to the 5000 ms contract default. Identical behavior to
-// the pre-refactor `LoadHeartbeatConfig` in 001 and mesh.
-func LoadFromEnv() Config {
-	return Config{
-		PingInterval: envDuration("PING_INTERVAL_MS", 5*time.Second),
-		PongTimeout:  envDuration("PONG_TIMEOUT_MS", 5*time.Second),
-	}
-}
-
-func envDuration(key string, def time.Duration) time.Duration {
-	raw := os.Getenv(key)
-	if raw == "" {
-		return def
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return def
-	}
-	return time.Duration(n) * time.Millisecond
-}
 
 // Run sends a WebSocket Ping every cfg.PingInterval and waits up to
 // cfg.PongTimeout for the auto-Pong. On timeout, calls CloseNow()

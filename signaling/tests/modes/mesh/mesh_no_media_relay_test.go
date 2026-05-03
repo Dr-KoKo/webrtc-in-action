@@ -62,7 +62,7 @@ const (
 
 func TestNoMediaRelay_RelayPathsAreByteIdentical(t *testing.T) {
 	log, buf := captureLogger()
-	h := mesh.NewHandler(log)
+	h := mesh.NewHandler(log, defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
