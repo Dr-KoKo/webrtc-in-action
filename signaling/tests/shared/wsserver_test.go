@@ -107,16 +107,16 @@ func fastHB() heartbeat.Config {
 	}
 }
 
-func defaultCfg(log *slog.Logger, hb *heartbeat.Config) wsserver.Config {
+func defaultCfg(log *slog.Logger, hb heartbeat.Config) wsserver.Config {
 	return wsserver.Config{
-		Heartbeat:       hb,
-		HeartbeatLabels: heartbeat.Labels{PongTimeoutEvent: "fake_pong_timeout", PongTimeoutMessage: "fake heartbeat pong timeout"},
-		Logger:          log,
-		Accept:          &websocket.AcceptOptions{InsecureSkipVerify: true},
-		ConnIDPrefix:    "f-",
-		Connect:         wsserver.LogLine{Event: "fake_ws_connected", Message: "fake websocket connected"},
-		Disconnect:      wsserver.LogLine{Event: "fake_ws_disconnected", Message: "fake websocket disconnected"},
-		AcceptFailed:    wsserver.LogLine{Event: "fake_ws_accept_failed", Message: "fake websocket accept failed"},
+		Heartbeat:          hb,
+		HeartbeatLabels:    heartbeat.Labels{PongTimeoutEvent: "fake_pong_timeout", PongTimeoutMessage: "fake heartbeat pong timeout"},
+		Logger:             log,
+		InsecureSkipVerify: true,
+		ConnIDPrefix:       "f-",
+		Connect:            wsserver.LogLine{Event: "fake_ws_connected", Message: "fake websocket connected"},
+		Disconnect:         wsserver.LogLine{Event: "fake_ws_disconnected", Message: "fake websocket disconnected"},
+		AcceptFailed:       wsserver.LogLine{Event: "fake_ws_accept_failed", Message: "fake websocket accept failed"},
 	}
 }
 
@@ -151,7 +151,7 @@ func TestWsserver_CleanPeerClose(t *testing.T) {
 	mode := &fakeMode{newSession: func(_ wsserver.Session, _ *slog.Logger) (wsserver.SessionHandler, error) {
 		return handler, nil
 	}}
-	srv := wsserver.New(mode, defaultCfg(log, &hb))
+	srv := wsserver.New(mode, defaultCfg(log, hb))
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
@@ -198,7 +198,7 @@ func TestWsserver_PongTimeoutClassifiedAsReadError(t *testing.T) {
 	mode := &fakeMode{newSession: func(_ wsserver.Session, _ *slog.Logger) (wsserver.SessionHandler, error) {
 		return handler, nil
 	}}
-	srv := wsserver.New(mode, defaultCfg(log, &hb))
+	srv := wsserver.New(mode, defaultCfg(log, hb))
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
@@ -250,7 +250,7 @@ func TestWsserver_WriteSerialization(t *testing.T) {
 		close(ready)
 		return &fakeSessionHandler{}, nil
 	}}
-	srv := wsserver.New(mode, defaultCfg(silentLog(), &hb))
+	srv := wsserver.New(mode, defaultCfg(silentLog(), hb))
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
@@ -328,7 +328,7 @@ func TestWsserver_CloseFromHandleFrameThenTeardown(t *testing.T) {
 		sessRef.Store(sess)
 		return handler, nil
 	}}
-	srv := wsserver.New(mode, defaultCfg(log, &hb))
+	srv := wsserver.New(mode, defaultCfg(log, hb))
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
@@ -375,7 +375,7 @@ func TestWsserver_OnDisconnectAttrs(t *testing.T) {
 	mode := &fakeMode{newSession: func(_ wsserver.Session, _ *slog.Logger) (wsserver.SessionHandler, error) {
 		return handler, nil
 	}}
-	srv := wsserver.New(mode, defaultCfg(log, &hb))
+	srv := wsserver.New(mode, defaultCfg(log, hb))
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
@@ -419,7 +419,7 @@ func TestWsserver_NewSessionRefusal(t *testing.T) {
 		}
 		return nil, errors.New("synthetic refusal")
 	}}
-	srv := wsserver.New(mode, defaultCfg(log, &hb))
+	srv := wsserver.New(mode, defaultCfg(log, hb))
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
@@ -473,7 +473,7 @@ func TestWsserver_NonNilHandleFrameTerminates(t *testing.T) {
 	mode := &fakeMode{newSession: func(_ wsserver.Session, _ *slog.Logger) (wsserver.SessionHandler, error) {
 		return handler, nil
 	}}
-	srv := wsserver.New(mode, defaultCfg(log, &hb))
+	srv := wsserver.New(mode, defaultCfg(log, hb))
 	ts := httptest.NewServer(srv)
 	defer ts.Close()
 

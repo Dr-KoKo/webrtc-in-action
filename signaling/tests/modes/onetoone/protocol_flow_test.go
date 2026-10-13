@@ -46,13 +46,9 @@ func flowServer(t *testing.T) *httptest.Server {
 			t.Logf("server log:\n%s", buf.String())
 		}
 	})
-	h := sig.NewHandler(log)
-	// Slow the heartbeat down so tests aren't racing a 50ms ping. Real
-	// heartbeat tests live in heartbeat_test.go.
-	h.Heartbeat = sig.HeartbeatConfig{
-		PingInterval: 10 * time.Second,
-		PongTimeout:  10 * time.Second,
-	}
+	// Slow heartbeat so tests aren't racing a 5s ping. Real heartbeat
+	// tests live in heartbeat_test.go.
+	h := sig.NewHandler(log, slowModeConfig())
 	ts := httptest.NewServer(h)
 	t.Cleanup(func() { ts.Close() })
 	return ts
@@ -1176,11 +1172,7 @@ func TestIceCandidateFromWrongStateRejected(t *testing.T) {
 // for the marker. Missing = pass; present = NFR-003 violation.
 func TestServerNeverLogsCandidate(t *testing.T) {
 	log, buf := captureLogger()
-	h := sig.NewHandler(log)
-	h.Heartbeat = sig.HeartbeatConfig{
-		PingInterval: 10 * time.Second,
-		PongTimeout:  10 * time.Second,
-	}
+	h := sig.NewHandler(log, slowModeConfig())
 	ts := httptest.NewServer(h)
 	t.Cleanup(func() { ts.Close() })
 	// If the test fails, surface the buffer for debugging. We intentionally
@@ -1427,11 +1419,7 @@ func TestWSPongTimeoutReleasesSlot(t *testing.T) {
 			t.Logf("server log:\n%s", buf.String())
 		}
 	})
-	h := sig.NewHandler(log)
-	h.Heartbeat = sig.HeartbeatConfig{
-		PingInterval: 50 * time.Millisecond,
-		PongTimeout:  100 * time.Millisecond,
-	}
+	h := sig.NewHandler(log, fastModeConfig())
 	ts := httptest.NewServer(h)
 	t.Cleanup(ts.Close)
 

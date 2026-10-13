@@ -136,7 +136,7 @@ func induceFailedPair(t *testing.T, connA, connB *websocket.Conn, ctx context.Co
 // other endpoint receives the original payload bytes verbatim; no
 // roster update or other broadcast occurs.
 func TestPairFailedRelayedToOtherEndpointOnly(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -172,7 +172,7 @@ func TestPairFailedRelayedToOtherEndpointOnly(t *testing.T) {
 // for unrelated room members. Verified by joining a third peer and
 // asserting they receive no further frame after the pair_failed.
 func TestPairFailedDoesNotBroadcastRosterUpdate(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -221,7 +221,7 @@ func TestPairFailedDoesNotBroadcastRosterUpdate(t *testing.T) {
 // pair_reconnect_instruction to both endpoints with role assignment
 // driven by admissionIndex.
 func TestReconnectPairHappyPath(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -269,7 +269,7 @@ func TestReconnectPairHappyPath(t *testing.T) {
 // requester whose observedEpoch < current receives stale_pair_epoch
 // and the server does NOT increment again.
 func TestReconnectPairStaleObservedEpochRejected(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -307,7 +307,7 @@ func TestReconnectPairStaleObservedEpochRejected(t *testing.T) {
 // reconnect_pair for someone else's pairId is rejected (canonical
 // equivalent of `not_pair_member`). The server does NOT increment.
 func TestReconnectPairNotInPairRejected(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -361,7 +361,7 @@ func TestReconnectPairNotInPairRejected(t *testing.T) {
 // server has never registered is rejected as canonical-equivalent of
 // `unknown_pair`.
 func TestReconnectPairUnknownPairRejected(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -387,7 +387,7 @@ func TestReconnectPairUnknownPairRejected(t *testing.T) {
 // TestReconnectPairNotFailedRejected — request for a healthy pair (no
 // prior pair_failed) is rejected; the server does NOT increment.
 func TestReconnectPairNotFailedRejected(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -415,7 +415,7 @@ func TestReconnectPairNotFailedRejected(t *testing.T) {
 // one fresh pair_reconnect_instruction is emitted (epoch=2), the
 // other request gets stale_pair_epoch.
 func TestReconnectPairSimultaneousClickRaceProducesOneWinner(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -513,7 +513,7 @@ func TestReconnectPairSimultaneousClickRaceProducesOneWinner(t *testing.T) {
 // pair — every later attempt would carry observedEpoch < server.epoch
 // and be rejected as stale_pair_epoch indefinitely).
 func TestReconnectPairRemoteEndpointDisconnectedRejected(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -557,7 +557,7 @@ func TestReconnectPairRemoteEndpointDisconnectedRejected(t *testing.T) {
 // + reconnecting A↔B does NOT mutate A↔C or B↔C ledger entries and
 // does NOT emit any frame on C's wire.
 func TestReconnectPairOnlyTouchesAffectedPair(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

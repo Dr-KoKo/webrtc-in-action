@@ -80,7 +80,7 @@ func drainMeshFrames(t *testing.T, conn *websocket.Conn, ctx context.Context, n 
 
 // TestFourthAdmittedFifthRejectedRoomFull — SC-004 happy path.
 func TestFourthAdmittedFifthRejectedRoomFull(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -144,7 +144,7 @@ func TestFourthAdmittedFifthRejectedRoomFull(t *testing.T) {
 // admissionIndex value is NEVER recycled. The next joiner gets a
 // strictly-greater index.
 func TestAdmissionIndexNeverReused(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -208,7 +208,7 @@ func TestPairIdUsesAdmissionIndexNotSlotIndex(t *testing.T) {
 	// End-to-end check: drive A+B+(A leaves)+C through the in-process
 	// handler and assert C's admissionIndex >= 3, so MakePairID(B, C) =
 	// "2-3" — definitively distinct from the historical "1-2".
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

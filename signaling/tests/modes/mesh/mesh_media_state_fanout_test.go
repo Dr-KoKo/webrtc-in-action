@@ -156,7 +156,7 @@ func readPairMediaStateEnvelope(
 // TestPairMediaStateFanOutN2 — N=2: one inbound produces 1 outbound.
 func TestPairMediaStateFanOutN2(t *testing.T) {
 	logger, buf := captureLogger()
-	h := mesh.NewHandler(logger)
+	h := mesh.NewHandler(logger, defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -205,7 +205,7 @@ func TestPairMediaStateFanOutN2(t *testing.T) {
 
 // TestPairMediaStateFanOutN3 — N=3: one inbound produces 2 outbound.
 func TestPairMediaStateFanOutN3(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -235,7 +235,7 @@ func TestPairMediaStateFanOutN3(t *testing.T) {
 
 // TestPairMediaStateFanOutN4 — N=4: one inbound produces 3 outbound.
 func TestPairMediaStateFanOutN4(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -268,7 +268,7 @@ func TestPairMediaStateFanOutN4(t *testing.T) {
 // (additive evolution rule §7); the message remains
 // participant-level metadata with no pairEpoch validation.
 func TestPairMediaStateFanOutPayloadBytesUnchanged(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -312,7 +312,7 @@ func TestPairMediaStateFanOutPayloadBytesUnchanged(t *testing.T) {
 // sending pair_media_state receives `error not_in_room` and no
 // fan-out occurs.
 func TestPairMediaStateNotInRoomRejected(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -350,7 +350,7 @@ func TestPairMediaStateNotInRoomRejected(t *testing.T) {
 // of the three required fields, or with an out-of-enum value, is
 // rejected with `error malformed` and no fan-out occurs.
 func TestPairMediaStateMalformedPayloadRejected(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -385,7 +385,7 @@ func TestPairMediaStateMalformedPayloadRejected(t *testing.T) {
 // recipient: the metadata envelope, nothing more, nothing for media
 // payload).
 func TestPairMediaStateServerNeverRelaysMediaBytes(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

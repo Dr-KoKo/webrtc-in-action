@@ -56,6 +56,16 @@ services:
     ports:
       - "${SIGNALING_PORT:-8080}:8080"
     environment:
+      # Validation/security profile. APP_ENV=prod requires
+      # WS_ALLOWED_ORIGINS to be non-empty (config.Load fails fast
+      # otherwise); APP_ENV=dev allows any origin when
+      # WS_ALLOWED_ORIGINS is empty. APP_ENV does NOT itself toggle
+      # security policy — WS_ALLOWED_ORIGINS does.
+      APP_ENV: ${APP_ENV:-prod}
+      # WebSocket Accept origin allowlist. Comma-separated.
+      # Default matches `vite preview` self-signed HTTPS bind in this
+      # compose file. Set explicitly for any non-localhost deploy.
+      WS_ALLOWED_ORIGINS: ${WS_ALLOWED_ORIGINS:-https://localhost:5173}
       # Logging (NFR-003: never log SDP / ICE / credentials).
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -66,13 +76,13 @@ services:
       # Defaults 5000 + 5000 satisfy SC-009 (≤ 10 s).
       PING_INTERVAL_MS: ${PING_INTERVAL_MS:-5000}
       PONG_TIMEOUT_MS: ${PONG_TIMEOUT_MS:-5000}
-      # ICE server config surfaced to both peers in `ready_for_offer`
-      # so each peer sees the same list. The server never logs
+      # ICE server config surfaced to peers in `ready_for_offer` /
+      # `join_accepted` / pair instructions. The server never logs
       # credentials — only config presence — per NFR-003.
-      VITE_STUN_URLS: ${VITE_STUN_URLS:-stun:stun.l.google.com:19302}
-      VITE_TURN_URL: ${VITE_TURN_URL:-}
-      VITE_TURN_USERNAME: ${VITE_TURN_USERNAME:-}
-      VITE_TURN_CREDENTIAL: ${VITE_TURN_CREDENTIAL:-}
+      ICE_STUN_URLS: ${ICE_STUN_URLS:-stun:stun.l.google.com:19302}
+      ICE_TURN_URL: ${ICE_TURN_URL:-}
+      ICE_TURN_USERNAME: ${ICE_TURN_USERNAME:-}
+      ICE_TURN_CREDENTIAL: ${ICE_TURN_CREDENTIAL:-}
     healthcheck:
       # distroless/static has no shell, no wget, no curl. The
       # signaling image ships a tiny stdlib-only Go binary at
@@ -93,9 +103,9 @@ services:
 #
 # To enable:
 #   1. Uncomment the coturn service block below.
-#   2. Copy `.env.example` to `.env` and fill in VITE_TURN_URL,
-#      VITE_TURN_USERNAME, VITE_TURN_CREDENTIAL, TURN_USERNAME,
-#      TURN_PASSWORD (username/password must match VITE_TURN_*).
+#   2. Copy `.env.example` to `.env` and fill in ICE_TURN_URL,
+#      ICE_TURN_USERNAME, ICE_TURN_CREDENTIAL, TURN_USERNAME,
+#      TURN_PASSWORD (username/password must match ICE_TURN_*).
 #   3. Run `docker compose up --build`.
 #
 # See quickstart.md §6 for the verification walkthrough (Learning

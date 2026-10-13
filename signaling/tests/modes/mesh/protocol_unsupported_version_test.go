@@ -82,7 +82,7 @@ func expectNoFurtherFrame(t *testing.T, conn *websocket.Conn) {
 }
 
 func TestUnsupportedVersionJoinRoomV1(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -104,7 +104,7 @@ func TestUnsupportedVersionJoinRoomV1(t *testing.T) {
 }
 
 func TestUnsupportedVersionJoinRoomV3(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -125,7 +125,7 @@ func TestUnsupportedVersionJoinRoomV3(t *testing.T) {
 }
 
 func TestUnsupportedVersionMidstreamPairOfferV1(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -149,7 +149,7 @@ func TestUnsupportedVersionMidstreamPairOfferV1(t *testing.T) {
 // a future regression adds a join_rejected_unsupported_version branch,
 // this test still requires the wire response to be `error`.
 func TestUnsupportedVersionIsNotJoinRejected(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

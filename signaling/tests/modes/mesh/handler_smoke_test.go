@@ -55,7 +55,7 @@ func meshURLFor(ts *httptest.Server) string {
 // succeeds and the connect/disconnect log lines appear.
 func TestMeshHandlerAcceptsWebSocketConnect(t *testing.T) {
 	log, buf := captureLogger()
-	h := mesh.NewHandler(log)
+	h := mesh.NewHandler(log, defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -84,7 +84,7 @@ func TestMeshHandlerAcceptsWebSocketConnect(t *testing.T) {
 // TestMeshHandlerSilentLoggerDoesNotPanic guards against accidental nil
 // logger dereference in the New constructor / handler hot path.
 func TestMeshHandlerSilentLoggerDoesNotPanic(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

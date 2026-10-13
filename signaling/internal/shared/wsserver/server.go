@@ -23,23 +23,26 @@ type LogLine struct {
 	Message string
 }
 
-// Config bundles the per-handler settings the skeleton needs.
+// Config bundles the per-handler settings the skeleton needs. Built
+// by each mode from its ModeConfig and handed to New(). All fields
+// are values; the skeleton snapshots them at construction.
 //
-// Heartbeat is a POINTER, not a value. The skeleton dereferences at
-// session-start time so existing tests that mutate
-// h.Heartbeat = ... AFTER NewHandler (e.g.
-// tests/modes/onetoone/heartbeat_test.go:62 and
-// tests/modes/mesh/lifecycle_test.go) still reach the running
-// server. Modes pass `&h.Heartbeat`.
+// Origin policy: exactly one of InsecureSkipVerify or OriginPatterns
+// is meaningful. coder/websocket.AcceptOptions semantics —
+// InsecureSkipVerify=true allows any origin; OriginPatterns non-empty
+// restricts to the listed origins (same-origin always implicit).
+// The mode's caller (config.Load + handler) is responsible for not
+// setting both.
 type Config struct {
-	Heartbeat       *heartbeat.Config
-	HeartbeatLabels heartbeat.Labels
-	Logger          *slog.Logger
-	Accept          *websocket.AcceptOptions
-	ConnIDPrefix    string
-	Connect         LogLine
-	Disconnect      LogLine
-	AcceptFailed    LogLine
+	Heartbeat          heartbeat.Config
+	HeartbeatLabels    heartbeat.Labels
+	Logger             *slog.Logger
+	InsecureSkipVerify bool
+	OriginPatterns     []string
+	ConnIDPrefix       string
+	Connect            LogLine
+	Disconnect         LogLine
+	AcceptFailed       LogLine
 }
 
 // Server is the http.Handler that owns one WebSocket session
@@ -47,23 +50,27 @@ type Config struct {
 // IDs are stable across requests within one Server, matching
 // today's per-Handler atomic.Uint64 (onetoone:41, mesh:46).
 type Server struct {
-	cfg  Config
-	mode Mode
-	seq  atomic.Uint64
+	cfg    Config
+	accept websocket.AcceptOptions
+	mode   Mode
+	seq    atomic.Uint64
 }
 
-// New constructs a Server. Logger and Heartbeat are required;
-// other Config fields can be zero (defaults are not invented here
-// — the mode is the right owner of "what does this WS endpoint
-// log/accept by default").
+// New constructs a Server. Logger is required. AcceptOptions are
+// derived from cfg.InsecureSkipVerify / cfg.OriginPatterns once at
+// construction; subsequent Accept calls reuse the same struct.
 func New(mode Mode, cfg Config) *Server {
 	if cfg.Logger == nil {
 		panic("wsserver.New: Config.Logger is required")
 	}
-	if cfg.Heartbeat == nil {
-		panic("wsserver.New: Config.Heartbeat is required")
+	return &Server{
+		cfg: cfg,
+		accept: websocket.AcceptOptions{
+			InsecureSkipVerify: cfg.InsecureSkipVerify,
+			OriginPatterns:     cfg.OriginPatterns,
+		},
+		mode: mode,
 	}
-	return &Server{cfg: cfg, mode: mode}
 }
 
 // ServeHTTP runs one signaling session end-to-end:
@@ -82,7 +89,7 @@ func New(mode Mode, cfg Config) *Server {
 //      run already)
 //  10. emit disconnect log line with merged attrs
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, s.cfg.Accept)
+	conn, err := websocket.Accept(w, r, &s.accept)
 	if err != nil {
 		s.cfg.Logger.Warn(s.cfg.AcceptFailed.Message,
 			slog.String("event", s.cfg.AcceptFailed.Event),
@@ -127,7 +134,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	heartbeatDone := make(chan error, 1)
 	go func() {
-		heartbeatDone <- heartbeat.Run(ctx, conn, *s.cfg.Heartbeat, s.cfg.Logger, connID, s.cfg.HeartbeatLabels)
+		heartbeatDone <- heartbeat.Run(ctx, conn, s.cfg.Heartbeat, s.cfg.Logger, connID, s.cfg.HeartbeatLabels)
 	}()
 
 	readErr := s.runReadLoop(ctx, sess, handler)

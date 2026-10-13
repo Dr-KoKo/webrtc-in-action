@@ -59,12 +59,7 @@ func wsURLFor(ts *httptest.Server) string {
 
 // newFastHandler returns a Handler configured for fast heartbeat tests.
 func newFastHandler(log *slog.Logger) *sig.Handler {
-	h := sig.NewHandler(log)
-	h.Heartbeat = sig.HeartbeatConfig{
-		PingInterval: 50 * time.Millisecond,
-		PongTimeout:  100 * time.Millisecond,
-	}
-	return h
+	return sig.NewHandler(log, fastModeConfig())
 }
 
 // ---------------------------------------------------------------------
@@ -179,7 +174,7 @@ func TestPingIntervalEmits(t *testing.T) {
 // ---------------------------------------------------------------------
 
 func TestHandlerRejectsUnsupportedVersion(t *testing.T) {
-	h := sig.NewHandler(silentLogger())
+	h := sig.NewHandler(silentLogger(), defaultModeConfig())
 	// Keep default 5s heartbeat — we only need ~100ms round-trip.
 	ts := httptest.NewServer(h)
 	defer ts.Close()
@@ -233,7 +228,7 @@ func TestHandlerRejectsUnsupportedVersion(t *testing.T) {
 
 func TestHandlerLogsNoSecrets(t *testing.T) {
 	log, buf := captureLogger()
-	h := sig.NewHandler(log)
+	h := sig.NewHandler(log, defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

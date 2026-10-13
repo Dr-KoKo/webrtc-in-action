@@ -57,7 +57,7 @@ func readMeshFrameOfType(t *testing.T, conn *websocket.Conn, ctx context.Context
 // TestMediaFailedReleasesSlotAndDoesNotReuseAdmissionIndex covers the
 // canonical M5 / EC-003 post-admission release flow.
 func TestMediaFailedReleasesSlotAndDoesNotReuseAdmissionIndex(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -152,7 +152,7 @@ func TestMediaFailedReleasesSlotAndDoesNotReuseAdmissionIndex(t *testing.T) {
 // after `media_ready`, every participant in the room receives a
 // `mesh_roster_update { presence: "media-ready", reason: "media_ready" }`.
 func TestMediaReadyBroadcastsRosterUpdate(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -199,7 +199,7 @@ func TestMediaReadyBroadcastsRosterUpdate(t *testing.T) {
 // time (when readiness is already media-ready) returns
 // `error { code: "unexpected_media_ready" }`.
 func TestMediaReadyFromNonJoinedRejected(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

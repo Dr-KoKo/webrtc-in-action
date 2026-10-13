@@ -27,7 +27,7 @@ import (
 // second joiner using the un-trimmed form gets the next admission
 // index in the same room).
 func TestJoinRoomAdmitsTrimmedRoomID(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -80,7 +80,7 @@ func TestJoinRoomAdmitsTrimmedRoomID(t *testing.T) {
 // TestJoinRoomRejectsRoomIDWithInteriorWhitespace — interior spaces
 // don't satisfy the regex even after Trim. "de mo" stays invalid.
 func TestJoinRoomRejectsRoomIDWithInteriorWhitespace(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 

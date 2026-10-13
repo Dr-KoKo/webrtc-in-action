@@ -26,9 +26,8 @@ import (
 // ---------------------------------------------------------------------
 
 // makeFastHandler returns a mesh.Handler with sub-second heartbeat
-// for fast pong-timeout tests. Mutating h.Heartbeat AFTER NewHandler
-// is the test seam the wsserver Config.Heartbeat pointer must
-// preserve once extraction lands.
+// for fast pong-timeout tests. Heartbeat timing is injected via
+// fastModeConfig() at construction.
 func makeFastHandler(t *testing.T, useCapture bool) (*mesh.Handler, *syncBuffer) {
 	t.Helper()
 	var (
@@ -37,13 +36,11 @@ func makeFastHandler(t *testing.T, useCapture bool) (*mesh.Handler, *syncBuffer)
 	)
 	if useCapture {
 		log, b := captureLogger()
-		h = mesh.NewHandler(log)
+		h = mesh.NewHandler(log, fastModeConfig())
 		buf = b
 	} else {
-		h = mesh.NewHandler(silentLogger())
+		h = mesh.NewHandler(silentLogger(), fastModeConfig())
 	}
-	h.Heartbeat.PingInterval = 50 * time.Millisecond
-	h.Heartbeat.PongTimeout = 100 * time.Millisecond
 	return h, buf
 }
 
@@ -193,7 +190,7 @@ func TestLifecycle_Mesh_PongTimeoutDisconnectReason(t *testing.T) {
 
 func TestLifecycle_Mesh_UngracefulCloseCleanupOnBaseCtx(t *testing.T) {
 	log, buf := captureLogger()
-	h := mesh.NewHandler(log)
+	h := mesh.NewHandler(log, defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -263,7 +260,7 @@ func TestLifecycle_Mesh_UngracefulCloseCleanupOnBaseCtx(t *testing.T) {
 // valid v=2 join_room must dispatch to join_accepted on the same WS.
 
 func TestLifecycle_Mesh_MalformedFrameContinuation(t *testing.T) {
-	h := mesh.NewHandler(silentLogger())
+	h := mesh.NewHandler(silentLogger(), defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
@@ -304,7 +301,7 @@ func TestLifecycle_Mesh_MalformedFrameContinuation(t *testing.T) {
 
 func TestLifecycle_Mesh_LeaveRoomDoubleClose(t *testing.T) {
 	log, buf := captureLogger()
-	h := mesh.NewHandler(log)
+	h := mesh.NewHandler(log, defaultModeConfig())
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
